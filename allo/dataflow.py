@@ -297,6 +297,7 @@ def build(
     wrap_io=True,
     opt_default=True,
     enable_tensor=False,
+    profile=False
 ):
     if target == "aie":
         global_vars = get_global_vars(func)
@@ -310,8 +311,12 @@ def build(
             project,
             stream_info,
         )
-        mod.build()
+        if profile:
+            mod.build(True)
+        else:
+            mod.build()
         return mod
+    
     if target == "simulator":
         s = customize(func, opt_default)
         return LLVMOMPModule(s.module, s.top_func_name)

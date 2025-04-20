@@ -233,6 +233,160 @@ def codegen_host(inputs, outputs):
         code += file_close_str
     return code
 
+def codegen_customized_host(
+    inputs, outputs, 
+    profile:bool=False,
+    warm_up = 20, test_iter = 100
+):
+    code = host_header
+    with format_code(indent=2):
+        # write input data
+        for i, dtensor in enumerate(inputs):
+            shape = dtensor.shape
+            dtype = ctype_map[str(dtensor.dtype)]
+            code += format_str(f'std::ifstream ifile{i}("input{i}.data");')
+            code += format_str(f"if (!ifile{i}.is_open()) {{")
+            code += format_str(
+                '  std::cerr << "Error: Could not open input file.\\n";', strip=False
+            )
+            code += format_str("  return 1;", strip=False)
+            code += format_str("}")
+            size = np.prod(shape)
+            code += format_str(
+                f"auto bo_in{i} = xrt::bo(device, {size} * sizeof({dtype}),"
+            )
+            with format_code(indent=24):
+                code += format_str(
+                    f"XRT_BO_FLAGS_HOST_ONLY, kernel.group_id({i + 3}));"
+                )
+            code += format_str(f"{dtype} *bufIn{i} = bo_in{i}.map<{dtype} *>();")
+            code += format_str(f"std::vector<{dtype}> srcVec{i};")
+            code += format_str(f"for (int i = 0; i < {size}; i++) {{")
+            with format_code(indent=4):
+                code += format_str(f"{dtype} num;")
+                code += format_str(f"ifile{i} >> num;")
+                code += format_str(f"srcVec{i}.push_back(num);")
+            code += format_str("}")
+            code += format_str(
+                f"memcpy(bufIn{i}, srcVec{i}.data(), (srcVec{i}.size() * sizeof({dtype})));"
+            )
+        for i, dtensor in enumerate(outputs):
+            shape = dtensor.shape
+            dtype = ctype_map[str(dtensor.dtype)]
+            out_size = np.prod(shape)
+            code += format_str(
+                f"\nauto bo_out{i} = xrt::bo(device, {out_size} * sizeof({dtype}) + trace_size,",
+                strip=False,
+            )
+            with format_code(indent=24):
+                code += format_str(
+                    f"XRT_BO_FLAGS_HOST_ONLY, kernel.group_id({len(inputs) + 2 + i}));"
+                )
+        code += format_str("if (verbosity >= 1)")
+        code += format_str(
+            '  std::cout << "Writing data into buffer objects.\\n";', strip=False
+        )
+        code += format_str("\nbo_instr.sync(XCL_BO_SYNC_BO_TO_DEVICE);", strip=False)
+        for i in range(len(inputs)):
+            code += format_str(f"bo_in{i}.sync(XCL_BO_SYNC_BO_TO_DEVICE);")
+        # run kernels
+        code += format_str("if (verbosity >= 1)")
+        code += format_str('  std::cout << "Running Kernel.\\n";', strip=False)
+        
+        if (profile):
+            # warm up
+            code += format_str("// warming up")
+            code += format_str(
+                f"for (unsigned iter = 0; iter < {warm_up}; iter++) {{"
+            )
+            code += format_str("  unsigned int opcode = 3;", strip=False)
+            inbufs = ", ".join([f"bo_in{i}" for i in range(len(inputs))])
+            outbufs = ", ".join([f"bo_out{i}" for i in range(len(outputs))])
+            code += format_str("  // gid: (opcode, instr, instr_size, ...)", strip=False)
+            code += format_str(
+                f"  auto run = kernel(opcode, bo_instr, instr_v.size(), {inbufs}, {outbufs});", strip=False
+            )
+            code += format_str("  run.wait();", strip=False)
+            code += format_str("}")
+
+            # profile
+            code += format_str("double npu_time_total = 0;")
+            code += format_str("// profiling")
+            code += format_str(
+                f"for (unsigned iter = 0; iter < {test_iter}; iter++) {{"
+            )
+            code += format_str(
+                "  auto start = std::chrono::high_resolution_clock::now();", strip=False
+            )
+            code += format_str("  unsigned int opcode = 3;", strip=False)
+            inbufs = ", ".join([f"bo_in{i}" for i in range(len(inputs))])
+            outbufs = ", ".join([f"bo_out{i}" for i in range(len(outputs))])
+            code += format_str("  // gid: (opcode, instr, instr_size, ...)", strip=False)
+            code += format_str(
+                f"  auto run = kernel(opcode, bo_instr, instr_v.size(), {inbufs}, {outbufs});", strip=False
+            )
+            code += format_str("  run.wait();", strip=False)
+            code += format_str(
+                "  auto end = std::chrono::high_resolution_clock::now();", strip=False
+            )
+
+            code += format_str(
+                "  std::chrono::duration<double, std::micro> elapsed = end - start;;", strip=False
+            )
+            code += format_str("  npu_time_total += elapsed.count();", strip=False)
+            code += format_str("}")
+
+            code += format_str(
+                f'\nstd::cout << "Avg NPU execution time: " << npu_time_total/{test_iter} << "us\\n";'
+            )
+        else:
+            code += format_str(
+                "\nauto start = std::chrono::high_resolution_clock::now();", strip=False
+            )
+            code += format_str("unsigned int opcode = 3;", strip=False)
+            inbufs = ", ".join([f"bo_in{i}" for i in range(len(inputs))])
+            outbufs = ", ".join([f"bo_out{i}" for i in range(len(outputs))])
+            code += format_str("// gid: (opcode, instr, instr_size, ...)")
+            code += format_str(
+                f"auto run = kernel(opcode, bo_instr, instr_v.size(), {inbufs}, {outbufs});"
+            )
+            code += format_str("run.wait();")
+            code += format_str(
+                "\nauto end = std::chrono::high_resolution_clock::now();", strip=False
+            )
+            code += format_str(
+                "float npu_time = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();"
+            )
+            code += format_str(
+                'std::cout << "NPU execution time: " << npu_time << "us\\n";'
+            )
+ 
+        # get results
+        for i, dtensor in enumerate(outputs):
+            shape = dtensor.shape
+            dtype = ctype_map[str(dtensor.dtype)]
+            out_size = np.prod(shape)
+            code += format_str(
+                f"\nbo_out{i}.sync(XCL_BO_SYNC_BO_FROM_DEVICE);", strip=False
+            )
+            code += format_str(f"{dtype} *bufOut{i} = bo_out{i}.map<{dtype} *>();")
+            code += format_str(f"for (uint32_t i = 0; i < {out_size}; i++) {{")
+            code += format_str(f'  ofile << *(bufOut{i} + i) << "\\n";', strip=False)
+            code += format_str("}")
+
+            code += format_str("\n// Write trace values if trace_size > 0",  strip=False) 
+            code += format_str("if (trace_size > 0) {",  strip=False) 
+            code += format_str(
+                f"test_utils::write_out_trace(((char *)bufOut{i}) + {out_size} * sizeof({dtype}), trace_size, vm[\"trace_file\"].as<std::string>());",
+                strip=False
+            )
+            code += format_str("}", strip = False)
+            
+        code += format_str("\n// Close files", strip=False)
+        for i in range(len(inputs)):
+            code += format_str(f"ifile{i}.close();")
+        code += file_close_str
+    return code
 
 def get_stream_in_out(stream_info):
     """
@@ -1165,7 +1319,7 @@ class AIEModule:
         self.func_args = func_args
         self.stream_info = stream_info
 
-    def build(self):
+    def build(self, custimize=False):
         assert "MLIR_AIE_INSTALL_DIR" in os.environ, "Please set MLIR_AIE_INSTALL_DIR"
         assert "PEANO_INSTALL_DIR" in os.environ, "Please set PEANO_INSTALL_DIR"
         os.makedirs(os.path.join(self.project, "build"), exist_ok=True)
@@ -1249,7 +1403,10 @@ class AIEModule:
         path = os.path.dirname(__file__)
         path = os.path.join(path, "../harness/aie")
         os.system(f"cp -r {path}/* {self.project}")
-        host_code = codegen_host(inputs["_global"], outputs["_global"])
+        if custimize:
+            host_code = codegen_customized_host(inputs["_global"], outputs["_global"], True)
+        else:
+            host_code = codegen_host(inputs["_global"], outputs["_global"])
         with open(os.path.join(self.project, "test.cpp"), "w", encoding="utf-8") as f:
             f.write(host_code)
         cmd = f"cd {self.project}/build && cmake .. -DTARGET_NAME=top -DMLIR_AIE_DIR=$MLIR_AIE_INSTALL_DIR/.. && cmake --build . --config Release"
@@ -1278,3 +1435,38 @@ class AIEModule:
             f"{self.project}/output.data",
         )
         args[-1][:] = result
+
+def call_mlir(
+        project:str,
+        output_dtype,
+        *args
+    ):
+    # generate insts.txt
+    cmd = f"cd {project} && PYTHONPATH=$MLIR_AIE_INSTALL_DIR/python aiecc.py --aie-generate-cdo --aie-generate-npu --no-compile-host --no-xchesscc --no-xbridge --xclbin-name=build/final.xclbin --npu-insts-name=insts.txt top.mlir"
+    process = subprocess.Popen(cmd, shell=True)
+    process.wait()
+    if process.returncode != 0:
+        raise RuntimeError("Failed to compile the MLIR-AIE code")
+    cmd = f"cd {project}/build && cmake .. -DTARGET_NAME=top -DMLIR_AIE_DIR=$MLIR_AIE_INSTALL_DIR/.. && cmake --build . --config Release"
+    process = subprocess.Popen(cmd, shell=True)
+    process.wait()
+    if process.returncode != 0:
+        raise RuntimeError("Failed to build AIE project.")
+    # suppose the last argument is output
+    for i, arg in enumerate(args[:-1]):
+        with open(
+            os.path.join(project, f"input{i}.data"), "w", encoding="utf-8"
+        ) as f:
+            f.write("\n".join([str(i) for i in arg.flatten()]))
+    cmd = f"cd {project} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE"
+    process = subprocess.Popen(cmd, shell=True)
+    process.wait()
+    if process.returncode != 0:
+        raise RuntimeError("Failed to execute AIE code.")
+    # TODO: need to complete multiple outputs rules
+    result = read_tensor_from_file(
+        output_dtype,
+        args[-1].shape,
+        f"{project}/output.data",
+    )
+    args[-1][:] = result

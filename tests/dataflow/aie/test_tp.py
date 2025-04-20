@@ -6,6 +6,7 @@ import allo.dataflow as df
 from allo.ir.types import int32
 from allo.memory import Layout
 import numpy as np
+from allo.backend.aie import call_mlir
 
 # RRxRS->RS
 # RSxSR->RR
@@ -58,6 +59,20 @@ def _test_tensor_parallelism():
     # np.testing.assert_allclose(Z, X @ W1 @ W2, atol=1e-5)
     # print("Dataflow Simulator Passed!")
 
+def test_tensor_parallelism_mlir(projrct_dir:str):
+    Ty = int32
+    M, K, N, L = 8, 8, 8, 8
+    
+    Z = np.zeros((M, L)).astype(np.int32)
+    X = np.random.randint(0, 64, (M, K)).astype(np.int32)
+    W1 = np.random.randint(0, 64, (K, N)).astype(np.int32)
+    W2 = np.random.randint(0, 64, (N, L)).astype(np.int32)
+    call_mlir(
+       projrct_dir , Ty, X, W1, W2, Z
+    )
+    np.testing.assert_allclose(Z, X @ W1 @ W2, atol=1e-5)
+    print("PASSED!")
 
 if __name__ == "__main__":
     _test_tensor_parallelism()
+    test_tensor_parallelism_mlir("top.prj")
