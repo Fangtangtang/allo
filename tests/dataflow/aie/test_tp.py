@@ -68,7 +68,7 @@ def test_tensor_parallelism_mlir(projrct_dir:str):
     W1 = np.random.randint(0, 64, (K, N)).astype(np.int32)
     W2 = np.random.randint(0, 64, (N, L)).astype(np.int32)
     call_mlir(
-       projrct_dir , Ty, X, W1, W2, Z
+       projrct_dir, Ty, 1024, X, W1, W2, Z
     )
     np.testing.assert_allclose(Z, X @ W1 @ W2, atol=1e-5)
     print("PASSED!")

@@ -1439,6 +1439,7 @@ class AIEModule:
 def call_mlir(
         project:str,
         output_dtype,
+        trace_size:int,
         *args
     ):
     # generate insts.txt
@@ -1458,7 +1459,7 @@ def call_mlir(
             os.path.join(project, f"input{i}.data"), "w", encoding="utf-8"
         ) as f:
             f.write("\n".join([str(i) for i in arg.flatten()]))
-    cmd = f"cd {project} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE"
+    cmd = f"cd {project} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE -t {trace_size}"
     process = subprocess.Popen(cmd, shell=True)
     process.wait()
     if process.returncode != 0:
