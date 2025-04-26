@@ -37,6 +37,21 @@ def top():
         with allo.meta_elif(pk == Pk - 1):
             C[:, :] = C_out
 
+# ! Reduction view: for (herd number = 2)
+# @df.region()
+# def top():
+#     pipe = df.array(df.pipe(dtype=Ty, shape=(Mt, Nt), depth=2), shape=(Pk - 1, Pm, Pn))
+#     # Stream(Ty[Mt, Nt], 2)[Pk - 1, Pm, Pn]
+
+#     @df.kernel(mapping=[Pk, Pm, Pn])
+#     def gemm(A: Ty[M, K] @ LyA, B: Ty[K, N] @ LyB, C: Ty[M, N] @ LyC):
+#         pk, pm, pn = df.get_pid()
+#         C_out: Ty[Mt, Nt] = allo.matmul(A, B)
+#         # reduction
+#         with allo.meta_if(pk%2==0):
+#             pipe[0, pm, pn].put(C_out)
+#         with allo.meta_if(pk%2==1):
+#             C[:, :] = allo.add(C_out, pipe[0, pm, pn].get())
 
 def test_cooperative_gemm():
     mod = df.build(top, target="aie")
