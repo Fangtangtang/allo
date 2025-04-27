@@ -297,13 +297,15 @@ def build(
     wrap_io=True,
     opt_default=True,
     enable_tensor=False,
-    profile=False
+    profile=False,
+    virtual_to_phisical = False
 ):
     if target == "aie":
         global_vars = get_global_vars(func)
         s = _customize(func, global_vars=global_vars, enable_tensor=False)
         stream_info = move_stream_to_interface(s)
         s = _build_top(s, stream_info, target=target)
+        print(s.module)
         mod = AIEModule(
             s.module,
             s.top_func_name,
@@ -311,10 +313,7 @@ def build(
             project,
             stream_info,
         )
-        if profile:
-            mod.build(True)
-        else:
-            mod.build()
+        mod.build(custimize = profile, virtual_to_phisical = virtual_to_phisical)
         return mod
     
     if target == "simulator":
