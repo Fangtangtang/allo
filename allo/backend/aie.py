@@ -1446,13 +1446,8 @@ def codegen_aie_mlir(
 
 def my_codegen_aie_mlir(
     module: Module,
-    func_groups: Dict[str, List[func_d.FuncOp]],
-    inputs: Dict[str, List[DTensor]],
-    outputs: Dict[str, List[DTensor]],
-    kernel_buf_dicts: Dict[str, Dict[str, Tuple[str, List[int]]]],
     external_kernels: Dict[str, List[str]],
     stream_info: Dict[str, List[Tuple[str, str]]],
-    virtual_to_phisical: bool
 ):
     """
     Generates MLIR-AIE code with MLIR module and extra information for multiple kernel functions
@@ -1491,53 +1486,47 @@ def my_codegen_aie_mlir(
         The first element in the tuple is the name of the stream, the second element is either 'in' or 'out'.
     """
 
-    # ##################################################
-    # Header
-    # ##################################################
     # fixme: can be extended to more choices
     device = "npu1_4col" 
     aie_module = ModuleNode(device_type=device)
-    # Add external functions
-    for func in module.body.operations:
-        if (
-            isinstance(func, func_d.FuncOp)
-            and "sym_visibility" in func.attributes
-            and func.attributes["sym_visibility"].value == "private"
-        ):
-            aie_module.add_private_external_kernel(func)
-      
-    # ##################################################
-    # Tiles and Kernels
-    # TODO
-    # ##################################################
-    # fixme: A dummy fix for isomorphic kernel detection. I think we'd better do these when building IR.
-    if virtual_to_phisical:
 
-        def parse_kernel_function(func:func_d.FuncOp) -> Tuple[str, str]:
-            func_str = str(func)
-            func_name = func.name
-            pos = func_str.find("(")
-            if pos != -1:
-                func_arg_body = func_str[pos:]
-            else:
-                func_arg_body = ""
-            return func_name, func_arg_body
-        
-        kernel_version = {}
-        for func in module.body.operations:
-            if isinstance(func, func_d.FuncOp) and (
-                "sym_visibility" not in func.attributes
-                or func.attributes["sym_visibility"].value != "private"
+    top_func = None
+    kernel_version:Dict[str, Tuple[func_d.FuncOp, List[str]]] = {}
+    for func in module.body.operations:
+        if isinstance(func, func_d.FuncOp):
+            # Add external functions
+            if ("sym_visibility" in func.attributes
+                and func.attributes["sym_visibility"].value == "private"
             ):
+                aie_module.add_private_external_kernel(func)
+            if ("sym_visibility" not in func.attributes
+                or func.attributes["sym_visibility"].value != "private"):
+                
+                # fixme: A dummy fix for isomorphic kernel detection. I think we'd better do these when building IR.
+                def parse_kernel_function(func:func_d.FuncOp) -> Tuple[str, str]:
+                    func_str = str(func)
+                    func_name = func.name
+                    pos = func_str.find("(")
+                    if pos != -1:
+                        func_arg_body = func_str[pos:]
+                    else:
+                        func_arg_body = ""
+                    return func_name, func_arg_body
+    
                 if func.attributes["sym_name"].value != "top":
                     func_name, func_arg_body = parse_kernel_function(func)
                     if func_arg_body not in kernel_version:
-                        kernel_version[func_arg_body] = []
-                    kernel_version[func_arg_body].append(func_name)
+                        kernel_version[func_arg_body] = (func, [])
+                    kernel_version[func_arg_body][1].append(func_name)
+                else:
+                    top_func = func
 
-        assert len(kernel_version) == 1, "Do not support heterogeneous kernels for now."
+    assert len(kernel_version) == 1, "Do not support heterogeneous kernels for now."
+    for func_arg_body, (func, func_name_list) in kernel_version.items():
+        print(func_name_list)
+        print(func)
+
     return aie_module.to_string()
-
 
 def lower_tensor_to_memref(mod):
     passes = [
@@ -1578,6 +1567,33 @@ def record_local_buffer(mod):
 
     return kernel_buf_dicts
 
+def visit_module(mod):
+    cnt = 0
+    _, funcs = get_public_funcs(mod)
+
+    def traverse_operations(operations, cnt):
+        cnt+=1
+        for op in operations:
+            print("\t"*cnt+str(op),op)
+            print("\t"*cnt, op.regions)
+            # Recursively traverse into all regions and blocks of the operation
+            for region in op.regions:
+                print("\t"*cnt, region.blocks)
+                for block in region.blocks:
+                    traverse_operations(block.operations, cnt)
+        cnt-=1
+
+    for func in funcs:
+        func_name = func.attributes["sym_name"].value
+        print("--------------------")
+        print(f"{func_name}")
+
+        # Start traversal from the top-level operations of the function
+        for block in func.regions[0].blocks:
+            traverse_operations(block.operations, cnt)
+        
+        print("--------------------")
+
 
 class AIEModule:
     def __init__(
@@ -1595,21 +1611,9 @@ class AIEModule:
         self.func_args = func_args
         self.stream_info = stream_info
 
-    def build(self, custimize = False, virtual_to_phisical = False):
-        assert "MLIR_AIE_INSTALL_DIR" in os.environ, "Please set MLIR_AIE_INSTALL_DIR"
-        assert "PEANO_INSTALL_DIR" in os.environ, "Please set PEANO_INSTALL_DIR"
-        os.makedirs(os.path.join(self.project, "build"), exist_ok=True)
-        external_kernels = inject_aie_kernels(self.module)
-        with open(
-            os.path.join(self.project, "original.mlir"), "w", encoding="utf-8"
-        ) as f:
-            f.write(str(self.module))
-        lower_tensor_to_memref(self.module)
-
-        print("==== lower_tensor_to_memref ====")
-        print(self.module)
-        print("==== ==== ====")
-
+    def build_mlir(self, external_kernels):
+        # print("visit_modulevisit_modulevisit_modulevisit_modulevisit_module")
+        # visit_module(self.module)
         kernel_buf_dicts = record_local_buffer(self.module)
         _, all_funcs = get_public_funcs(self.module)
         # Create a dictionary to store the kernel functions
@@ -1650,8 +1654,8 @@ class AIEModule:
                 for tensor in sub_func_lst["_global"]:
                     if tensor not in io_lst["_global"]:
                         io_lst["_global"].append(tensor)
-        self.inputs = inputs
-        self.outputs = outputs
+        self.global_inputs = inputs["_global"]
+        self.global_outputs = outputs["_global"]
         code = codegen_aie_mlir(
             self.module,
             func_groups,
@@ -1663,18 +1667,34 @@ class AIEModule:
         )
         with open(os.path.join(self.project, "top.mlir"), "w", encoding="utf-8") as f:
             f.write(code)
-        my_code = my_codegen_aie_mlir(
-            self.module,
-            func_groups,
-            inputs,
-            outputs,
-            kernel_buf_dicts,
-            external_kernels,
-            self.stream_info,
-            virtual_to_phisical
-        )
-        with open(os.path.join(self.project, "my_top.mlir"), "w", encoding="utf-8") as f:
-            f.write(my_code)
+        
+    def build(self, custimize = False, virtual_to_phisical = False):
+        assert "MLIR_AIE_INSTALL_DIR" in os.environ, "Please set MLIR_AIE_INSTALL_DIR"
+        assert "PEANO_INSTALL_DIR" in os.environ, "Please set PEANO_INSTALL_DIR"
+        os.makedirs(os.path.join(self.project, "build"), exist_ok=True)
+        external_kernels = inject_aie_kernels(self.module)
+        with open(
+            os.path.join(self.project, "original.mlir"), "w", encoding="utf-8"
+        ) as f:
+            f.write(str(self.module))
+        lower_tensor_to_memref(self.module)
+
+        print("==== lower_tensor_to_memref ====")
+        print(self.module)
+        print("==== ==== ====")
+
+        if virtual_to_phisical:
+            self.build_mlir(external_kernels)
+            my_code = my_codegen_aie_mlir(
+                self.module,
+                external_kernels,
+                self.stream_info
+            )
+            with open(os.path.join(self.project, "my_top.mlir"), "w", encoding="utf-8") as f:
+                f.write(my_code)
+        else:
+            self.build_mlir(external_kernels)
+
         # compile external kernels
         kernel_code, generated_kernels = codegen_external_kernels(external_kernels)
         if len(generated_kernels) > 0:
@@ -1698,9 +1718,9 @@ class AIEModule:
         path = os.path.join(path, "../harness/aie")
         os.system(f"cp -r {path}/* {self.project}")
         if custimize:
-            host_code = codegen_customized_host(inputs["_global"], outputs["_global"], True)
+            host_code = codegen_customized_host(self.global_inputs, self.global_outputs, True)
         else:
-            host_code = codegen_host(inputs["_global"], outputs["_global"])
+            host_code = codegen_host(self.global_inputs, self.global_outputs)
         with open(os.path.join(self.project, "test.cpp"), "w", encoding="utf-8") as f:
             f.write(host_code)
         cmd = f"cd {self.project}/build && cmake .. -DTARGET_NAME=top -DMLIR_AIE_DIR=$MLIR_AIE_INSTALL_DIR/.. && cmake --build . --config Release"
@@ -1724,7 +1744,7 @@ class AIEModule:
             raise RuntimeError("Failed to execute AIE code.")
         # TODO: need to complete multiple outputs rules
         result = read_tensor_from_file(
-            self.outputs["_global"][-1].dtype,
+            self.global_outputs[-1].dtype,
             args[-1].shape,
             f"{self.project}/output.data",
         )
