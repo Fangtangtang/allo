@@ -9,8 +9,6 @@ import numpy as np
 from allo.memory import Layout
 
 LyA = Layout("S0R")
-LyB = Layout("RS1")
-LyC = Layout("S0S1")
 
 
 def _test_matrix_scalar_add():

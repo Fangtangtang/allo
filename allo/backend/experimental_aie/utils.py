@@ -1,4 +1,4 @@
-# pylint: disable=import-error, no-name-in-module, c-extension-no-member, too-many-nested-blocks
+# pylint: disable=import-error, no-name-in-module, c-extension-no-member, too-many-nested-blocks, consider-using-enumerate
 # Copyright Allo authors. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,7 @@ import aie.ir as aie_ir
 import allo._mlir._mlir_libs._mlir as allo_ir
 from ..._mlir.dialects import func as allo_func_d
 from ..utils import format_str, format_code
+from .memory import AIE_DTensor
 
 from ..._mlir.ir import (
     MemRefType,
@@ -98,7 +99,6 @@ def inject_external_kernels(module: allo_ir.ir.Module) -> tuple[dict[str, bool],
                                 kernel_code += "}\n\n"
                             # matmul
                             elif op.operation.name == "linalg.matmul":
-                                include_src.add('#include "mm.cc"\n')
                                 M, K = MemRefType(op.inputs[0].type).shape
                                 _, N = MemRefType(op.inputs[1].type).shape
                                 dtype = str(op.inputs[0].type.element_type)
@@ -111,6 +111,7 @@ def inject_external_kernels(module: allo_ir.ir.Module) -> tuple[dict[str, bool],
                                     ("bf16", "f32"),
                                 ]:
                                     continue
+                                include_src.add('#include "mm.cc"\n')
                                 kernel_name = f"matmul_scalar_{dtype}_{out_dtype}"
                                 use_external_kernels[func_name] = True
                                 kernel_header += f"#define DIM_M {M}\n"
@@ -378,14 +379,15 @@ file_close_str = """  ofile.close();
 """
 
 
-def codegen_host(inputs, outputs):
+def codegen_host(inputs: dict[int, AIE_DTensor], outputs: dict[int, AIE_DTensor]):
     """
     Generate the C++ code for external kernels for host CPU.
     """
     code = host_header
     with format_code(indent=2):
         # write input data
-        for i, dtensor in enumerate(inputs):
+        for i in range(len(inputs)):
+            dtensor = inputs[i]
             shape = dtensor.shape
             dtype = aie_ctype_map[str(dtensor.dtype)]
             code += format_str(f'std::ifstream ifile{i}("input{i}.data");')
@@ -414,7 +416,8 @@ def codegen_host(inputs, outputs):
             code += format_str(
                 f"memcpy(bufIn{i}, srcVec{i}.data(), (srcVec{i}.size() * sizeof({dtype})));"
             )
-        for i, dtensor in enumerate(outputs):
+        for i in range(len(outputs)):
+            dtensor = outputs[i + len(inputs)]
             shape = dtensor.shape
             dtype = aie_ctype_map[str(dtensor.dtype)]
             out_size = np.prod(shape)
@@ -456,7 +459,8 @@ def codegen_host(inputs, outputs):
             'std::cout << "NPU execution time: " << npu_time << "us\\n";'
         )
         # get results
-        for i, dtensor in enumerate(outputs):
+        for i in range(len(outputs)):
+            dtensor = outputs[i + len(inputs)]
             shape = dtensor.shape
             dtype = aie_ctype_map[str(dtensor.dtype)]
             out_size = np.prod(shape)
