@@ -221,8 +221,9 @@ def map_global_io(inputs, outputs) -> tuple[dict[str, list[DMATensorTile]], int,
         Since memory tile is used for transfer, we assume that `receive` implies one `send` and `send` implies one `receive`.
         """
         device_dims, size, stride = dtensor.get_access_pattern()
-        tensor_tiles = list(
-            dtensor.global_placement.keys()
+        # fixme: what should the correct order be?? maybe should use a function to calculate
+        tensor_tiles = sorted(
+            list(dtensor.global_placement.keys())
         )  # 'R' can use one port yet multiple destinations
 
         send_need = len(tensor_tiles) if is_input else 1
@@ -805,42 +806,9 @@ class CodeGenerator:
                             )
                             bd_cnt += 1
                             dma_tiles.append(dma_fifo)
-                            # dma_task = aiex_d.dma_configure_task_for(
-                            #     dma_fifo,
-                            #     issue_token=True,
-                            #     repeat_count=dma_tile.size[
-                            #         0
-                            #     ],  # the highest dimension size in transfer length is the BD repeat count
-                            # )
-                            # dma_entry_block = aie_ir.Block.create_at_start(
-                            #     dma_task.body
-                            # )
-                            # with aie_ir.InsertionPoint(dma_entry_block):
-                            #     tile_length, tile_offset = 1, 0
-                            #     # 'aie.dma_bd' length should match length of transfer expressed by lowest three dimensions of data layout
-                            #     for tile_len in dma_tile.size[1:]:
-                            #         tile_length *= tile_len
-                            #     for offset, stride in zip(
-                            #         dma_tile.offset, dma_tile.stride
-                            #     ):
-                            #         tile_offset += offset * stride
-                            #     aie_d.DMABDOp(
-                            #         buffer=runtime_seq_entry_block.arguments[i],
-                            #         offset=tile_offset,
-                            #         len=tile_length,
-                            #         dimensions=aie_d.bd_dim_layout_array_attr_builder(
-                            #             list(zip(dma_tile.size, dma_tile.stride))
-                            #         ),
-                            #     )
-                            #     aie_d.EndOp()
-                            # aiex_d.dma_start_task(dma_task)
-                            # dma_tasks.append(dma_task)
                     # DMA wait
                     for dma_tile in dma_tiles:
                         aiex_d.dma_wait(dma_tile)
-                    # for task_ in dma_tasks:
-                    #     aiex_d.dma_await_task(task_)
-                    #     aiex_d.dma_free_task(task_)
                     aie_d.EndOp()
 
         return self.aie_module
