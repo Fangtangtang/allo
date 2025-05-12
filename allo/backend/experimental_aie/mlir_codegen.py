@@ -221,11 +221,9 @@ def map_global_io(inputs, outputs) -> tuple[dict[str, list[DMATensorTile]], int,
         Since memory tile is used for transfer, we assume that `receive` implies one `send` and `send` implies one `receive`.
         """
         device_dims, size, stride = dtensor.get_access_pattern()
-        # fixme: what should the correct order be?? maybe should use a function to calculate
         tensor_tiles = sorted(
             list(dtensor.global_placement.keys())
         )  # 'R' can use one port yet multiple destinations
-
         send_need = len(tensor_tiles) if is_input else 1
         recv_need = 1 if is_input else len(tensor_tiles)
         mem_tile_id = assign_tile(send_need, recv_need)
@@ -263,12 +261,8 @@ def map_global_io(inputs, outputs) -> tuple[dict[str, list[DMATensorTile]], int,
                     "Failed to allocate (shim, memory) tile: per-tile FIFO limit "
                     "exceeded or no more available tiles."
                 )
-            if len(device_dims) == 1:
-                offset[device_dims[0]] = start_idx
-                size[device_dims[0]] = len(chunk)
-            else:
-                offset[device_dims[1]] = start_idx // lose_factor
-                size[device_dims[1]] = len(chunk) // lose_factor
+            offset[device_dims[0]] = start_idx // lose_factor
+            size[device_dims[0]] = len(chunk) // lose_factor
             dma_tensor_tiles.append(
                 DMATensorTile(
                     len(dma_tensor_tiles),
@@ -280,6 +274,11 @@ def map_global_io(inputs, outputs) -> tuple[dict[str, list[DMATensorTile]], int,
                     stride,
                 )
             )
+            print("\t", mem_tile_id)
+            print("\t", chunk)
+            print("\t", offset)
+            print("\t", size)
+            print("\t", stride)
             remaining = remaining[len(chunk) :]
             start_idx += len(chunk)
         return dma_tensor_tiles
