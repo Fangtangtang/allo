@@ -17,7 +17,7 @@ $$
 import torch
 
 
-def layernorm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
+def layernorm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     """
     x: shape [..., dim] - input tensor
     weight: shape [dim] - scale parameter γ
