@@ -53,7 +53,7 @@ import torch.nn as nn
 
 
 class RMSNorm(nn.Module):
-    def __init__(self, eps=1e-8):
+    def __init__(self, eps=1e-6):
         super().__init__()
         self.eps = eps
 
