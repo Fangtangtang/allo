@@ -24,7 +24,14 @@ def read_tensor_from_file(dtype, shape, file_path):
     return arr.reshape(shape)
 
 
-def call_mlir(project: str, output_dtype, trace_size: int, *args):
+def call_mlir(project: str, output_dtype, trace_size: int, recompile_external: bool, *args):
+    if recompile_external:
+        cmd = f"cd {project} && $PEANO_INSTALL_DIR/bin/clang++ -O2 -v -std=c++20 --target=aie2-none-unknown-elf -Wno-parentheses -Wno-attributes -Wno-macro-redefined -DNDEBUG -I $MLIR_AIE_INSTALL_DIR/include -I $MLIR_AIE_EXTERNAL_KERNEL_DIR/aie2 -c external.cc -o external.o"
+        with subprocess.Popen(cmd, shell=True) as process:
+            process.wait()
+        if process.returncode != 0:
+            raise RuntimeError("Failed to compile external kernels.")
+
     # generate insts.txt
     cmd = f"cd {project} && aiecc.py --alloc-scheme=basic-sequential --aie-generate-xclbin --no-compile-host --xclbin-name=build/final.xclbin --no-xchesscc --no-xbridge --peano ${{PEANO_INSTALL_DIR}} --aie-generate-npu-insts --npu-insts-name=insts.txt top.mlir"
     with subprocess.Popen(cmd, shell=True) as process:
@@ -61,6 +68,6 @@ M, N, K = 32, 32, 64
 A = np.random.randint(0, 64, (M, K)).astype(np.int32)
 B = np.random.randint(0, 64, (K, N)).astype(np.int32)
 C = np.zeros((M, N)).astype(np.int32)
-call_mlir("top.prj", TyI, 0, A, B, C)
+call_mlir("top.prj", TyI, 0, recompile_external=False, A, B, C)
 np.testing.assert_allclose(C, A @ B, atol=1e-5)
 print("PASSED!")
