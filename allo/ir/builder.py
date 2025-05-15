@@ -61,6 +61,7 @@ from .types import Int, UInt, Index, Float, Fixed, UFixed, Struct, float32
 from .visitor import ASTVisitor
 from .symbol_resolver import ASTResolver
 from ..backend.ip import IPModule, c2allo_type
+from ..backend.experimental_aie.external_kernel import ExternalModule
 from ..utils import get_mlir_dtype_from_str
 from ..logging import print_error_message
 
@@ -1966,7 +1967,11 @@ class ASTTransformer(ASTBuilder):
             and not obj.__module__.startswith("allo.library")
             and not obj.__module__.startswith("allo._mlir")
         ):
-            fn_name = obj.__name__ if not isinstance(obj, IPModule) else None
+            fn_name = (
+                obj.__name__
+                if not (isinstance(obj, IPModule) or isinstance(obj, ExternalModule))
+                else None
+            )
             if fn_name == "array":
                 # as it directly runs the node inside, this branch is put in the front
                 array = eval(ast.unparse(node), ctx.global_vars)
@@ -1983,7 +1988,7 @@ class ASTTransformer(ASTBuilder):
                 return results
             # Allo library functions
             new_args = build_stmts(ctx, node.args)
-            if isinstance(obj, IPModule):
+            if isinstance(obj, IPModule) or isinstance(obj, ExternalModule):
                 # Add HLS IP as external library
                 if obj not in ctx.ext_libs:
                     ctx.ext_libs.append(obj)

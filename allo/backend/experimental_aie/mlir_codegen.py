@@ -274,11 +274,6 @@ def map_global_io(inputs, outputs) -> tuple[dict[str, list[DMATensorTile]], int,
                     stride,
                 )
             )
-            print("\t", mem_tile_id)
-            print("\t", chunk)
-            print("\t", offset)
-            print("\t", size)
-            print("\t", stride)
             remaining = remaining[len(chunk) :]
             start_idx += len(chunk)
         return dma_tensor_tiles

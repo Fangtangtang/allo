@@ -11,6 +11,7 @@ import allo._mlir._mlir_libs._mlir as allo_ir
 from ..._mlir.dialects import func as allo_func_d
 from ..utils import format_str, format_code
 from .memory import AIE_DTensor
+from .external_kernel import ExternalModule
 
 from ..._mlir.ir import (
     MemRefType,
@@ -52,7 +53,9 @@ aie_external_kernel_ctype_map = {
 }
 
 
-def inject_external_kernels(module: allo_ir.ir.Module) -> tuple[dict[str, bool], dict]:
+def inject_external_kernels(
+    module: allo_ir.ir.Module, external_kernel_lib: dict[str, ExternalModule]
+) -> tuple[dict[str, bool], dict]:
     """
     Inject external kernels for compute cores.
 
@@ -81,9 +84,23 @@ def inject_external_kernels(module: allo_ir.ir.Module) -> tuple[dict[str, bool],
                 if func.attributes["sym_name"].value != "top":
                     func_name: str = func.attributes["sym_name"].value
                     use_external_kernels[func_name] = False
-                    # continue  # fixme: crash when using external kernels
                     for block in func.regions[0].blocks:
                         for op in block.operations:
+                            if isinstance(op, allo_func_d.CallOp):
+                                use_external_kernels[func_name] = True
+                                callee_name = op.callee.value
+                                # register external kernel
+                                if callee_name in injected_kernels:
+                                    continue
+                                external_module = external_kernel_lib[callee_name]
+                                assert (
+                                    external_module is not None
+                                ), "external module not found"
+                                include_src.add(
+                                    f'#include "{external_module.filename}"\n'
+                                )
+                                injected_kernels[callee_name] = ("", "")
+                                continue
                             kernel_code, kernel_header = "", ""
                             # vec add/mul
                             if op.operation.name in {"linalg.add", "linalg.mul"}:
@@ -206,6 +223,46 @@ def get_element_type(dtype_str: str) -> aie_ir.Type:
     if dtype_str == "bf16":
         return aie_ir.BF16Type.get()
     raise ValueError(f"Unsupported dtype: {dtype_str}")
+
+
+def extract_extern_c_blocks(code: str):
+    blocks = []
+    clean_code = ""
+    i = 0
+    n = len(code)
+
+    while i < n:
+        start = code.find('extern "C"', i)
+        if start == -1:
+            clean_code += code[i:]
+            break
+
+        # Add content before extern block to clean_code
+        clean_code += code[i:start]
+
+        brace_start = code.find("{", start)
+        if brace_start == -1:
+            raise ValueError("Malformed extern \"C\": missing opening '{'")
+
+        # Now scan forward to match balanced braces
+        depth = 1
+        j = brace_start + 1
+        while j < n and depth > 0:
+            if code[j] == "{":
+                depth += 1
+            elif code[j] == "}":
+                depth -= 1
+            j += 1
+
+        if depth != 0:
+            raise ValueError('Unbalanced braces in extern "C" block')
+
+        extern_block = code[start:j]
+        blocks.append(extern_block)
+
+        i = j  # continue parsing from end of this extern block
+
+    return clean_code, blocks
 
 
 def codegen_external_kernels(injected_kernels: dict, include_src) -> str:

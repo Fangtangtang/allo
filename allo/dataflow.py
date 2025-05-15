@@ -328,6 +328,7 @@ def build(
             s.func_args,
             project,
             stream_info,
+            s.ext_libs
         )
         aie_mod.build()
         return aie_mod
