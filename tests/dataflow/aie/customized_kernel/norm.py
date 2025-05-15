@@ -28,7 +28,7 @@ hidden_size = 512
 
 
 def _test_rms_norm():
-    vadd_int = ExternalModule(
+    norm = ExternalModule(
         top="layer_norm",
         impl_path="norm.cc",
         input_idx=[0, 1],
@@ -42,7 +42,7 @@ def _test_rms_norm():
     def top():
         @df.kernel(mapping=[1])
         def core(A: Ty[M, N] @ LyA, B: Ty[N] @ Ly, C: Ty[M, N] @ LyA):
-            vadd_int(A, B, C)
+            norm(A, B, C)
 
     input_tensor = torch.randn(seq_len, hidden_size, dtype=torch.float32)
     weight = torch.randn(hidden_size, dtype=torch.float32)
