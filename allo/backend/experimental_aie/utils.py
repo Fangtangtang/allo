@@ -225,46 +225,6 @@ def get_element_type(dtype_str: str) -> aie_ir.Type:
     raise ValueError(f"Unsupported dtype: {dtype_str}")
 
 
-def extract_extern_c_blocks(code: str):
-    blocks = []
-    clean_code = ""
-    i = 0
-    n = len(code)
-
-    while i < n:
-        start = code.find('extern "C"', i)
-        if start == -1:
-            clean_code += code[i:]
-            break
-
-        # Add content before extern block to clean_code
-        clean_code += code[i:start]
-
-        brace_start = code.find("{", start)
-        if brace_start == -1:
-            raise ValueError("Malformed extern \"C\": missing opening '{'")
-
-        # Now scan forward to match balanced braces
-        depth = 1
-        j = brace_start + 1
-        while j < n and depth > 0:
-            if code[j] == "{":
-                depth += 1
-            elif code[j] == "}":
-                depth -= 1
-            j += 1
-
-        if depth != 0:
-            raise ValueError('Unbalanced braces in extern "C" block')
-
-        extern_block = code[start:j]
-        blocks.append(extern_block)
-
-        i = j  # continue parsing from end of this extern block
-
-    return clean_code, blocks
-
-
 def codegen_external_kernels(injected_kernels: dict, include_src) -> str:
     """
     Generate the C++ code for external kernels to be used by the AIE compute cores.

@@ -68,6 +68,6 @@ M, N, K = 32, 32, 64
 A = np.random.randint(0, 64, (M, K)).astype(np.int32)
 B = np.random.randint(0, 64, (K, N)).astype(np.int32)
 C = np.zeros((M, N)).astype(np.int32)
-call_mlir("top.prj", TyI, 0, recompile_external=False, A, B, C)
+call_mlir("top.prj", TyI, 0, False, A, B, C)
 np.testing.assert_allclose(C, A @ B, atol=1e-5)
 print("PASSED!")
