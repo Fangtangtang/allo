@@ -274,11 +274,6 @@ def map_global_io(inputs, outputs) -> tuple[dict[str, list[DMATensorTile]], int,
                     stride,
                 )
             )
-            print("\t", mem_tile_id)
-            print("\t", chunk)
-            print("\t", offset)
-            print("\t", size)
-            print("\t", stride)
             remaining = remaining[len(chunk) :]
             start_idx += len(chunk)
         return dma_tensor_tiles
@@ -306,14 +301,14 @@ class CodeGenerator:
     def __init__(
         self,
         device_type: str,
-        global_inputs: dict[int, AIE_DTensor],
-        global_outputs: dict[int, AIE_DTensor],
+        global_inputs: dict[int, DTensor],
+        global_outputs: dict[int, DTensor],
         top_function: allo_func_d.FuncOp,
     ):
         self.device_type = device_type
 
-        self.global_inputs: dict[int, AIE_DTensor] = global_inputs
-        self.global_outputs: dict[int, AIE_DTensor] = global_outputs
+        self.global_inputs: dict[int, DTensor] = global_inputs
+        self.global_outputs: dict[int, DTensor] = global_outputs
         self.top_function = top_function
 
         self.tile_map: dict[str, aie_d.TileOp] = {}

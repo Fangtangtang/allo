@@ -74,8 +74,8 @@ class AIE_MLIRModule:
         self.project_dir: str = project_dir
 
         # index in top fucntion argument list -> DTensor
-        self.global_inputs: dict[int, AIE_DTensor] = {}
-        self.global_outputs: dict[int, AIE_DTensor] = {}
+        self.global_inputs: dict[int, DTensor] = {}
+        self.global_outputs: dict[int, DTensor] = {}
 
         self.core_func_args: dict[str, dict[int, tuple[Argument, bool]]] = (
             {}

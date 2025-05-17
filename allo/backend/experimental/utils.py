@@ -10,7 +10,7 @@ import aie.ir as aie_ir
 import allo._mlir._mlir_libs._mlir as allo_ir
 from ..._mlir.dialects import func as allo_func_d
 from ..utils import format_str, format_code
-from .memory import AIE_DTensor
+from ...memory import DTensor
 
 from ..._mlir.ir import (
     MemRefType,
@@ -379,7 +379,7 @@ file_close_str = """  ofile.close();
 """
 
 
-def codegen_host(inputs: dict[int, AIE_DTensor], outputs: dict[int, AIE_DTensor]):
+def codegen_host(inputs: dict[int, DTensor], outputs: dict[int, DTensor]):
     """
     Generate the C++ code for external kernels for host CPU.
     """
