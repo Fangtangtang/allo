@@ -15,12 +15,11 @@ LyC = Layout("S0S1")
 TyI, TyO = int16, int32
 total_M, total_N, total_K = 128, 128, 512
 M, N, K = 128, 128, 32
-P0, P1 = 4, 4
 
 
 @df.region()
 def top1():
-    @df.kernel(mapping=[P0, P1])
+    @df.kernel(mapping=[4, 4])
     def gemm(A: TyI[M, K] @ LyA, B: TyI[K, N] @ LyB, C: TyO[M, N] @ LyC):
         C[:, :] = allo.matmul(A, B)
 
