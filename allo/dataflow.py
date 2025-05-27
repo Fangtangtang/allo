@@ -4,6 +4,7 @@
 
 import functools
 import os
+import os
 from ._mlir.ir import (
     InsertionPoint,
     FlatSymbolRefAttr,
@@ -19,12 +20,13 @@ from .customize import customize as _customize
 from .ir.utils import get_global_vars, get_all_df_kernels
 from .backend.aie import AIEModule
 
+
 from .backend.simulator import LLVMOMPModule
 from .ir.types import Stream
 from .passes import df_pipeline
 
 if os.getenv("USE_AIE_MLIR_BUILDER") == "1":
-    from .backend.experimental_aie import AIE_MLIRModule
+    from .backend.experimental import AIE_MLIRModule
 
 
 def get_pid():
