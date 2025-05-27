@@ -52,7 +52,7 @@ aie_external_kernel_ctype_map = {
 }
 
 
-def inject_external_kernels(module: allo_ir.ir.Module) -> tuple[dict[str, bool], dict]:
+def inject_external_kernels(module: allo_ir.ir.Module, top_function_name: str) -> tuple[dict[str, bool], dict]:
     """
     Inject external kernels for compute cores.
 
@@ -78,7 +78,7 @@ def inject_external_kernels(module: allo_ir.ir.Module) -> tuple[dict[str, bool],
                 "sym_visibility" not in func.attributes
                 or func.attributes["sym_visibility"].value != "private"
             ):
-                if func.attributes["sym_name"].value != "top":
+                if func.attributes["sym_name"].value != top_function_name:
                     func_name: str = func.attributes["sym_name"].value
                     use_external_kernels[func_name] = False
                     # continue  # fixme: crash when using external kernels
@@ -154,7 +154,7 @@ def inject_external_kernels(module: allo_ir.ir.Module) -> tuple[dict[str, bool],
 
 
 def classify_aie_functions(
-    module: allo_ir.ir.Module,
+    module: allo_ir.ir.Module, top_function_name: str
 ) -> tuple[
     allo_func_d.FuncOp, dict[str, list[allo_func_d.FuncOp]], list[allo_func_d.FuncOp]
 ]:
@@ -178,7 +178,7 @@ def classify_aie_functions(
                     and func.attributes["sym_visibility"].value == "private"
                 ):
                     external_funcs.append(func)
-                elif func.attributes["sym_name"].value == "top":
+                elif func.attributes["sym_name"].value == top_function_name:
                     top_func = func
                 else:
                     func_name_w_id = func.attributes["sym_name"].value

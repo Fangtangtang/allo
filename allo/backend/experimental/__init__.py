@@ -167,12 +167,12 @@ class AIE_MLIRModule:
             shutil.rmtree(build_dir)
         os.makedirs(build_dir)
         # TODO: maybe use other ways to capture the relationship between DTensor, function group
-        _, core_func_groups, _ = classify_aie_functions(self.allo_module)
+        _, core_func_groups, _ = classify_aie_functions(self.allo_module, self.top_func_name)
         inputs, outputs = self.collect_io(core_func_groups)
 
         # - extract external kernels
         use_external_kernels, injected_kernels, include_src = inject_external_kernels(
-            self.allo_module
+            self.allo_module, self.top_func_name
         )
         # record original allo mlir
         with open(
@@ -187,7 +187,7 @@ class AIE_MLIRModule:
         with self.allo_module.context:
             mlir_pass_manager.parse(pipeline).run(self.allo_module.operation)
         top_func, core_func_groups, external_funcs = classify_aie_functions(
-            self.allo_module
+            self.allo_module, self.top_func_name
         )
         code_generator = CodeGenerator(
             device_type, self.global_inputs, self.global_outputs, top_func
