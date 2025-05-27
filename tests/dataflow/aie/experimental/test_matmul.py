@@ -84,8 +84,8 @@ def _test_gemm_2D_i16_i32():
             C[:, :] = allo.matmul(A, B)
 
     mod = df.build(top, target="aie-mlir")
-    A = np.random.randint(0, 64, (M, K)).astype(np.int16)
-    B = np.random.randint(0, 64, (K, N)).astype(np.int16)
+    A = np.random.randint(0, 32, (M, K)).astype(np.int16)
+    B = np.random.randint(0, 32, (K, N)).astype(np.int16)
     C = np.zeros((M, N)).astype(np.int32)
     mod(A, B, C)
     np.testing.assert_allclose(C, A @ B, atol=1e-5)

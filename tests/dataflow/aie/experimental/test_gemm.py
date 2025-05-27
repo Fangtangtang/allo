@@ -13,8 +13,10 @@ LyC = Layout("S0S1")
 
 
 TyI, TyO = int16, int32
-M, N, K = 128, 64, 32
+total_M, total_N, total_K = 128, 128, 512
+M, N, K = 128, 128, 32
 P0, P1 = 4, 4
+
 
 @df.region()
 def top1():
@@ -22,21 +24,27 @@ def top1():
     def gemm(A: TyI[M, K] @ LyA, B: TyI[K, N] @ LyB, C: TyO[M, N] @ LyC):
         C[:, :] = allo.matmul(A, B)
 
+
 @df.region()
 def top2():
-    @df.kernel(mapping=[P0])
-    def core(A: TyO[M, N] @ LyA, B: TyO[M, N] @ LyA, C: TyO[M, N] @ LyA):
+    @df.kernel(mapping=[2, 4])
+    def core(A: TyO[M, N] @ LyC, B: TyO[M, N] @ LyC, C: TyO[M, N] @ LyC):
         C[:, :] = allo.add(A, B)
 
-mod1 = df.build(top1, target="aie-mlir",project="top1.prj")
-mod2 = df.build(top2, target="aie-mlir",project="top2.prj")
 
-A = np.random.randint(0, 32, (M, K)).astype(np.int16)
-B = np.random.randint(0, 32, (K, N)).astype(np.int16)
+mod1 = df.build(top1, target="aie-mlir", project="top1.prj")
+mod2 = df.build(top2, target="aie-mlir", project="top2.prj")
+
+A = np.random.randint(0, 8, (total_M, total_K)).astype(np.int16)
+B = np.random.randint(0, 8, (total_K, total_N)).astype(np.int16)
 C_tmp = np.zeros((M, N)).astype(np.int32)
 C = np.zeros((M, N)).astype(np.int32)
-mod1(A, B, C_tmp)
-mod2(C,C_tmp,C)
+
+for i in range(total_K // K):
+    tile_A = A[:, i * K : (i + 1) * K]
+    tile_B = B[i * K : (i + 1) * K, :]
+    mod1(tile_A, tile_B, C_tmp)
+    mod2(C, C_tmp, C)
+
 np.testing.assert_allclose(C, A @ B, atol=1e-5)
 print("PASSED!")
-

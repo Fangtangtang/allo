@@ -167,7 +167,9 @@ class AIE_MLIRModule:
             shutil.rmtree(build_dir)
         os.makedirs(build_dir)
         # TODO: maybe use other ways to capture the relationship between DTensor, function group
-        _, core_func_groups, _ = classify_aie_functions(self.allo_module, self.top_func_name)
+        _, core_func_groups, _ = classify_aie_functions(
+            self.allo_module, self.top_func_name
+        )
         inputs, outputs = self.collect_io(core_func_groups)
 
         # - extract external kernels

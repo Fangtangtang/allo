@@ -52,7 +52,9 @@ aie_external_kernel_ctype_map = {
 }
 
 
-def inject_external_kernels(module: allo_ir.ir.Module, top_function_name: str) -> tuple[dict[str, bool], dict]:
+def inject_external_kernels(
+    module: allo_ir.ir.Module, top_function_name: str
+) -> tuple[dict[str, bool], dict]:
     """
     Inject external kernels for compute cores.
 
