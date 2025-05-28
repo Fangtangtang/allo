@@ -13,6 +13,7 @@ from ._mlir.ir import (
     StringAttr,
     FunctionType,
     MemRefType,
+    Type,
 )
 from ._mlir.dialects import func as func_d, allo as allo_d
 from ._mlir.passmanager import PassManager as mlir_pass_manager
@@ -47,10 +48,12 @@ def array(element, shape):
     return Array(element, shape)
 
 
-def move_stream_to_interface(s):
+def move_stream_to_interface(s, with_stream_type:bool=False):
     stream_info = {}
     funcs = get_all_df_kernels(s)
     new_func_args = s.func_args.copy()
+    if with_stream_type:
+        stream_types_dict:dict[str, Type] = {}
 
     for func in funcs:
         func_name = func.attributes["sym_name"].value
@@ -67,6 +70,8 @@ def move_stream_to_interface(s):
                 stream_ops.append(op)
                 stream_types.append(op.result.type)
                 stream_name = op.attributes["name"].value
+                if with_stream_type and stream_name not in stream_types_dict:
+                    stream_types_dict[stream_name] = op.result.type
                 stream_signed += "u" if "unsigned" in op.attributes else "_"
                 for use in op.result.uses:
                     # get use's parent operation
@@ -119,6 +124,8 @@ def move_stream_to_interface(s):
                 arg.replace_all_uses_with(new_func.arguments[i])
             func.operation.erase()
     s.func_args = new_func_args
+    if with_stream_type:
+        return stream_info, stream_types_dict
     return stream_info
 
 
@@ -322,7 +329,7 @@ def build(
     if target == "aie-mlir":
         global_vars = get_global_vars(func)
         s = _customize(func, global_vars=global_vars, enable_tensor=False)
-        stream_info = move_stream_to_interface(s)
+        stream_info, stream_types_dict = move_stream_to_interface(s, with_stream_type=True)
         s = _build_top(s, stream_info, target="aie")
         aie_mod = AIE_MLIRModule(
             s.module,
@@ -330,6 +337,7 @@ def build(
             s.func_args,
             project,
             stream_info,
+            stream_types_dict
         )
         aie_mod.build()
         return aie_mod

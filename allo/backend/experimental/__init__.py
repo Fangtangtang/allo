@@ -10,7 +10,7 @@ import aie.ir as aie_ir
 
 import allo._mlir._mlir_libs._mlir as allo_ir
 from ..._mlir.dialects import func as allo_func_d
-
+from ..._mlir.ir import Type
 from ...passes import analyze_read_write_patterns
 
 from ...memory import DTensor
@@ -35,6 +35,7 @@ class AIE_MLIRModule:
         func_args: dict,
         project_dir: str,
         stream_info: dict,
+        stream_types_dict: dict[str, Type],
     ):
         self.allo_module: allo_ir.ir.Module = module
         self.top_func_name: str = top_func_name
@@ -46,8 +47,10 @@ class AIE_MLIRModule:
             if isinstance(func, allo_func_d.FuncOp) and "df.kernel" in func.attributes:
                 df_kernels.append(func)
         self.virtual_computation_graph: ComputationGraph = ComputationGraph(
-            stream_info, df_kernels
+            stream_info, df_kernels, stream_types_dict
         )
+        self.virtual_computation_graph.print_graph()
+        self.virtual_computation_graph.check_isomorphic()
 
         tmp_map: dict = {}
         self.func_args: dict[str, list[Argument]] = {}

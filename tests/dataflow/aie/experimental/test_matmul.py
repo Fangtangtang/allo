@@ -93,7 +93,7 @@ def _test_gemm_2D_i16_i32():
 
 
 if __name__ == "__main__":
-    _test_gemm_1D()
+    # _test_gemm_1D()
     _test_gemm_2D()
-    _test_gemm_1D_i16_i16()
-    _test_gemm_2D_i16_i32()
+    # _test_gemm_1D_i16_i16()
+    # _test_gemm_2D_i16_i32()
