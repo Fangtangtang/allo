@@ -50,7 +50,7 @@ class AIE_MLIRModule:
             stream_info, df_kernels, stream_types_dict
         )
         self.virtual_computation_graph.print_graph()
-        self.virtual_computation_graph.check_isomorphic()
+        self.virtual_computation_graph.print_isomorphic()
 
         tmp_map: dict = {}
         self.func_args: dict[str, list[Argument]] = {}
@@ -178,7 +178,11 @@ class AIE_MLIRModule:
         if os.path.exists(build_dir):
             shutil.rmtree(build_dir)
         os.makedirs(build_dir)
-        print(self.allo_module)
+
+        if enable_virtual_mapping:
+            # TODO: virtual mapping
+            pass
+
         # TODO: maybe use other ways to capture the relationship between DTensor, function group
         _, core_func_groups, _ = classify_aie_functions(
             self.allo_module, self.top_func_name

@@ -4,6 +4,8 @@
 import re
 from ..._mlir.dialects import func as func_d, allo as allo_d
 from ..._mlir.ir import Type
+
+
 # ############################################################
 # Base Elements
 # ############################################################
@@ -11,9 +13,12 @@ class VirtualNode:
     def __init__(self, func: func_d.FuncOp):
         self.func_name: str = func.attributes["sym_name"].value
         self.func: func_d.FuncOp = func
+        # input/output node name -> (stream type, stream name)
         self.inputs: dict[str, tuple[Type, str]] = {}
         self.outputs: dict[str, tuple[Type, str]] = {}
-        self.op_tag: str = re.sub(r'func\.func\s+@[\w\d_]+(\s*\()', r'func.func\1', str(self.func.operation))
+        self.op_tag: str = re.sub(
+            r"func\.func\s+@[\w\d_]+(\s*\()", r"func.func\1", str(self.func.operation)
+        )
 
     def add_input(self, name: str, input_type: Type, src: str):
         self.inputs[src] = (input_type, name)
@@ -35,11 +40,42 @@ class VirtualEdge:
 # ------------------------------------------------------------
 # A collocated node is a set of virtual nodes that is mapped to the same physical PE
 # ############################################################
-class CollocatedNode:
+class CollocatedBaseNode:
+    node_list: list["CollocatedBaseNode"] = []
+
     def __init__(self):
-        self.execution_queue: list[set[VirtualNode]] = []
-        self.inputs: set[str] = []
-        self.outputs: set[str] = []
+        self.id = len(CollocatedBaseNode.node_list)
+        CollocatedBaseNode.node_list.append(self)
+        self.execution_queue: list[set["CollocatedBaseNode"]] = []
+        # input/output node id -> edge stream type
+        self.inputs: dict[int, Type] = {}
+        self.outputs: dict[int, Type] = {}
+
+
+class CollocatedInitialNode(CollocatedBaseNode):
+    """
+    Virtual node wrapper
+    """
+
+    def __init__(self, v_node: VirtualNode):
+        super().__init__()
+        self.v_node = v_node
+        self.execution_queue.append({self})
+
+
+class CollocatedNode(CollocatedBaseNode):
+    def __init__(self):
+        super().__init__()
+
+    @staticmethod
+    def bundle(nodes: list[CollocatedBaseNode]):
+        # TODO:
+        pass
+
+    @staticmethod
+    def chain(node1: CollocatedBaseNode, node2: CollocatedBaseNode):
+        # TODO:
+        pass
 
 
 # ############################################################
@@ -86,10 +122,19 @@ class ComputationGraph:
             edge.src.add_output(edge.name, edge.type, edge.dst.func_name)
             edge.dst.add_input(edge.name, edge.type, edge.src.func_name)
 
-    def is_isomorphic(self, node1: VirtualNode, node2: VirtualNode) -> bool:
+        self.collocated_nodes: dict[str, CollocatedBaseNode] = {}
+
+    # ------------------------------------------------------------
+    # Check
+    # ------------------------------------------------------------
+    def virtual_node_isomorphism_check(
+        self, node1: VirtualNode, node2: VirtualNode
+    ) -> bool:
         if node1.op_tag != node2.op_tag:
             return False
-        if len(node1.inputs) != len(node2.inputs) or len(node1.outputs) != len(node2.outputs):
+        if len(node1.inputs) != len(node2.inputs) or len(node1.outputs) != len(
+            node2.outputs
+        ):
             return False
         for func_name, (input_type, _) in node1.inputs.items():
             if func_name not in node2.inputs:
@@ -109,18 +154,99 @@ class ComputationGraph:
         # - Comparing computation logic on inputs and outputs
         # This would allow structural isomorphism with renamed variables/blocks.
 
+    def collocated_node_isomorphism_check(
+        self, node1: CollocatedBaseNode, node2: CollocatedBaseNode
+    ) -> bool:
+        if len(node1.execution_queue) != len(node2.execution_queue):
+            return False
+        for op1, op2 in zip(node1.execution_queue, node2.execution_queue):
+            op1_sample = next(iter(op1))
+            op2_sample = next(iter(op2))
+            if isinstance(op1_sample, CollocatedInitialNode):
+                op1_sample, op2_sample = op2_sample, op1_sample
+            # check op1_sample and op2_sample
+            if isinstance(op1_sample, CollocatedInitialNode):
+                # both are initial nodes
+                if not isinstance(op2_sample, CollocatedInitialNode):
+                    return False
+            elif isinstance(op2_sample, CollocatedInitialNode):
+                # op1 is collocated node, op2 is initial node
+                if len(op1_sample.execution_queue) != 1:
+                    return False
+                if not self.collocated_node_isomorphism_check(
+                    next(iter(op1_sample.execution_queue[0])), op2_sample
+                ):
+                    return False
+            else:
+                if not self.collocated_node_isomorphism_check(op1_sample, op2_sample):
+                    return False
+        return True
+
+    # ------------------------------------------------------------
+    # Transformation Primitives
+    # ------------------------------------------------------------
+    def initialize_collocated_nodes(self):
+        # build initial nodes
+        for node in self.nodes.values():
+            initial_node = CollocatedInitialNode(node)
+            self.collocated_nodes[node.func_name] = initial_node
+        # connect initial nodes
+        for node in self.nodes.values():
+            for input_node, input_type in node.inputs.items():
+                self.collocated_nodes[node.func_name].add_input(
+                    self.collocated_nodes[input_node].id, input_type
+                )
+            for output_node, output_type in node.outputs.items():
+                self.collocated_nodes[node.func_name].add_output(
+                    self.collocated_nodes[output_node].id, output_type
+                )
+
+    def bundle(self, nodes: list[CollocatedBaseNode]):
+        """
+        Merges multiple isomorphic nodes—those with the same input/output pattern
+        and computation logic—into a single node.
+        The internal computation remains unchanged.
+        The merged node executes multiple times to receive inputs and send outputs accordingly.
+        """
+
+        # validity check
+        sample_node: CollocatedBaseNode = nodes[0]
+        for node in nodes[1:]:
+            if not self.collocated_node_isomorphism_check(sample_node, node):
+                raise ValueError("Nodes are not isomorphic")
+        # bundle to get a new collocated node
+        # TODO:
+        pass
+
+    def chain(self, node1: CollocatedBaseNode, node2: CollocatedBaseNode):
+        """
+        Operates on two nodes—typically in a producer-consumer relationship—into a single node.
+        The resulting node must still satisfy the constraint of having no more than two global inputs
+        and two global outputs (or use ports that can be shared by compatible data types).
+        The computations from both nodes are concatenated in a specific order that respects any dependency between them.
+        """
+        # fixme: currently, we only support chain nodes with direct dependencies
+
+        # TODO:
+        pass
+
+    # ------------------------------------------------------------
+    # Print Graph
+    # ------------------------------------------------------------
     def print_graph(self):
         print("\n<<<<< Computation Graph >>>>>")
         for edge in self.edges.values():
-            print(f"{edge.src.func_name} -> {edge.dst.func_name}: {edge.name} ({edge.type})")
+            print(
+                f"{edge.src.func_name} -> {edge.dst.func_name}: {edge.name} ({edge.type})"
+            )
         print("<<<<< Computation Graph >>>>>\n")
 
-    def check_isomorphic(self):
+    def print_isomorphic(self):
         checked_nodes = set()
         for node1 in self.nodes.values():
             checked_nodes.add(node1)
             for node2 in self.nodes.values():
                 if node2 in checked_nodes:
                     continue
-                if self.is_isomorphic(node1, node2):
+                if self.virtual_node_isomorphism_check(node1, node2):
                     print(f"{node1.func_name} is isomorphic to {node2.func_name}")
