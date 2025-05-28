@@ -24,6 +24,7 @@ from .utils import (
     read_tensor_from_file,
     codegen_host,
 )
+from .virtual_mapping import ComputationGraph
 
 
 class AIE_MLIRModule:
@@ -39,7 +40,15 @@ class AIE_MLIRModule:
         self.top_func_name: str = top_func_name
         self.streams: dict[str, Stream] = {}
 
-        # fixme: this is a dummy fix
+        # virtual mapping graph
+        df_kernels = []
+        for func in module.body.operations:
+            if isinstance(func, allo_func_d.FuncOp) and "df.kernel" in func.attributes:
+                df_kernels.append(func)
+        self.virtual_computation_graph: ComputationGraph = ComputationGraph(
+            stream_info, df_kernels
+        )
+
         tmp_map: dict = {}
         self.func_args: dict[str, list[Argument]] = {}
         for func_name, args in func_args.items():
@@ -161,11 +170,12 @@ class AIE_MLIRModule:
 
         return inputs, outputs
 
-    def build(self, device_type="npu1_4col"):
+    def build(self, device_type="npu1_4col", enable_virtual_mapping: bool = False):
         build_dir = os.path.join(self.project_dir, "build")
         if os.path.exists(build_dir):
             shutil.rmtree(build_dir)
         os.makedirs(build_dir)
+        print(self.allo_module)
         # TODO: maybe use other ways to capture the relationship between DTensor, function group
         _, core_func_groups, _ = classify_aie_functions(
             self.allo_module, self.top_func_name
