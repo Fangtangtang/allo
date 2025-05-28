@@ -48,6 +48,7 @@ class CollocatedBaseNode:
         CollocatedBaseNode.node_list.append(self)
         self.execution_queue: list[set["CollocatedBaseNode"]] = []
         # input/output node id -> edge stream type
+        # fixme: may conflict when having multiple input/output corresponding to the same node
         self.inputs: dict[int, Type] = {}
         self.outputs: dict[int, Type] = {}
 
@@ -68,14 +69,24 @@ class CollocatedNode(CollocatedBaseNode):
         super().__init__()
 
     @staticmethod
-    def bundle(nodes: list[CollocatedBaseNode]):
-        # TODO:
-        pass
+    def bundle(nodes: list[CollocatedBaseNode]) -> "CollocatedNode":
+        bundle_node = CollocatedNode()
+        node_set = set(nodes)
+        bundle_node.execution_queue.append(node_set)
+        bundle_node.inputs = nodes[0].inputs
+        bundle_node.outputs = nodes[0].outputs
+        return bundle_node
 
     @staticmethod
-    def chain(node1: CollocatedBaseNode, node2: CollocatedBaseNode):
-        # TODO:
-        pass
+    def chain(producer: CollocatedBaseNode, consumer: CollocatedBaseNode) -> "CollocatedNode":
+        chain_node = CollocatedNode()
+        chain_node.execution_queue.append({producer, consumer})
+        # fixme: may conflict when producer and consumer have the same input/output
+        chain_node.inputs = producer.inputs | consumer.inputs
+        chain_node.inputs.pop(producer.id)
+        chain_node.outputs = producer.outputs | consumer.outputs
+        chain_node.outputs.pop(consumer.id)
+        return chain_node
 
 
 # ############################################################
@@ -201,7 +212,7 @@ class ComputationGraph:
                     self.collocated_nodes[output_node].id, output_type
                 )
 
-    def bundle(self, nodes: list[CollocatedBaseNode]):
+    def bundle(self, nodes: list[CollocatedBaseNode]) -> CollocatedNode:
         """
         Merges multiple isomorphic nodes—those with the same input/output pattern
         and computation logic—into a single node.
@@ -215,10 +226,10 @@ class ComputationGraph:
             if not self.collocated_node_isomorphism_check(sample_node, node):
                 raise ValueError("Nodes are not isomorphic")
         # bundle to get a new collocated node
-        # TODO:
-        pass
+        bundle_node = CollocatedNode.bundle(nodes)
+        return bundle_node
 
-    def chain(self, node1: CollocatedBaseNode, node2: CollocatedBaseNode):
+    def chain(self, node1: CollocatedBaseNode, node2: CollocatedBaseNode) -> CollocatedNode:
         """
         Operates on two nodes—typically in a producer-consumer relationship—into a single node.
         The resulting node must still satisfy the constraint of having no more than two global inputs
@@ -226,9 +237,14 @@ class ComputationGraph:
         The computations from both nodes are concatenated in a specific order that respects any dependency between them.
         """
         # fixme: currently, we only support chain nodes with direct dependencies
-
-        # TODO:
-        pass
+        if node1.id in node2.inputs:
+            producer, consumer = node1, node2
+        elif node2.id in node1.inputs:
+            producer, consumer = node2, node1
+        else:
+            raise ValueError("Nodes are not directly connected")
+        chain_node = CollocatedNode.chain(producer, consumer)
+        return chain_node
 
     # ------------------------------------------------------------
     # Print Graph
