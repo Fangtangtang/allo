@@ -52,6 +52,12 @@ class CollocatedBaseNode:
         self.inputs: dict[int, Type] = {}
         self.outputs: dict[int, Type] = {}
 
+    def add_input(self, node_id: int, input_type: Type):
+        self.inputs[node_id] = input_type
+
+    def add_output(self, node_id: int, output_type: Type):
+        self.outputs[node_id] = output_type
+
 
 class CollocatedInitialNode(CollocatedBaseNode):
     """
@@ -78,7 +84,9 @@ class CollocatedNode(CollocatedBaseNode):
         return bundle_node
 
     @staticmethod
-    def chain(producer: CollocatedBaseNode, consumer: CollocatedBaseNode) -> "CollocatedNode":
+    def chain(
+        producer: CollocatedBaseNode, consumer: CollocatedBaseNode
+    ) -> "CollocatedNode":
         chain_node = CollocatedNode()
         chain_node.execution_queue.append({producer, consumer})
         # fixme: may conflict when producer and consumer have the same input/output
@@ -134,6 +142,7 @@ class ComputationGraph:
             edge.dst.add_input(edge.name, edge.type, edge.src.func_name)
 
         self.collocated_nodes: dict[str, CollocatedBaseNode] = {}
+        self.initialize_collocated_nodes()
 
     # ------------------------------------------------------------
     # Check
@@ -229,7 +238,9 @@ class ComputationGraph:
         bundle_node = CollocatedNode.bundle(nodes)
         return bundle_node
 
-    def chain(self, node1: CollocatedBaseNode, node2: CollocatedBaseNode) -> CollocatedNode:
+    def chain(
+        self, node1: CollocatedBaseNode, node2: CollocatedBaseNode
+    ) -> CollocatedNode:
         """
         Operates on two nodes—typically in a producer-consumer relationship—into a single node.
         The resulting node must still satisfy the constraint of having no more than two global inputs

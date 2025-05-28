@@ -146,7 +146,7 @@ def remove_unused_func_ops(s, func_names):
             func_op.erase()
 
 
-def _build_top(s, stream_info, target="vitis_hls"):
+def _build_top(s, stream_info, target="vitis_hls", get_parameter_list:bool=False):
     """
     s: top-level schedule
     stream_info: {func_name: [(stream_names, direction)]}
@@ -233,6 +233,8 @@ def _build_top(s, stream_info, target="vitis_hls"):
                     call_op.attributes["last"] = UnitAttr.get()
         new_top.attributes["dataflow"] = UnitAttr.get()
     s.top_func = new_top
+    if get_parameter_list:
+        return used_args, s
     return s
 
 
@@ -330,14 +332,15 @@ def build(
         global_vars = get_global_vars(func)
         s = _customize(func, global_vars=global_vars, enable_tensor=False)
         stream_info, stream_types_dict = move_stream_to_interface(s, with_stream_type=True)
-        s = _build_top(s, stream_info, target="aie")
+        parameter_list, s = _build_top(s, stream_info, target="aie", get_parameter_list=True)
         aie_mod = AIE_MLIRModule(
             s.module,
             s.top_func_name,
+            parameter_list,
             s.func_args,
             project,
             stream_info,
-            stream_types_dict
+            stream_types_dict,
         )
         aie_mod.build()
         return aie_mod

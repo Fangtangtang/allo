@@ -28,32 +28,51 @@ from .virtual_mapping import ComputationGraph
 
 
 class AIE_MLIRModule:
+    # ############################################################
+    # Construction
+    # ############################################################
     def __init__(
         self,
         module: allo_ir.ir.Module,
         top_func_name: str,
+        parameter_list: dict[str, int],
         func_args: dict,
         project_dir: str,
         stream_info: dict,
         stream_types_dict: dict[str, Type],
     ):
+        """
+        Note: the module is data-driven,
+            we need to carefully manage data transfer between 'functions' to avoid deadlocks.
+            For example, launching the kernels in topological order.
+        """
+        self.project_dir: str = project_dir
+
         self.allo_module: allo_ir.ir.Module = module
         self.top_func_name: str = top_func_name
-        self.streams: dict[str, Stream] = {}
-
-        # virtual mapping graph
-        df_kernels = []
-        for func in module.body.operations:
-            if isinstance(func, allo_func_d.FuncOp) and "df.kernel" in func.attributes:
-                df_kernels.append(func)
-        self.virtual_computation_graph: ComputationGraph = ComputationGraph(
-            stream_info, df_kernels, stream_types_dict
-        )
-        self.virtual_computation_graph.print_graph()
-        self.virtual_computation_graph.print_isomorphic()
-
-        tmp_map: dict = {}
+        # model parameter list
+        self.module_parameter_list = [
+            k for k, _ in sorted(parameter_list.items(), key=lambda item: item[1])
+        ]
         self.func_args: dict[str, list[Argument]] = {}
+        self.streams: dict[str, Stream] = {}
+        self.stream_info: dict[str, dict[str, bool]] = {}
+        self._init_func_args(func_args)
+        self._init_streams(stream_info)
+
+        # construct self.virtual_computation_graph
+        self._init_virtual_graph(stream_info, stream_types_dict)
+
+        # index in top fucntion argument list -> DTensor
+        self.global_inputs: dict[int, DTensor] = {}
+        self.global_outputs: dict[int, DTensor] = {}
+
+        self.core_func_args: dict[str, dict[int, tuple[Argument, bool]]] = {}
+
+        self.aie_module: aie_ir.Module = None
+
+    def _init_func_args(self, func_args: dict):
+        tmp_map: dict = {}
         for func_name, args in func_args.items():
             self.func_args[func_name] = []
             for arg in args:
@@ -72,7 +91,10 @@ class AIE_MLIRModule:
                 else:
                     raise ValueError(f"Unresolved function argument {arg}")
 
-        self.stream_info: dict[str, dict[str, bool]] = {}
+    def _init_streams(self, stream_info: dict):
+        """
+        Collect allo.stream information for each function.
+        """
         for func_name, info_list in stream_info.items():
             self.stream_info[func_name] = {}
             for name, io in info_list:
@@ -83,18 +105,20 @@ class AIE_MLIRModule:
                     self.streams[name].src = func_name
                     self.stream_info[func_name][name] = False
 
-        self.project_dir: str = project_dir
+    def _init_virtual_graph(
+        self, stream_info: dict, stream_types_dict: dict[str, Type]
+    ):
+        df_kernels = []
+        for func in self.allo_module.body.operations:
+            if isinstance(func, allo_func_d.FuncOp) and "df.kernel" in func.attributes:
+                df_kernels.append(func)
+        self.virtual_computation_graph: ComputationGraph = ComputationGraph(
+            stream_info, df_kernels, stream_types_dict
+        )
 
-        # index in top fucntion argument list -> DTensor
-        self.global_inputs: dict[int, DTensor] = {}
-        self.global_outputs: dict[int, DTensor] = {}
-
-        self.core_func_args: dict[str, dict[int, tuple[Argument, bool]]] = (
-            {}
-        )  # core func name -> a list of (dtensors, is_in)
-
-        self.aie_module: aie_ir.Module = None
-
+    # ############################################################
+    # Build
+    # ############################################################
     def collect_io(
         self,
         func_groups: dict[str, list[allo_func_d.FuncOp]],
@@ -188,6 +212,11 @@ class AIE_MLIRModule:
             self.allo_module, self.top_func_name
         )
         inputs, outputs = self.collect_io(core_func_groups)
+        print("===============")
+        print(inputs)
+        print("---------------")
+        print(outputs)
+        print("===============")
 
         # - extract external kernels
         use_external_kernels, injected_kernels, include_src = inject_external_kernels(
@@ -230,13 +259,11 @@ class AIE_MLIRModule:
                 os.path.join(self.project_dir, "external.cc"), "w", encoding="utf-8"
             ) as f:
                 f.write(kernel_code)
-            # fixme: export MLIR_AIE_EXTERNAL_KERNEL_DIR
             cmd = f"cd {self.project_dir} && $PEANO_INSTALL_DIR/bin/clang++ -O2 -v -std=c++20 --target=aie2-none-unknown-elf -Wno-parentheses -Wno-attributes -Wno-macro-redefined -DNDEBUG -I $MLIR_AIE_INSTALL_DIR/include -I $MLIR_AIE_EXTERNAL_KERNEL_DIR/aie2 -c external.cc -o external.o"
             with subprocess.Popen(cmd, shell=True) as process:
                 process.wait()
             if process.returncode != 0:
                 raise RuntimeError("Failed to compile external kernels.")
-        # TODO
         # build mlir-aie
         cmd = f"cd {self.project_dir} && aiecc.py --alloc-scheme=basic-sequential --aie-generate-xclbin --no-compile-host --xclbin-name=build/final.xclbin --no-xchesscc --no-xbridge --peano ${{PEANO_INSTALL_DIR}} --aie-generate-npu-insts --npu-insts-name=insts.txt top.mlir"
         with subprocess.Popen(cmd, shell=True) as process:
@@ -252,13 +279,16 @@ class AIE_MLIRModule:
             os.path.join(self.project_dir, "test.cpp"), "w", encoding="utf-8"
         ) as f:
             f.write(host_code)
-        # fixme: lib path
         cmd = f"cd {self.project_dir}/build && cmake .. -DTARGET_NAME=top -DMLIR_AIE_DIR=$RUNTIME_LIB_DIR/.. && cmake --build . --config Release"
         with subprocess.Popen(cmd, shell=True) as process:
             process.wait()
         if process.returncode != 0:
             raise RuntimeError("Failed to build AIE project.")
         return self
+
+    def help(self):
+        # print the parameter list of the module
+        print("Parameter reference:", self.module_parameter_list)
 
     def __call__(self, *args):
         for i in range(len(self.global_inputs)):
