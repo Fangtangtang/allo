@@ -40,7 +40,6 @@ class AIE_MLIRModule:
         func_args: dict,
         project_dir: str,
         stream_info: dict,
-        stream_types_dict: dict[str, Type],
     ):
         """
         Note: the module is data-driven,
@@ -60,8 +59,6 @@ class AIE_MLIRModule:
         self.stream_info: dict[str, dict[str, bool]] = {}
         self._init_func_args(func_args)
         self._init_streams(stream_info)
-        # construct self.virtual_computation_graph
-        # self._init_virtual_graph(stream_info, stream_types_dict)
 
         # index in top fucntion argument list -> DTensor
         self.global_inputs: dict[int, DTensor] = {}
@@ -106,6 +103,9 @@ class AIE_MLIRModule:
                     self.streams[name].src = func_name
                     self.stream_info[func_name][name] = False
 
+    # ############################################################
+    # Build
+    # ############################################################
     def _init_virtual_graph(
         self, stream_info: dict, stream_types_dict: dict[str, Type]
     ):
@@ -114,9 +114,12 @@ class AIE_MLIRModule:
             stream_info, df_kernels, stream_types_dict
         )
 
-    # ############################################################
-    # Build
-    # ############################################################
+    def virtual_to_logical(self):
+        """
+        Transform the virtual computation graph to logical computation graph.
+        """
+        pass
+
     def analyze_kernel_parameters(self):
         """
         Analyze the parameters of each df.kernel.
@@ -174,12 +177,23 @@ class AIE_MLIRModule:
             ), "outputs should be the ending arguments of the function"
 
     def build_experimental(
-        self, device_type="npu1_4col", enable_virtual_mapping: bool = False
+        self,
+        stream_info: dict,
+        stream_types_dict: dict[str, Type],
+        device_type="npu1_4col",
+        enable_virtual_mapping: bool = False,
     ):
         build_dir = os.path.join(self.project_dir, "build")
         if os.path.exists(build_dir):
             shutil.rmtree(build_dir)
         os.makedirs(build_dir)
+
+        self._init_virtual_graph(stream_info, stream_types_dict)
+        if enable_virtual_mapping:
+            # TODO: transformation on virtual map
+            pass
+        self.virtual_to_logical()
+
         self.analyze_kernel_parameters()
         # inject external kernels
         use_external_kernels, injected_kernels, include_src = inject_external_kernels(
@@ -197,6 +211,22 @@ class AIE_MLIRModule:
         with self.allo_module.context:
             mlir_pass_manager.parse(pipeline).run(self.allo_module.operation)
         # code generation
+        top_func, core_func_groups, external_funcs = classify_aie_functions(
+            self.allo_module, self.top_func_name
+        )
+        code_generator = CodeGenerator(
+            device_type,
+            self.global_inputs,
+            self.global_outputs,
+            top_func,
+            self.core_func_args,
+            self.streams,
+        )
+        self.aie_module = code_generator.aie_codegen_experimental(
+            core_func_groups,
+            external_funcs,
+            use_external_kernels,
+        )
 
     def collect_io(
         self,
@@ -277,6 +307,10 @@ class AIE_MLIRModule:
         return inputs, outputs
 
     def build(self, device_type="npu1_4col"):
+        assert device_type in [
+            "npu1_4col",
+            "npu1",
+        ], "This build method requires at least 4 columns."
         build_dir = os.path.join(self.project_dir, "build")
         if os.path.exists(build_dir):
             shutil.rmtree(build_dir)

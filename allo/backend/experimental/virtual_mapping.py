@@ -7,7 +7,7 @@ from ..._mlir.ir import Type
 
 
 # ############################################################
-# Base Elements
+# Virtual Mapping Base Elements
 # ############################################################
 class VirtualNode:
     def __init__(self, func: func_d.FuncOp):

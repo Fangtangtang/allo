@@ -48,12 +48,12 @@ def array(element, shape):
     return Array(element, shape)
 
 
-def move_stream_to_interface(s, with_stream_type:bool=False):
+def move_stream_to_interface(s, with_stream_type: bool = False):
     stream_info = {}
     funcs = get_all_df_kernels(s)
     new_func_args = s.func_args.copy()
     if with_stream_type:
-        stream_types_dict:dict[str, Type] = {}
+        stream_types_dict: dict[str, Type] = {}
 
     for func in funcs:
         func_name = func.attributes["sym_name"].value
@@ -146,7 +146,7 @@ def remove_unused_func_ops(s, func_names):
             func_op.erase()
 
 
-def _build_top(s, stream_info, target="vitis_hls", get_parameter_list:bool=False):
+def _build_top(s, stream_info, target="vitis_hls", get_parameter_list: bool = False):
     """
     s: top-level schedule
     stream_info: {func_name: [(stream_names, direction)]}
@@ -331,8 +331,12 @@ def build(
     if target == "aie-mlir":
         global_vars = get_global_vars(func)
         s = _customize(func, global_vars=global_vars, enable_tensor=False)
-        stream_info, stream_types_dict = move_stream_to_interface(s, with_stream_type=True)
-        parameter_list, s = _build_top(s, stream_info, target="aie", get_parameter_list=True)
+        stream_info, stream_types_dict = move_stream_to_interface(
+            s, with_stream_type=True
+        )
+        parameter_list, s = _build_top(
+            s, stream_info, target="aie", get_parameter_list=True
+        )
         aie_mod = AIE_MLIRModule(
             s.module,
             s.top_func_name,
@@ -343,7 +347,11 @@ def build(
             stream_types_dict,
         )
         aie_mod.build()
-        # aie_mod.build_experimental()
+        aie_mod.build_experimental(
+            stream_info,
+            stream_types_dict,
+            enable_virtual_mapping=True
+        )
         return aie_mod
 
     if target == "simulator":

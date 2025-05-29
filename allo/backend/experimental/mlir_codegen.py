@@ -37,7 +37,7 @@ from ..utils import format_str
 from ..._mlir.dialects import func as allo_func_d
 from ...memory import DTensor
 
-from .utils import get_element_type, device_mesh_map
+from .utils import get_element_type, device_config_map
 from ..aie import map_kernels_to_device_mesh
 
 
@@ -565,6 +565,30 @@ class CodeGenerator:
                 aie_scf_d.YieldOp([])
             aie_d.EndOp()
 
+    def aie_codegen_experimental(
+        self,
+        core_func_groups: dict[str, list[allo_func_d.FuncOp]],
+        external_funcs: list[allo_func_d.FuncOp],
+        use_external_kernels: dict[str, bool],
+    ) -> aie_ir.Module:
+        # fixme: maybe better to resolve this using IR constructor
+        for func in external_funcs:
+            self.external_functions += format_str(str(func), indent=4)
+
+        wrapper_code = f"""
+            module {{
+                aie.device({self.device_type}) {{
+        """
+        wrapper_code += self.external_functions
+        wrapper_code += """
+                }
+            }
+        """
+        device_config = device_config_map[self.device_type]
+        assert device_config is not None, "Unsupported device type"
+        # io_mapping, mem_tile_num, shim_tile_num = map_global_io(inputs, outputs)
+        pass
+
     def aie_codegen(
         self,
         core_func_groups: dict[str, list[allo_func_d.FuncOp]],
@@ -625,8 +649,9 @@ class CodeGenerator:
                         mappings[func_name] = inputs[func_name]["_global"][0].mapping
                     else:
                         mappings[func_name] = outputs[func_name]["_global"][0].mapping
-                aie_mesh = device_mesh_map[self.device_type]
-                assert aie_mesh is not None, "Unsupported device type"
+                device_config = device_config_map[self.device_type]
+                assert device_config is not None, "Unsupported device type"
+                aie_mesh = device_config["mesh"]
                 for func_name, tile_ids in map_kernels_to_device_mesh(
                     mappings, aie_mesh
                 ).items():
