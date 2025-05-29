@@ -37,7 +37,7 @@ from ..utils import format_str
 from ..._mlir.dialects import func as allo_func_d
 from ...memory import DTensor
 
-from .utils import get_element_type
+from .utils import get_element_type, device_mesh_map
 from ..aie import map_kernels_to_device_mesh
 
 
@@ -621,7 +621,8 @@ class CodeGenerator:
                         mappings[func_name] = inputs[func_name]["_global"][0].mapping
                     else:
                         mappings[func_name] = outputs[func_name]["_global"][0].mapping
-                aie_mesh = (5, 4)
+                aie_mesh = device_mesh_map[self.device_type]
+                assert aie_mesh is not None, "Unsupported device type"
                 for func_name, tile_ids in map_kernels_to_device_mesh(
                     mappings, aie_mesh
                 ).items():

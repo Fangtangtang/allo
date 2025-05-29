@@ -46,20 +46,19 @@ class AIE_MLIRModule:
             we need to carefully manage data transfer between 'functions' to avoid deadlocks.
             For example, launching the kernels in topological order.
         """
+        # module metadata
         self.project_dir: str = project_dir
-
         self.allo_module: allo_ir.ir.Module = module
         self.top_func_name: str = top_func_name
-        # model parameter list
         self.module_parameter_list = [
             k for k, _ in sorted(parameter_list.items(), key=lambda item: item[1])
         ]
+
         self.func_args: dict[str, list[Argument]] = {}
         self.streams: dict[str, Stream] = {}
         self.stream_info: dict[str, dict[str, bool]] = {}
         self._init_func_args(func_args)
         self._init_streams(stream_info)
-
         # construct self.virtual_computation_graph
         self._init_virtual_graph(stream_info, stream_types_dict)
 

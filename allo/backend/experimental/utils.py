@@ -51,6 +51,14 @@ aie_external_kernel_ctype_map = {
     "ui64": "unsigned long",
 }
 
+# [col, row]
+device_mesh_map = {
+    "npu1": (5, 4),
+    "npu1_4col": (4, 4),
+    "npu1_3col": (3, 4),
+    "npu1_2col": (2, 4),
+    "npu1_1col": (1, 4),
+}
 
 def inject_external_kernels(
     module: allo_ir.ir.Module, top_function_name: str
