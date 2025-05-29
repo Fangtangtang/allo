@@ -308,12 +308,16 @@ class CodeGenerator:
         global_inputs: dict[int, DTensor],
         global_outputs: dict[int, DTensor],
         top_function: allo_func_d.FuncOp,
+        core_func_args: dict[str, dict[int, tuple[Argument, bool]]],
+        streams: dict[str, Stream],
     ):
         self.device_type = device_type
 
         self.global_inputs: dict[int, DTensor] = global_inputs
         self.global_outputs: dict[int, DTensor] = global_outputs
         self.top_function = top_function
+        self.core_func_args = core_func_args
+        self.streams = streams
 
         self.tile_map: dict[str, aie_d.TileOp] = {}
         self.fifo_map: dict[str, aie_d.object_fifo] = {}
@@ -566,8 +570,6 @@ class CodeGenerator:
         inputs,
         outputs,
         use_external_kernels: dict[str, bool],
-        core_func_args: dict[str, dict[int, tuple[Argument, bool]]],
-        streams: dict[str, Stream],
     ) -> aie_ir.Module:
         """
         Generate an AIE MLIR module.
@@ -731,8 +733,8 @@ class CodeGenerator:
                                     mem_stride[:-1] if io == "in" else [],
                                 )
                 # compute <-> compute
-                self.collect_stream_info(streams, self.top_function.context)
-                for stream_name, stream in streams.items():
+                self.collect_stream_info(self.streams, self.top_function.context)
+                for stream_name, stream in self.streams.items():
                     src_tile = self.tile_map[f"compute_{stream.src}"]
                     dst_tile = [self.tile_map[f"compute_{stream.dst}"]]
                     self.fifo_map[stream_name] = aie_d.object_fifo(
@@ -760,7 +762,7 @@ class CodeGenerator:
                         if self.global_ip is None:
                             self.global_ip = aie_ir.InsertionPoint(func_core)
                         self.build_core_function(
-                            func_core, func, core_func_args[func_name_w_id]
+                            func_core, func, self.core_func_args[func_name_w_id]
                         )
 
                 # runtime sequence

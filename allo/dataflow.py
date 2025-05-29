@@ -343,6 +343,7 @@ def build(
             stream_types_dict,
         )
         aie_mod.build()
+        # aie_mod.build_experimental()
         return aie_mod
 
     if target == "simulator":

@@ -60,6 +60,7 @@ device_mesh_map = {
     "npu1_1col": (1, 4),
 }
 
+
 def inject_external_kernels(
     module: allo_ir.ir.Module, top_function_name: str
 ) -> tuple[dict[str, bool], dict]:
@@ -161,6 +162,14 @@ def inject_external_kernels(
                                 "private"
                             )
     return use_external_kernels, injected_kernels, include_src
+
+
+def get_df_kernels(module: allo_ir.ir.Module) -> list[allo_func_d.FuncOp]:
+    df_kernels = []
+    for func in module.body.operations:
+        if isinstance(func, allo_func_d.FuncOp) and "df.kernel" in func.attributes:
+            df_kernels.append(func)
+    return df_kernels
 
 
 def classify_aie_functions(
