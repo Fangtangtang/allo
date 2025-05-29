@@ -4,6 +4,8 @@
 import re
 from ..._mlir.dialects import func as func_d, allo as allo_d
 from ..._mlir.ir import Type
+from .utils import Argument
+from ...memory import DTensor
 
 
 # ############################################################
@@ -103,12 +105,16 @@ class CollocatedNode(CollocatedBaseNode):
 class ComputationGraph:
     def __init__(
         self,
+        df_kernels: list[func_d.FuncOp],
         stream_info: dict[
             str, list[tuple[str, str]]
         ],  # function naem -> list((stream_name, direction))
-        df_kernels: list[func_d.FuncOp],
         stream_types_dict: dict[str, Type],
+        core_func_args: dict[str, dict[int, tuple[Argument, bool]]],
+        global_inputs: dict[int, DTensor],
+        global_outputs: dict[int, DTensor],
     ):
+        # TODO: global io info
         self.nodes: dict[str, VirtualNode] = {}
         self.edges: dict[str, VirtualEdge] = {}
         # construct nodes

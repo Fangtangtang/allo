@@ -18,6 +18,8 @@ from ...memory import DTensor
 from ..._mlir.passmanager import PassManager as mlir_pass_manager
 from .mlir_codegen import CodeGenerator, Argument, Stream
 from .utils import (
+    Argument,
+    Stream,
     inject_external_kernels,
     get_df_kernels,
     classify_aie_functions,
@@ -61,11 +63,10 @@ class AIE_MLIRModule:
         self._init_streams(stream_info)
 
         # index in top fucntion argument list -> DTensor
-        self.global_inputs: dict[int, DTensor] = {}
-        self.global_outputs: dict[int, DTensor] = {}
-
+        self.global_inputs: dict[int, DTensor] = None
+        self.global_outputs: dict[int, DTensor] = None
         # function name -> (argument index -> (argument, is_input))
-        self.core_func_args: dict[str, dict[int, tuple[Argument, bool]]] = {}
+        self.core_func_args: dict[str, dict[int, tuple[Argument, bool]]] = None
 
         self.aie_module: aie_ir.Module = None
 
@@ -109,9 +110,21 @@ class AIE_MLIRModule:
     def _init_virtual_graph(
         self, stream_info: dict, stream_types_dict: dict[str, Type]
     ):
+        assert (
+            self.core_func_args is not None,
+            self.global_inputs is not None,
+            self.global_outputs is not None,
+        ), "Analysis of kernel parameters should be done before initializing virtual graph"
+        print(self.core_func_args)
+        for idx, dtensor in self.global_inputs.items():
+            print(idx, dtensor.global_placement)
+        
         df_kernels = get_df_kernels(self.allo_module)
         self.virtual_computation_graph: ComputationGraph = ComputationGraph(
-            stream_info, df_kernels, stream_types_dict
+            df_kernels, stream_info, stream_types_dict, 
+            self.core_func_args,
+            self.global_inputs,
+            self.global_outputs,
         )
 
     def virtual_to_logical(self):
@@ -129,6 +142,11 @@ class AIE_MLIRModule:
             - self.global_inputs: global input argument index -> DTensor
             - self.global_outputs: global output argument index -> DTensor
         """
+        # init
+        self.core_func_args = {}
+        self.global_inputs = {}
+        self.global_outputs = {}
+        # analyze
         df_kernels = get_df_kernels(self.allo_module)
         for kernel in df_kernels:
             kernel_name = kernel.attributes["sym_name"].value
@@ -188,13 +206,14 @@ class AIE_MLIRModule:
             shutil.rmtree(build_dir)
         os.makedirs(build_dir)
 
+        self.analyze_kernel_parameters()
         self._init_virtual_graph(stream_info, stream_types_dict)
+        return
         if enable_virtual_mapping:
             # TODO: transformation on virtual map
             pass
         self.virtual_to_logical()
 
-        self.analyze_kernel_parameters()
         # inject external kernels
         use_external_kernels, injected_kernels, include_src = inject_external_kernels(
             self.allo_module, self.top_func_name
@@ -236,6 +255,10 @@ class AIE_MLIRModule:
         Analyze input/output tensors of each function in the groups.
         Returns dictionaries of input/output DTensors for each function group and core.
         """
+        # init
+        self.core_func_args = {}
+        self.global_inputs = {}
+        self.global_outputs = {}
         inputs = {}
         outputs = {}
         for func_name, funcs in func_groups.items():

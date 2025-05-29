@@ -5,6 +5,7 @@
 import re
 import os
 import numpy as np
+from dataclasses import dataclass
 
 import aie.ir as aie_ir
 import allo._mlir._mlir_libs._mlir as allo_ir
@@ -17,7 +18,124 @@ from ..._mlir.ir import (
     InsertionPoint,
     FlatSymbolRefAttr,
     StringAttr,
+    Type,
+    Context,
+    IntegerType,
+    F16Type,
+    F32Type,
+    BF16Type,
 )
+
+# ############################################################
+# Configurations Map
+# ############################################################
+device_config_map = {
+    "npu1": {"mesh": (4, 5), "mem_tile_num": 5, "shim_tile_num": 4},
+    "npu1_4col": {"mesh": (4, 4), "mem_tile_num": 4, "shim_tile_num": 4},
+    "npu1_3col": {"mesh": (4, 3), "mem_tile_num": 3, "shim_tile_num": 3},
+    "npu1_2col": {"mesh": (4, 2), "mem_tile_num": 2, "shim_tile_num": 2},
+    "npu1_1col": {"mesh": (4, 1), "mem_tile_num": 1, "shim_tile_num": 1},
+}
+
+
+# ############################################################
+# MLIR Code Generation
+# ############################################################
+class Stream:
+    """
+    Allo Stream class
+    """
+
+    def __init__(self, name: str):
+        self.name = name
+        self.type_str = None
+        self.depth = -1
+        self.shape: list[int] = None
+        self.dtype: str = None
+        self.allo_element_type: Type = None  # element type in allo context
+        self.is_tensor = False  # whether the stream carries tensor data
+
+        self.src: str = None  # source tile of the stream
+        self.dst: str = None  # destination tile of the stream
+
+    def set_element_type(self, type_str: str, context: Context):
+        """
+        Set the element type of the stream from a type string.
+        This function parses the type string and extracts the data shape and dtype.
+
+        Args:
+            - type_str (str): The IR type string
+            - context (Context): The current allo MLIR context used for constructing types
+        """
+        if self.depth >= 0:
+            assert type_str == self.type_str
+            return
+        match = re.match(r"!allo\.stream<([^,]+),\s*(\d+)>", type_str)
+        shape: list[int] = None
+        dtype: str = None
+        if match:
+            with context, allo_ir.ir.Location.unknown():
+                element_type_str = match.group(1)
+                self.depth = int(match.group(2))
+                memref_match = re.match(
+                    r"memref<([0-9x\?]*)x?([a-z0-9]+)>", element_type_str
+                )
+                if memref_match:
+                    shape_part = memref_match.group(1)
+                    dtype = memref_match.group(2)
+                    if shape_part == "":
+                        shape = []
+                    else:
+                        shape = [
+                            -1 if dim == "?" else int(dim)
+                            for dim in shape_part.split("x")
+                            if dim
+                        ]
+                else:
+                    type_match = re.match(r"([a-z]+[0-9]*)", element_type_str)
+                    if type_match:
+                        shape, dtype = [], element_type_str
+                    else:
+                        raise ValueError(f"Invalid stream type {type_str}.")
+
+                def get_element_allo_type(dtype_str: str) -> Type:
+                    if dtype_str == "i32":
+                        return IntegerType.get_signless(32)
+                    if dtype_str == "i16":
+                        return IntegerType.get_signless(16)
+                    if dtype_str == "i8":
+                        return IntegerType.get_signless(8)
+                    if dtype_str == "f32":
+                        return F32Type.get()
+                    if dtype_str == "f16":
+                        return F16Type.get()
+                    if dtype_str == "bf16":
+                        return BF16Type.get()
+                    raise ValueError(f"Unsupported dtype: {dtype_str}")
+
+                self.allo_element_type = MemRefType.get(
+                    shape,
+                    get_element_allo_type(dtype),
+                )
+                self.shape = shape
+                self.dtype = dtype
+                self.is_tensor = len(shape) > 0
+        else:
+            raise ValueError(f"Invalid stream type {type_str}.")
+
+    def __str__(self):
+        return f"Stream (name={self.name}, depth={self.depth}, dtype={self.allo_element_type}, is_tensor={self.is_tensor}, src={self.src}, dst={self.dst})"
+
+
+@dataclass
+class Argument:
+    """
+    Represents an argument to a function, either a DTensor or a Stream.
+    """
+
+    dtensor: DTensor
+    stream: Stream
+
 
 aie_ctype_map = {
     "bf16": "std::bfloat16_t",
@@ -51,14 +169,14 @@ aie_external_kernel_ctype_map = {
     "ui64": "unsigned long",
 }
 
-device_config_map = {
-    "npu1": {"mesh": (4, 5), "mem_tile_num": 5, "shim_tile_num": 4},
-    "npu1_4col": {"mesh": (4, 4), "mem_tile_num": 4, "shim_tile_num": 4},
-    "npu1_3col": {"mesh": (4, 3), "mem_tile_num": 3, "shim_tile_num": 3},
-    "npu1_2col": {"mesh": (4, 2), "mem_tile_num": 2, "shim_tile_num": 2},
-    "npu1_1col": {"mesh": (4, 1), "mem_tile_num": 1, "shim_tile_num": 1},
-}
-
+def parse_kernel_name(name: str):
+    match = re.match(r'([a-zA-Z_]+)((?:_\d+)+)$', name)
+    if not match:
+        raise ValueError(f"Invalid format: {name}")
+    
+    prefix = match.group(1).rstrip('_')
+    indexs = tuple(int(n) for n in match.group(2).split('_') if n != '')
+    return prefix, indexs
 
 def inject_external_kernels(
     module: allo_ir.ir.Module, top_function_name: str
@@ -264,6 +382,9 @@ def codegen_external_kernels(injected_kernels: dict, include_src) -> str:
     return code
 
 
+# ############################################################
+# Run-time Utils
+# ############################################################
 np_supported_types = {
     "bf16": np.float32,  # numpy does not support bf16
     "f16": np.float16,
@@ -286,8 +407,9 @@ def read_tensor_from_file(dtype, shape, file_path):
     return arr.reshape(shape)
 
 
-# ==================================================================================================
-
+# ############################################################
+# Host Code Generation
+# ############################################################
 host_header = """
 //=============================================================================
 // Auto generated by Allo
