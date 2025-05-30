@@ -28,7 +28,7 @@ from ..utils import format_str
 from ..._mlir.dialects import func as allo_func_d
 from ...memory import DTensor
 
-from .utils import get_element_type, device_config_map, Argument, Stream
+from .utils import get_element_type, device_config_map, Argument, Stream, Config
 from ..aie import map_kernels_to_device_mesh
 
 
@@ -41,6 +41,14 @@ class DMATensorTile:
     offset: list
     size: list
     stride: list
+
+
+class DataTransferTile:
+    def __init__(self, tile_id: int, send_port_num: int, recv_port_num: int):
+        self.tile_id = tile_id
+        # list of i/o ports. Each port contains a map from dma tag (used to specify order) to DMATensorTile
+        self.send: list[dict[int, DMATensorTile]] = [{} for _ in range(send_port_num)]
+        self.recv: list[dict[int, DMATensorTile]] = [{} for _ in range(recv_port_num)]
 
 
 def map_global_io(inputs, outputs) -> tuple[dict[str, list[DMATensorTile]], int, int]:
@@ -68,9 +76,6 @@ def map_global_io(inputs, outputs) -> tuple[dict[str, list[DMATensorTile]], int,
         - shim_tile_num
     """
     MAX_MEM_TILES = 4  # Maximum number of memory tiles allowed
-    # https://riallto.ai/notebooks/3_2_Ryzenai_capabilities.html#memory-tile-properties
-    MAX_SEND = 6  # Maximum number of producer FIFOs per memory tile (DMA limits)
-    MAX_RECV = 6  # Maximum number of consumer FIFOs per memory tile (DMA limits)
 
     @dataclass
     class Tile:
@@ -88,16 +93,16 @@ def map_global_io(inputs, outputs) -> tuple[dict[str, list[DMATensorTile]], int,
         # 1. Attempt to use a new memory tile
         if (
             len(used_tiles) < MAX_MEM_TILES
-            and send_need <= MAX_SEND
-            and recv_need <= MAX_RECV
+            and send_need <= Config.MEM_MAX_SEND
+            and recv_need <= Config.MEM_MAX_RECV
         ):
             used_tiles.append(Tile(send_need, recv_need))
             return len(used_tiles) - 1
         # 2. Otherwise, try to pack into an existing tile
         for i, _ in enumerate(used_tiles):
             if (
-                used_tiles[i].send_number + send_need <= MAX_SEND
-                and used_tiles[i].recv_number + recv_need <= MAX_RECV
+                used_tiles[i].send_number + send_need <= Config.MEM_MAX_SEND
+                and used_tiles[i].recv_number + recv_need <= Config.MEM_MAX_RECV
             ):
                 used_tiles[i].send_number += send_need
                 used_tiles[i].recv_number += recv_need
@@ -209,6 +214,8 @@ class CodeGenerator:
         streams: dict[str, Stream],
     ):
         self.device_type = device_type
+        self.device_config = device_config_map[device_type]
+        assert self.device_config is not None, "Unsupported device type"
 
         self.global_inputs: dict[int, DTensor] = global_inputs
         self.global_outputs: dict[int, DTensor] = global_outputs
@@ -460,6 +467,76 @@ class CodeGenerator:
                 aie_scf_d.YieldOp([])
             aie_d.EndOp()
 
+    def map_global_io_to_physical_tiles(
+        self,
+        global_in_tile_tensor2func: dict[int, dict[str, set[str]]],
+        global_out_tile_tensor2func: dict[int, dict[str, set[str]]],
+        func_dependencies: dict[str, set[str]],
+    ) -> tuple[list[DataTransferTile], list[DataTransferTile]]:
+
+        MAX_MEM_TILES = self.device_config["mem_tile_num"]
+        MAX_SHIM_TILES = self.device_config["shim_tile_num"]
+
+        used_mem_tiles: list[DataTransferTile] = []
+        used_shim_tiles: list[DataTransferTile] = []
+
+        def assign_mem_tile(send_need, recv_need):
+            if (
+                len(used_mem_tiles) < MAX_MEM_TILES
+                and send_need <= Config.MEM_MAX_SEND
+                and recv_need <= Config.MEM_MAX_RECV
+            ):
+                new_mem_tile = DataTransferTile(
+                    tile_id=len(used_mem_tiles),
+                    send_port_num=Config.MEM_MAX_SEND,
+                    recv_port_num=Config.MEM_MAX_RECV,
+                )
+                # TODO
+
+            # TODO
+            pass
+
+        def assign_shim_tile(send_need, recv_need):
+            # TODO
+            pass
+
+        def map_dtensor_to_physical_tiles(
+            dtensor: DTensor, tile_to_funcs: dict[str, set[str]], is_input: bool
+        ):
+            device_dims, size, stride = dtensor.get_access_pattern()
+            tensor_tiles = sorted(list(dtensor.global_placement.keys()))
+            if is_input:
+                # Different ports for different tensor tiles.
+                # Each port can have multiple destinations.
+                mem_send_need = len(tensor_tiles)
+                mem_recv_need = 1
+
+                # mem tile
+                mem_send_need = len(tensor_tiles) if is_input else 1
+                mem_recv_need = 1 if is_input else len(tensor_tiles)
+
+            # TODO
+            pass
+
+        for input_idx, tile_to_funcs in global_in_tile_tensor2func.items():
+            map_dtensor_to_physical_tiles(
+                self.global_inputs[input_idx],
+                tile_to_funcs,
+                is_input=True,
+            )
+        for output_idx, tile_to_funcs in global_out_tile_tensor2func.items():
+            map_dtensor_to_physical_tiles(
+                self.global_outputs[output_idx],
+                tile_to_funcs,
+                is_input=False,
+            )
+
+        return used_mem_tiles, used_shim_tiles
+        # TODO
+
+    # ############################################################
+    # AIE Code Generation
+    # ############################################################
     def aie_codegen_experimental(
         self,
         core_func_groups: dict[str, list[allo_func_d.FuncOp]],
@@ -479,8 +556,6 @@ class CodeGenerator:
                 }
             }
         """
-        device_config = device_config_map[self.device_type]
-        assert device_config is not None, "Unsupported device type"
         # io_mapping, mem_tile_num, shim_tile_num = map_global_io(inputs, outputs)
         pass
 
@@ -544,9 +619,7 @@ class CodeGenerator:
                         mappings[func_name] = inputs[func_name]["_global"][0].mapping
                     else:
                         mappings[func_name] = outputs[func_name]["_global"][0].mapping
-                device_config = device_config_map[self.device_type]
-                assert device_config is not None, "Unsupported device type"
-                aie_mesh = device_config["mesh"]
+                aie_mesh = self.device_config["mesh"]
                 for func_name, tile_ids in map_kernels_to_device_mesh(
                     mappings, aie_mesh
                 ).items():

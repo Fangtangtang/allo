@@ -129,7 +129,11 @@ class AIE_MLIRModule:
         )
         self.virtual_computation_graph.print_graph()
 
-    def virtual_to_logical(self, device_type: str):
+    def virtual_to_logical(self, device_type: str) -> tuple[
+        dict[int, dict[str, set[str]]],
+        dict[int, dict[str, set[str]]],
+        dict[str, set[str]],
+    ]:
         """
         Transform the virtual computation graph to logical computation graph.
         """
@@ -148,9 +152,7 @@ class AIE_MLIRModule:
         )
         # manage the order to avoid deadlocks
         dependencies = self.virtual_computation_graph.get_node_dependencies()
-        print(global_in)
-        print(global_out)
-        print(dependencies)
+        print("\t", global_in, "\n\t", global_out, "\n\t", dependencies)
         return global_in, global_out, dependencies
 
     def analyze_kernel_parameters(self):
@@ -230,6 +232,7 @@ class AIE_MLIRModule:
         self._init_virtual_graph(stream_info, stream_types_dict)
         if enable_virtual_mapping:
             # TODO: transformation on virtual map. may modify allo_module here
+            # TODO: update streams and core_func_args
             pass
         global_in_tile_tensor2func, global_out_tile_tensor2func, func_dependencies = (
             self.virtual_to_logical(device_type)
@@ -261,6 +264,13 @@ class AIE_MLIRModule:
             top_func,
             self.core_func_args,
             self.streams,
+        )
+        used_mem_tiles, used_shim_tiles = (
+            code_generator.map_global_io_to_physical_tiles(
+                global_in_tile_tensor2func,
+                global_out_tile_tensor2func,
+                func_dependencies,
+            )
         )
         self.aie_module = code_generator.aie_codegen_experimental(
             core_func_groups,

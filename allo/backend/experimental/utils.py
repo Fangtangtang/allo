@@ -26,9 +26,20 @@ from ..._mlir.ir import (
     BF16Type,
 )
 
+
 # ############################################################
-# Configurations Map
+# Configurations
 # ############################################################
+class Config:
+    # https://riallto.ai/notebooks/3_2_Ryzenai_capabilities.html#interface-tile-properties
+    COMPUTE_MAX_SEND = 2
+    COMPUTE_MAX_RECV = 2
+    MEM_MAX_SEND = 6
+    MEM_MAX_RECV = 6
+    SHIM_MAX_SEND = 2
+    SHIM_MAX_RECV = 2
+
+
 device_config_map = {
     "npu1": {"mesh": (4, 5), "mem_tile_num": 5, "shim_tile_num": 4},
     "npu1_4col": {"mesh": (4, 4), "mem_tile_num": 4, "shim_tile_num": 4},
@@ -57,6 +68,21 @@ class Stream:
 
         self.src: str = None  # source tile of the stream
         self.dst: str = None  # destination tile of the stream
+
+    def _init_from_stream(self, stream: "Stream", updated_src: str, updated_dst: str):
+        """
+        Construct a new stream from an existing stream
+        and update the source and destination tiles.
+        """
+        self.name = stream.name
+        self.type_str = stream.type_str
+        self.depth = stream.depth
+        self.shape = stream.shape
+        self.dtype = stream.dtype
+        self.allo_element_type = stream.allo_element_type
+        self.is_tensor = stream.is_tensor
+        self.src = updated_src
+        self.dst = updated_dst
 
     def set_element_type(self, type_str: str, context: Context):
         """

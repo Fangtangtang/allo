@@ -334,7 +334,7 @@ class ComputationGraph:
         self,
         global_inputs: dict[int, DTensor],
         global_outputs: dict[int, DTensor],
-    ) -> tuple[list[dict[str, set[str]]], list[dict[str, set[str]]]]:
+    ) -> tuple[dict[int, dict[str, set[str]]], dict[int, dict[str, set[str]]]]:
         """
         Get the global io of the computation graph.
         """
