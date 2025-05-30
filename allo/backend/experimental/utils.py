@@ -169,14 +169,16 @@ aie_external_kernel_ctype_map = {
     "ui64": "unsigned long",
 }
 
+
 def parse_kernel_name(name: str):
-    match = re.match(r'([a-zA-Z_]+)((?:_\d+)+)$', name)
+    match = re.match(r"([a-zA-Z_]+)((?:_\d+)+)$", name)
     if not match:
         raise ValueError(f"Invalid format: {name}")
-    
-    prefix = match.group(1).rstrip('_')
-    indexs = tuple(int(n) for n in match.group(2).split('_') if n != '')
+
+    prefix = match.group(1).rstrip("_")
+    indexs = tuple(int(n) for n in match.group(2).split("_") if n != "")
     return prefix, indexs
+
 
 def inject_external_kernels(
     module: allo_ir.ir.Module, top_function_name: str

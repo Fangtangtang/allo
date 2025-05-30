@@ -22,16 +22,7 @@ import aie.ir as aie_ir
 import allo._mlir._mlir_libs._mlir as allo_ir
 import allo._mlir.dialects._memref_ops_gen as allo_memref_d
 
-from ..._mlir.ir import (
-    MemRefType,
-    InsertionPoint,
-    Context,
-    Type,
-    IntegerType,
-    F16Type,
-    F32Type,
-    BF16Type,
-)
+from ..._mlir.ir import InsertionPoint
 
 from ..utils import format_str
 from ..._mlir.dialects import func as allo_func_d

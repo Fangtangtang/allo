@@ -20,6 +20,7 @@ from .mlir_codegen import CodeGenerator, Argument, Stream
 from .utils import (
     Argument,
     Stream,
+    device_config_map,
     inject_external_kernels,
     get_df_kernels,
     classify_aie_functions,
@@ -111,26 +112,37 @@ class AIE_MLIRModule:
         self, stream_info: dict, stream_types_dict: dict[str, Type]
     ):
         assert (
-            self.core_func_args is not None,
-            self.global_inputs is not None,
-            self.global_outputs is not None,
+            self.core_func_args is not None
+            and self.global_inputs is not None
+            and self.global_outputs is not None
         ), "Analysis of kernel parameters should be done before initializing virtual graph"
         print(self.core_func_args)
         for idx, dtensor in self.global_inputs.items():
             print(idx, dtensor.global_placement)
-        
+
         df_kernels = get_df_kernels(self.allo_module)
         self.virtual_computation_graph: ComputationGraph = ComputationGraph(
-            df_kernels, stream_info, stream_types_dict, 
+            df_kernels,
+            stream_info,
+            stream_types_dict,
             self.core_func_args,
-            self.global_inputs,
-            self.global_outputs,
         )
+        self.virtual_computation_graph.print_graph()
 
-    def virtual_to_logical(self):
+    def virtual_to_logical(self, device_type: str):
         """
         Transform the virtual computation graph to logical computation graph.
         """
+        device_config = device_config_map[device_type]
+        assert device_config is not None, f"Device type {device_type} not supported"
+        tile_num = 1
+        for i in device_config["mesh"]:
+            tile_num *= i
+        if tile_num < len(self.virtual_computation_graph.collocated_nodes):
+            raise ValueError(
+                f"Device {device_type} has only {tile_num} tiles, but {len(self.virtual_computation_graph.collocated_nodes)} collocated nodes."
+            )
+        # TODO: data transfer logic to each transformed function
         pass
 
     def analyze_kernel_parameters(self):
@@ -208,11 +220,11 @@ class AIE_MLIRModule:
 
         self.analyze_kernel_parameters()
         self._init_virtual_graph(stream_info, stream_types_dict)
-        return
         if enable_virtual_mapping:
-            # TODO: transformation on virtual map
+            # TODO: transformation on virtual map. may modify allo_module here
             pass
-        self.virtual_to_logical()
+        self.virtual_to_logical(device_type)
+        return
 
         # inject external kernels
         use_external_kernels, injected_kernels, include_src = inject_external_kernels(

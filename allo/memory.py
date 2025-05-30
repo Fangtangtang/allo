@@ -109,6 +109,7 @@ class DTensor:
         self.layout = layout
         self.name = name
         if layout is not None and mapping is not None:
+            # tensor tile ID -> PE tile IDs
             self.global_placement: dict[str, tuple] = layout.get_placement(mapping)
         self.type_as_param: list = None
 
@@ -204,6 +205,12 @@ class DTensor:
             raise ValueError("Unsupported access pattern.")
 
         return device_dims, size, stride
+
+    def PE_tile_id_to_tensor_tile_id(self, pe_tile_id: tuple[int, ...]) -> str:
+        for tensor_tile_id, pe_tile_ids in self.global_placement.items():
+            if pe_tile_id in pe_tile_ids:
+                return tensor_tile_id
+        raise ValueError(f"PE tile ID {pe_tile_id} not found in {self.global_placement}")
 
     def __str__(self):
         return f"DTensor(name={self.name}, shape={self.shape}, dtype={self.dtype}, layout={self.layout}, mapping={self.mapping}, rank={self.rank}, local_shape={self.get_local_shape()})"

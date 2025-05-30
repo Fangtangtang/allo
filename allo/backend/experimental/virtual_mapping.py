@@ -4,7 +4,7 @@
 import re
 from ..._mlir.dialects import func as func_d, allo as allo_d
 from ..._mlir.ir import Type
-from .utils import Argument
+from .utils import Argument, parse_kernel_name
 from ...memory import DTensor
 
 
@@ -15,18 +15,27 @@ class VirtualNode:
     def __init__(self, func: func_d.FuncOp):
         self.func_name: str = func.attributes["sym_name"].value
         self.func: func_d.FuncOp = func
-        # input/output node name -> (stream type, stream name)
-        self.inputs: dict[str, tuple[Type, str]] = {}
-        self.outputs: dict[str, tuple[Type, str]] = {}
+        # global <-> PE: global argument index -> (stream type, tile name)
+        self.global_input_streams: dict[int, tuple[Type, str]] = {}
+        self.global_output_streams: dict[int, tuple[Type, str]] = {}
+        # inter-PE: input/output node name -> (stream type, stream name)
+        self.input_streams: dict[str, tuple[Type, str]] = {}
+        self.output_streams: dict[str, tuple[Type, str]] = {}
         self.op_tag: str = re.sub(
             r"func\.func\s+@[\w\d_]+(\s*\()", r"func.func\1", str(self.func.operation)
         )
 
+    def add_global_input(self, global_idx: int, input_type: Type, tile_name: str):
+        self.global_input_streams[global_idx] = (input_type, tile_name)
+
+    def add_global_output(self, global_idx: int, output_type: Type, tile_name: str):
+        self.global_output_streams[global_idx] = (output_type, tile_name)
+
     def add_input(self, name: str, input_type: Type, src: str):
-        self.inputs[src] = (input_type, name)
+        self.input_streams[src] = (input_type, name)
 
     def add_output(self, name: str, output_type: Type, dst: str):
-        self.outputs[dst] = (output_type, name)
+        self.output_streams[dst] = (output_type, name)
 
 
 class VirtualEdge:
@@ -51,14 +60,14 @@ class CollocatedBaseNode:
         self.execution_queue: list[set["CollocatedBaseNode"]] = []
         # input/output node id -> edge stream type
         # fixme: may conflict when having multiple input/output corresponding to the same node
-        self.inputs: dict[int, Type] = {}
-        self.outputs: dict[int, Type] = {}
+        self.input_streams: dict[int, tuple[Type, str]] = {}
+        self.output_streams: dict[int, tuple[Type, str]] = {}
 
-    def add_input(self, node_id: int, input_type: Type):
-        self.inputs[node_id] = input_type
+    def add_input(self, node_id: int, input_type: Type, stream_name: str):
+        self.input_streams[node_id] = (input_type, stream_name)
 
-    def add_output(self, node_id: int, output_type: Type):
-        self.outputs[node_id] = output_type
+    def add_output(self, node_id: int, output_type: Type, stream_name: str):
+        self.output_streams[node_id] = (output_type, stream_name)
 
 
 class CollocatedInitialNode(CollocatedBaseNode):
@@ -81,8 +90,8 @@ class CollocatedNode(CollocatedBaseNode):
         bundle_node = CollocatedNode()
         node_set = set(nodes)
         bundle_node.execution_queue.append(node_set)
-        bundle_node.inputs = nodes[0].inputs
-        bundle_node.outputs = nodes[0].outputs
+        bundle_node.input_streams = nodes[0].input_streams
+        bundle_node.output_streams = nodes[0].output_streams
         return bundle_node
 
     @staticmethod
@@ -92,10 +101,10 @@ class CollocatedNode(CollocatedBaseNode):
         chain_node = CollocatedNode()
         chain_node.execution_queue.append({producer, consumer})
         # fixme: may conflict when producer and consumer have the same input/output
-        chain_node.inputs = producer.inputs | consumer.inputs
-        chain_node.inputs.pop(producer.id)
-        chain_node.outputs = producer.outputs | consumer.outputs
-        chain_node.outputs.pop(consumer.id)
+        chain_node.input_streams = producer.input_streams | consumer.input_streams
+        chain_node.input_streams.pop(producer.id)
+        chain_node.output_streams = producer.output_streams | consumer.output_streams
+        chain_node.output_streams.pop(consumer.id)
         return chain_node
 
 
@@ -111,16 +120,30 @@ class ComputationGraph:
         ],  # function naem -> list((stream_name, direction))
         stream_types_dict: dict[str, Type],
         core_func_args: dict[str, dict[int, tuple[Argument, bool]]],
-        global_inputs: dict[int, DTensor],
-        global_outputs: dict[int, DTensor],
     ):
-        # TODO: global io info
         self.nodes: dict[str, VirtualNode] = {}
         self.edges: dict[str, VirtualEdge] = {}
         # construct nodes
         for func in df_kernels:
             func_name = func.attributes["sym_name"].value
+            _, indexes = parse_kernel_name(func_name)
             self.nodes[func_name] = VirtualNode(func)
+            params = core_func_args[func_name]
+            for idx, (argument, is_input) in params.items():
+                if argument.dtensor is None:
+                    continue
+                if is_input:
+                    self.nodes[func_name].add_global_input(
+                        idx,
+                        None,
+                        argument.dtensor.PE_tile_id_to_tensor_tile_id(indexes),
+                    )
+                else:
+                    self.nodes[func_name].add_global_output(
+                        idx,
+                        None,
+                        argument.dtensor.PE_tile_id_to_tensor_tile_id(indexes),
+                    )
         # construct edges
         for func_name, streams in stream_info.items():
             node = self.nodes.get(func_name)
@@ -158,19 +181,19 @@ class ComputationGraph:
     ) -> bool:
         if node1.op_tag != node2.op_tag:
             return False
-        if len(node1.inputs) != len(node2.inputs) or len(node1.outputs) != len(
-            node2.outputs
-        ):
+        if len(node1.input_streams) != len(node2.input_streams) or len(
+            node1.output_streams
+        ) != len(node2.output_streams):
             return False
-        for func_name, (input_type, _) in node1.inputs.items():
-            if func_name not in node2.inputs:
+        for src_mame, (input_type, _) in node1.input_streams.items():
+            if src_mame not in node2.input_streams:
                 return False
-            if node2.inputs[func_name][0] != input_type:
+            if node2.input_streams[src_mame][0] != input_type:
                 return False
-        for func_name, (output_type, _) in node1.outputs.items():
-            if func_name not in node2.outputs:
+        for dst_name, (output_type, _) in node1.output_streams.items():
+            if dst_name not in node2.output_streams:
                 return False
-            if node2.outputs[func_name][0] != output_type:
+            if node2.output_streams[dst_name][0] != output_type:
                 return False
         return True
 
@@ -218,13 +241,16 @@ class ComputationGraph:
             self.collocated_nodes[node.func_name] = initial_node
         # connect initial nodes
         for node in self.nodes.values():
-            for input_node, input_type in node.inputs.items():
+            for src_name, (input_type, input_stream_name) in node.input_streams.items():
                 self.collocated_nodes[node.func_name].add_input(
-                    self.collocated_nodes[input_node].id, input_type
+                    self.collocated_nodes[src_name].id, input_type, input_stream_name
                 )
-            for output_node, output_type in node.outputs.items():
+            for dst_name, (
+                output_type,
+                output_stream_name,
+            ) in node.output_streams.items():
                 self.collocated_nodes[node.func_name].add_output(
-                    self.collocated_nodes[output_node].id, output_type
+                    self.collocated_nodes[dst_name].id, output_type, output_stream_name
                 )
 
     def bundle(self, nodes: list[CollocatedBaseNode]) -> CollocatedNode:
@@ -254,9 +280,9 @@ class ComputationGraph:
         The computations from both nodes are concatenated in a specific order that respects any dependency between them.
         """
         # fixme: currently, we only support chain nodes with direct dependencies
-        if node1.id in node2.inputs:
+        if node1.id in node2.input_streams:
             producer, consumer = node1, node2
-        elif node2.id in node1.inputs:
+        elif node2.id in node1.input_streams:
             producer, consumer = node2, node1
         else:
             raise ValueError("Nodes are not directly connected")
@@ -268,6 +294,13 @@ class ComputationGraph:
     # ------------------------------------------------------------
     def print_graph(self):
         print("\n<<<<< Computation Graph >>>>>")
+
+        print("\n<<<<< Nodes >>>>>")
+        for node in self.nodes.values():
+            print(
+                f"{node.func_name}: input streams: {node.input_streams}, output streams: {node.output_streams}, global inputs: {node.global_input_streams}, global outputs: {node.global_output_streams}"
+            )
+        print("\n<<<<< Edges >>>>>")
         for edge in self.edges.values():
             print(
                 f"{edge.src.func_name} -> {edge.dst.func_name}: {edge.name} ({edge.type})"
