@@ -54,14 +54,24 @@ class VirtualEdge:
 class CollocatedBaseNode:
     node_list: list["CollocatedBaseNode"] = []
 
-    def __init__(self):
+    def __init__(self, name: str):
         self.id = len(CollocatedBaseNode.node_list)
         CollocatedBaseNode.node_list.append(self)
+        self.name = name
         self.execution_queue: list[set["CollocatedBaseNode"]] = []
+        # global <-> PE: global argument index -> (stream type, tile name)
+        self.global_input_streams: dict[int, tuple[Type, str]] = {}
+        self.global_output_streams: dict[int, tuple[Type, str]] = {}
         # input/output node id -> edge stream type
         # fixme: may conflict when having multiple input/output corresponding to the same node
         self.input_streams: dict[int, tuple[Type, str]] = {}
         self.output_streams: dict[int, tuple[Type, str]] = {}
+
+    def add_global_input(self, global_idx: int, input_type: Type, tile_name: str):
+        self.global_input_streams[global_idx] = (input_type, tile_name)
+
+    def add_global_output(self, global_idx: int, output_type: Type, tile_name: str):
+        self.global_output_streams[global_idx] = (output_type, tile_name)
 
     def add_input(self, node_id: int, input_type: Type, stream_name: str):
         self.input_streams[node_id] = (input_type, stream_name)
@@ -76,14 +86,14 @@ class CollocatedInitialNode(CollocatedBaseNode):
     """
 
     def __init__(self, v_node: VirtualNode):
-        super().__init__()
+        super().__init__(v_node.func_name)
         self.v_node = v_node
         self.execution_queue.append({self})
 
 
 class CollocatedNode(CollocatedBaseNode):
     def __init__(self):
-        super().__init__()
+        super().__init__(f"collocated_{len(CollocatedBaseNode.node_list)}")
 
     @staticmethod
     def bundle(nodes: list[CollocatedBaseNode]) -> "CollocatedNode":
@@ -235,12 +245,23 @@ class ComputationGraph:
     # Transformation Primitives
     # ------------------------------------------------------------
     def initialize_collocated_nodes(self):
+        # InitialNode share the same name with the virtual node
         # build initial nodes
         for node in self.nodes.values():
             initial_node = CollocatedInitialNode(node)
             self.collocated_nodes[node.func_name] = initial_node
         # connect initial nodes
         for node in self.nodes.values():
+            # global
+            for idx, (input_type, input_name) in node.global_input_streams.items():
+                self.collocated_nodes[node.func_name].add_global_input(
+                    idx, input_type, input_name
+                )
+            for idx, (output_type, output_name) in node.global_output_streams.items():
+                self.collocated_nodes[node.func_name].add_global_output(
+                    idx, output_type, output_name
+                )
+            # stream
             for src_name, (input_type, input_stream_name) in node.input_streams.items():
                 self.collocated_nodes[node.func_name].add_input(
                     self.collocated_nodes[src_name].id, input_type, input_stream_name
@@ -288,6 +309,55 @@ class ComputationGraph:
             raise ValueError("Nodes are not directly connected")
         chain_node = CollocatedNode.chain(producer, consumer)
         return chain_node
+
+    # ------------------------------------------------------------
+    # Graph Information
+    # ------------------------------------------------------------
+    def get_global_io_func2tile(
+        self,
+    ) -> tuple[dict[str, list[tuple[int, str]]], dict[str, list[tuple[int, str]]]]:
+        """
+        Get the global io of the computation graph.
+        """
+        global_in: dict[str, list[tuple[int, str]]] = {}
+        global_out: dict[str, list[tuple[int, str]]] = {}
+        for name, node in self.collocated_nodes.items():
+            global_in[name] = []
+            global_out[name] = []
+            for idx, (_, tile_name) in node.global_input_streams.items():
+                global_in[name].append((idx, tile_name))
+            for idx, (_, tile_name) in node.global_output_streams.items():
+                global_out[name].append((idx, tile_name))
+        return global_in, global_out
+
+    def get_global_io_tile2func(
+        self,
+        global_inputs: dict[int, DTensor],
+        global_outputs: dict[int, DTensor],
+    ) -> tuple[list[dict[str, set[str]]], list[dict[str, set[str]]]]:
+        """
+        Get the global io of the computation graph.
+        """
+        global_in: dict[int, dict[str, set[str]]] = {}
+        global_out: dict[int, dict[str, set[str]]] = {}
+        for idx, dtensor in global_inputs.items():
+            global_in[idx] = {k: set() for k in dtensor.global_placement.keys()}
+        for idx, dtensor in global_outputs.items():
+            global_out[idx] = {k: set() for k in dtensor.global_placement.keys()}
+        for name, node in self.collocated_nodes.items():
+            for idx, (_, tile_name) in node.global_input_streams.items():
+                global_in[idx][tile_name].add(name)
+            for idx, (_, tile_name) in node.global_output_streams.items():
+                global_out[idx][tile_name].add(name)
+        return global_in, global_out
+
+    def get_node_dependencies(self) -> dict[str, set[str]]:
+        dependencies: dict[str, set[str]] = {}
+        for name, node in self.collocated_nodes.items():
+            dependencies[name] = set()
+            for node_id in node.input_streams.keys():
+                dependencies[name].add(CollocatedBaseNode.node_list[node_id].name)
+        return dependencies
 
     # ------------------------------------------------------------
     # Print Graph
