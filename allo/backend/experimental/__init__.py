@@ -152,8 +152,22 @@ class AIE_MLIRModule:
         )
         # manage the order to avoid deadlocks
         dependencies = self.virtual_computation_graph.get_node_dependencies()
-        print("\t", global_in, "\n\t", global_out, "\n\t", dependencies)
-        return global_in, global_out, dependencies
+        node_order_tag: dict[str, int] = {}
+        tag = 0
+        while len(dependencies.items()) > 0:
+            tagged_nodes = []
+            for node, deps in dependencies.items():
+                if len(deps) == 0:
+                    node_order_tag[node] = tag
+                    tagged_nodes.append(node)
+            for node in tagged_nodes:
+                del dependencies[node]
+                for _, deps in dependencies.items():
+                    if node in deps:
+                        deps.remove(node)
+            tag += 1
+        print("\t", global_in, "\n\t", global_out, "\n\t", node_order_tag)
+        return global_in, global_out, node_order_tag
 
     def analyze_kernel_parameters(self):
         """
@@ -234,7 +248,7 @@ class AIE_MLIRModule:
             # TODO: transformation on virtual map. may modify allo_module here
             # TODO: update streams and core_func_args
             pass
-        global_in_tile_tensor2func, global_out_tile_tensor2func, func_dependencies = (
+        global_in_tile_tensor2func, global_out_tile_tensor2func, func_order_tag = (
             self.virtual_to_logical(device_type)
         )
         # inject external kernels
@@ -269,7 +283,7 @@ class AIE_MLIRModule:
             code_generator.map_global_io_to_physical_tiles(
                 global_in_tile_tensor2func,
                 global_out_tile_tensor2func,
-                func_dependencies,
+                func_order_tag,
             )
         )
         self.aie_module = code_generator.aie_codegen_experimental(

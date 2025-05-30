@@ -47,8 +47,8 @@ class DataTransferTile:
     def __init__(self, tile_id: int, send_port_num: int, recv_port_num: int):
         self.tile_id = tile_id
         # list of i/o ports. Each port contains a map from dma tag (used to specify order) to DMATensorTile
-        self.send: list[dict[int, DMATensorTile]] = [{} for _ in range(send_port_num)]
-        self.recv: list[dict[int, DMATensorTile]] = [{} for _ in range(recv_port_num)]
+        self.send: list[dict[str, DMATensorTile]] = [{} for _ in range(send_port_num)]
+        self.recv: list[dict[str, DMATensorTile]] = [{} for _ in range(recv_port_num)]
 
 
 def map_global_io(inputs, outputs) -> tuple[dict[str, list[DMATensorTile]], int, int]:
@@ -471,16 +471,18 @@ class CodeGenerator:
         self,
         global_in_tile_tensor2func: dict[int, dict[str, set[str]]],
         global_out_tile_tensor2func: dict[int, dict[str, set[str]]],
-        func_dependencies: dict[str, set[str]],
+        func_order_tag: dict[str, int],
     ) -> tuple[list[DataTransferTile], list[DataTransferTile]]:
 
+        # ------------------------------------------------------------
         MAX_MEM_TILES = self.device_config["mem_tile_num"]
         MAX_SHIM_TILES = self.device_config["shim_tile_num"]
 
         used_mem_tiles: list[DataTransferTile] = []
         used_shim_tiles: list[DataTransferTile] = []
+        # ------------------------------------------------------------
 
-        def assign_mem_tile(send_need, recv_need):
+        def assign_mem_tile(send_need, recv_need) -> DataTransferTile:
             if (
                 len(used_mem_tiles) < MAX_MEM_TILES
                 and send_need <= Config.MEM_MAX_SEND
@@ -491,6 +493,10 @@ class CodeGenerator:
                     send_port_num=Config.MEM_MAX_SEND,
                     recv_port_num=Config.MEM_MAX_RECV,
                 )
+                used_mem_tiles.append(new_mem_tile)
+                return new_mem_tile
+            for mem_tile in used_mem_tiles:
+                pass
                 # TODO
 
             # TODO
@@ -505,15 +511,30 @@ class CodeGenerator:
         ):
             device_dims, size, stride = dtensor.get_access_pattern()
             tensor_tiles = sorted(list(dtensor.global_placement.keys()))
-            if is_input:
-                # Different ports for different tensor tiles.
-                # Each port can have multiple destinations.
-                mem_send_need = len(tensor_tiles)
-                mem_recv_need = 1
+            # Different ports for different tensor tiles.
+            # Each port can have multiple destinations.
+            mem_send_need = len(tensor_tiles) if is_input else 1
+            mem_recv_need = 1 if is_input else len(tensor_tiles)
+            mem_tile = assign_mem_tile(mem_send_need, mem_recv_need)
+            if mem_tile is not None:
+                # send total DTensor in one go
+                shim_send_need = 1
+                shim_recv_need = 1
+                shim_tile = assign_shim_tile(shim_send_need, shim_recv_need)
+                if shim_tile is not None:
+                    tensor_tile = DMATensorTile(
+                        dtensor_tile_id=0,
+                        shim_id=shim_tile.tile_id,
+                        mem_id=mem_tile.tile_id,
+                        tensor_tile_labels=tensor_tiles,
+                        offset=[0, 0, 0, 0],
+                        size=size,
+                        stride=stride,
+                    )
 
-                # mem tile
-                mem_send_need = len(tensor_tiles) if is_input else 1
-                mem_recv_need = 1 if is_input else len(tensor_tiles)
+            # mem tile
+            mem_send_need = len(tensor_tiles) if is_input else 1
+            mem_recv_need = 1 if is_input else len(tensor_tiles)
 
             # TODO
             pass
