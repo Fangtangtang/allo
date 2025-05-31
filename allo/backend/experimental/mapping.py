@@ -12,6 +12,9 @@ from ...memory import DTensor
 # Memory
 # ############################################################
 class GlobalDMATile:
+    """
+    TODO: coalesced memory access
+    """
     def __init__(
         self,
         dtensor: DTensor,

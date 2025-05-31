@@ -87,6 +87,31 @@ class Layout:
 
         return result
 
+    def get_mapped_device_dim(self, mapping):
+        partition = self.placement
+        if len(partition) == 2:
+            if len(mapping) == 1:
+                device_a, device_b = 1, mapping[0]
+            elif len(mapping) == 2:
+                if partition[0][0] == "S":
+                    partition[1] = (partition[1][0], 1 - partition[0][1])
+                elif partition[1][0] == "S":  # partition[0][0] == "R"
+                    partition[0] = (partition[0][0], 1 - partition[1][1])
+                else:  # "RR"
+                    partition[0] = (partition[0], 1)
+                    partition[1] = (partition[1], 0)
+                device_a, device_b = (
+                    mapping[-partition[0][1] - 1],
+                    mapping[-partition[1][1] - 1],
+                )
+            else:
+                device_a, device_b = (
+                    mapping[-partition[0][1] - 1],
+                    mapping[-partition[1][1] - 1],
+                )
+            return device_a, device_b
+        raise ValueError("get_mapped_device_dim unsupported currently.")
+
     def __repr__(self):
         result = ""
         for letter, number in self.placement:
@@ -111,6 +136,10 @@ class DTensor:
         if layout is not None and mapping is not None:
             # tensor tile ID -> PE tile IDs
             self.global_placement: dict[str, tuple] = layout.get_placement(mapping)
+            # tensor tile ID -> address offset
+            self.offset_map: dict[str, tuple[int, int, int, int]] = {}
+            self.set_offset_map()
+            self.shared_dims, self.size, self.stride = self.get_access_pattern()
         self.type_as_param: list = None
 
     def get_local_shape(self):
@@ -128,6 +157,29 @@ class DTensor:
                 # count from right to left
                 local_shape.append(s // self.mapping[-dim - 1])
         return tuple(local_shape)
+
+    def set_offset_map(self):
+        partition_str = "".join([p[0] for p in self.layout.placement])
+        if partition_str == "R" or partition_str == "RR":
+            for key in self.global_placement.keys():
+                self.offset_map[key] = (0, 0, 0, 0)
+            return
+        if partition_str == "S":
+            for i, key in enumerate(sorted(list(self.global_placement.keys()))):
+                self.offset_map[key] = (0, 0, i, 0)
+            return
+        # 2D device to be mapped
+        if len(partition_str) == 2:
+            device_a, device_b = self.layout.get_mapped_device_dim(self.mapping)
+            for i, key in enumerate(sorted(list(self.global_placement.keys()))):
+                self.offset_map[key] = (
+                    i // device_b if partition_str == "SS" else 0,
+                    i % device_a if partition_str == "SR" else i % device_b,
+                    0,
+                    0,
+                )
+            return
+        raise ValueError("Unsupported access pattern.")
 
     def get_access_pattern(self) -> tuple[list, list, list]:
         """
@@ -154,27 +206,7 @@ class DTensor:
                 raise ValueError("Unsupported access pattern for 1D tensor.")
         elif len(self.shape) == 2:
             tensor_m, tensor_n = self.shape  # [tensor_m x tensor_n]
-            device_a, device_b = None, None  # 2D device to be mapped
-            partition = self.layout.placement
-            if len(self.mapping) == 1:
-                device_a, device_b = 1, self.mapping[0]
-            elif len(self.mapping) == 2:
-                if partition[0][0] == "S":
-                    partition[1] = (partition[1][0], 1 - partition[0][1])
-                elif partition[1][0] == "S":  # partition[0][0] == "R"
-                    partition[0] = (partition[0][0], 1 - partition[1][1])
-                else:  # "RR"
-                    partition[0] = (partition[0], 1)
-                    partition[1] = (partition[1], 0)
-                device_a, device_b = (
-                    self.mapping[-partition[0][1] - 1],
-                    self.mapping[-partition[1][1] - 1],
-                )
-            else:
-                device_a, device_b = (
-                    self.mapping[-partition[0][1] - 1],
-                    self.mapping[-partition[1][1] - 1],
-                )
+            device_a, device_b = self.layout.get_mapped_device_dim(self.mapping)
             if partition_str == "SS":
                 device_dims = [0, 1]
                 size = [device_a, device_b, tensor_m // device_a, tensor_n // device_b]
@@ -210,7 +242,9 @@ class DTensor:
         for tensor_tile_id, pe_tile_ids in self.global_placement.items():
             if pe_tile_id in pe_tile_ids:
                 return tensor_tile_id
-        raise ValueError(f"PE tile ID {pe_tile_id} not found in {self.global_placement}")
+        raise ValueError(
+            f"PE tile ID {pe_tile_id} not found in {self.global_placement}"
+        )
 
     def __str__(self):
         return f"DTensor(name={self.name}, shape={self.shape}, dtype={self.dtype}, layout={self.layout}, mapping={self.mapping}, rank={self.rank}, local_shape={self.get_local_shape()})"
