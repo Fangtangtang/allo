@@ -28,7 +28,7 @@ from .utils import (
     read_tensor_from_file,
     codegen_host,
 )
-from .virtual_mapping import ComputationGraph
+from .mapping import ComputationGraph
 
 
 class AIE_MLIRModule:

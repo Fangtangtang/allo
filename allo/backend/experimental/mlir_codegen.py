@@ -30,6 +30,7 @@ from ...memory import DTensor
 
 from .utils import get_element_type, device_config_map, Argument, Stream, Config
 from ..aie import map_kernels_to_device_mesh
+from .mapping import GlobalDMATile, GlobalDMANode
 
 
 @dataclass(frozen=True)
@@ -41,14 +42,6 @@ class DMATensorTile:
     offset: list
     size: list
     stride: list
-
-
-class DataTransferTile:
-    def __init__(self, tile_id: int, send_port_num: int, recv_port_num: int):
-        self.tile_id = tile_id
-        # list of i/o ports. Each port contains a map from dma tag (used to specify order) to DMATensorTile
-        self.send: list[dict[str, DMATensorTile]] = [{} for _ in range(send_port_num)]
-        self.recv: list[dict[str, DMATensorTile]] = [{} for _ in range(recv_port_num)]
 
 
 def map_global_io(inputs, outputs) -> tuple[dict[str, list[DMATensorTile]], int, int]:
@@ -472,30 +465,33 @@ class CodeGenerator:
         global_in_tile_tensor2func: dict[int, dict[str, set[str]]],
         global_out_tile_tensor2func: dict[int, dict[str, set[str]]],
         func_order_tag: dict[str, int],
-    ) -> tuple[list[DataTransferTile], list[DataTransferTile]]:
+    ) -> tuple[list[GlobalDMANode], list[GlobalDMANode]]:
 
         # ------------------------------------------------------------
         MAX_MEM_TILES = self.device_config["mem_tile_num"]
         MAX_SHIM_TILES = self.device_config["shim_tile_num"]
 
-        used_mem_tiles: list[DataTransferTile] = []
-        used_shim_tiles: list[DataTransferTile] = []
+        used_mem_tiles: list[GlobalDMANode] = []
+        used_shim_tiles: list[GlobalDMANode] = []
         # ------------------------------------------------------------
 
-        def assign_mem_tile(send_need, recv_need) -> DataTransferTile:
+        def assign_mem_tile(send_need, recv_need) -> GlobalDMANode:
+            # Attempt to use a new memory tile
             if (
                 len(used_mem_tiles) < MAX_MEM_TILES
                 and send_need <= Config.MEM_MAX_SEND
                 and recv_need <= Config.MEM_MAX_RECV
             ):
-                new_mem_tile = DataTransferTile(
+                new_mem_tile = GlobalDMANode(
                     tile_id=len(used_mem_tiles),
                     send_port_num=Config.MEM_MAX_SEND,
                     recv_port_num=Config.MEM_MAX_RECV,
                 )
                 used_mem_tiles.append(new_mem_tile)
                 return new_mem_tile
+            # Attempt to use an existing memory tile
             for mem_tile in used_mem_tiles:
+
                 pass
                 # TODO
 

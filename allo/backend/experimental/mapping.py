@@ -9,6 +9,34 @@ from ...memory import DTensor
 
 
 # ############################################################
+# Memory
+# ############################################################
+class GlobalDMATile:
+    def __init__(
+        self,
+        dtensor: DTensor,
+        tensor_tile_labels: list,
+    ):
+        self.dtensor: DTensor = dtensor
+        self.tensor_tile_labels: list = tensor_tile_labels
+
+
+class GlobalDMANode:
+    def __init__(self, tile_id: int, send_port_num: int, recv_port_num: int):
+        self.tile_id = tile_id
+        self.send_ports: list[dict[str, GlobalDMATile]] = [
+            {} for _ in range(send_port_num)
+        ]
+        self.recv_ports: list[dict[str, GlobalDMATile]] = [
+            {} for _ in range(recv_port_num)
+        ]
+
+    def send_data(self, tag: str, data: GlobalDMATile):
+        # TODO
+        pass
+
+
+# ############################################################
 # Virtual Mapping Base Elements
 # ############################################################
 class VirtualNode:
@@ -49,7 +77,8 @@ class VirtualEdge:
 # ############################################################
 # Collocated Node
 # ------------------------------------------------------------
-# A collocated node is a set of virtual nodes that is mapped to the same physical PE
+# A collocated node is a set of virtual nodes that is mapped to the same physical PE.
+# Can be seen as a logical compute node.
 # ############################################################
 class CollocatedBaseNode:
     node_list: list["CollocatedBaseNode"] = []
@@ -119,7 +148,7 @@ class CollocatedNode(CollocatedBaseNode):
 
 
 # ############################################################
-# Vritual Mapping Graph
+# Computation Mapping Graph
 # ############################################################
 class ComputationGraph:
     def __init__(
