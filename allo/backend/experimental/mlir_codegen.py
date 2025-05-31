@@ -113,7 +113,7 @@ def map_global_io(inputs, outputs) -> tuple[dict[str, list[DMATensorTile]], int,
         DTensors are sent to or from compute cores.
         Since memory tile is used for transfer, we assume that `receive` implies one `send` and `send` implies one `receive`.
         """
-        device_dims, size, stride = dtensor.get_access_pattern()
+        device_dims, size, stride = dtensor.shared_dims, dtensor.size, dtensor.stride
         tensor_tiles = sorted(
             list(dtensor.global_placement.keys())
         )  # 'R' can use one port yet multiple destinations

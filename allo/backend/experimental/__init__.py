@@ -200,6 +200,7 @@ class AIE_MLIRModule:
                         io_type == "in",
                     )
                     if not argument.dtensor is None:
+                        argument.dtensor.set_access_pattern()
                         argument.dtensor.type_as_param = kernel.arguments[
                             io_idx
                         ].type.shape
@@ -332,6 +333,7 @@ class AIE_MLIRModule:
                             io == "in",
                         )
                         if not argument.dtensor is None:
+                            argument.dtensor.set_access_pattern()
                             argument.dtensor.type_as_param = func.arguments[
                                 idx
                             ].type.shape
