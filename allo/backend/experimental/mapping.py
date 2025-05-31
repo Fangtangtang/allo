@@ -14,15 +14,19 @@ from ...memory import DTensor
 class GlobalDMATile:
     """
     TODO: coalesced memory access
+        check dtensor.dtype, dtensor.size, dtensor.stride
     """
 
     def __init__(
         self,
         dtensor: DTensor,
-        tensor_tile_labels: list,
+        tensor_tile_labels: list[str],
     ):
         self.dtensor: DTensor = dtensor
-        self.tensor_tile_labels: list = tensor_tile_labels
+        self.tensor_tile_labels: list[str] = tensor_tile_labels
+
+    def __str__(self):
+        return f"{self.dtensor.name}: {self.tensor_tile_labels}"
 
 
 class GlobalDMANode:
@@ -48,8 +52,8 @@ class VirtualNode:
         self.func_name: str = func.attributes["sym_name"].value
         self.func: func_d.FuncOp = func
         # global <-> PE: global argument index -> (stream type, tile name)
-        self.global_input_streams: dict[int, tuple[Type, str]] = {}
-        self.global_output_streams: dict[int, tuple[Type, str]] = {}
+        self.global_inputs: list[GlobalDMATile] = []
+        self.global_outputs: list[GlobalDMATile] = []
         # inter-PE: input/output node name -> (stream type, stream name)
         self.input_streams: dict[str, tuple[Type, str]] = {}
         self.output_streams: dict[str, tuple[Type, str]] = {}
@@ -57,11 +61,11 @@ class VirtualNode:
             r"func\.func\s+@[\w\d_]+(\s*\()", r"func.func\1", str(self.func.operation)
         )
 
-    def add_global_input(self, global_idx: int, input_type: Type, tile_name: str):
-        self.global_input_streams[global_idx] = (input_type, tile_name)
+    def add_global_input(self, dtensor: DTensor, indexes):
+        self.global_inputs.append(GlobalDMATile(dtensor, [dtensor.PE_tile_id_to_tensor_tile_id(indexes)]))
 
-    def add_global_output(self, global_idx: int, output_type: Type, tile_name: str):
-        self.global_output_streams[global_idx] = (output_type, tile_name)
+    def add_global_output(self, dtensor: DTensor, indexes):
+        self.global_outputs.append(GlobalDMATile(dtensor, [dtensor.PE_tile_id_to_tensor_tile_id(indexes)]))
 
     def add_input(self, name: str, input_type: Type, src: str):
         self.input_streams[src] = (input_type, name)
@@ -92,19 +96,20 @@ class CollocatedBaseNode:
         CollocatedBaseNode.node_list.append(self)
         self.name = name
         self.execution_queue: list[set["CollocatedBaseNode"]] = []
+        # TODO: global io for collocated nodes
         # global <-> PE: global argument index -> (stream type, tile name)
-        self.global_input_streams: dict[int, tuple[Type, str]] = {}
-        self.global_output_streams: dict[int, tuple[Type, str]] = {}
+        self.global_inputs: list[GlobalDMATile] = []
+        self.global_outputs: list[GlobalDMATile] = []
         # input/output node id -> edge stream type
         # fixme: may conflict when having multiple input/output corresponding to the same node
         self.input_streams: dict[int, tuple[Type, str]] = {}
         self.output_streams: dict[int, tuple[Type, str]] = {}
 
-    def add_global_input(self, global_idx: int, input_type: Type, tile_name: str):
-        self.global_input_streams[global_idx] = (input_type, tile_name)
+    def add_global_input(self, dma_tile: GlobalDMATile):
+        self.global_inputs.append(dma_tile)
 
-    def add_global_output(self, global_idx: int, output_type: Type, tile_name: str):
-        self.global_output_streams[global_idx] = (output_type, tile_name)
+    def add_global_output(self, dma_tile: GlobalDMATile):
+        self.global_outputs.append(dma_tile)
 
     def add_input(self, node_id: int, input_type: Type, stream_name: str):
         self.input_streams[node_id] = (input_type, stream_name)
@@ -177,15 +182,11 @@ class ComputationGraph:
                     continue
                 if is_input:
                     self.nodes[func_name].add_global_input(
-                        idx,
-                        None,
-                        argument.dtensor.PE_tile_id_to_tensor_tile_id(indexes),
+                        argument.dtensor, indexes
                     )
                 else:
                     self.nodes[func_name].add_global_output(
-                        idx,
-                        None,
-                        argument.dtensor.PE_tile_id_to_tensor_tile_id(indexes),
+                        argument.dtensor, indexes
                     )
         # construct edges
         for func_name, streams in stream_info.items():
@@ -286,14 +287,10 @@ class ComputationGraph:
         # connect initial nodes
         for node in self.nodes.values():
             # global
-            for idx, (input_type, input_name) in node.global_input_streams.items():
-                self.collocated_nodes[node.func_name].add_global_input(
-                    idx, input_type, input_name
-                )
-            for idx, (output_type, output_name) in node.global_output_streams.items():
-                self.collocated_nodes[node.func_name].add_global_output(
-                    idx, output_type, output_name
-                )
+            for global_input in node.global_inputs:
+                self.collocated_nodes[node.func_name].add_global_input(global_input)
+            for global_output in node.global_outputs:
+                self.collocated_nodes[node.func_name].add_global_output(global_output)
             # stream
             for src_name, (input_type, input_stream_name) in node.input_streams.items():
                 self.collocated_nodes[node.func_name].add_input(
@@ -346,44 +343,6 @@ class ComputationGraph:
     # ------------------------------------------------------------
     # Graph Information
     # ------------------------------------------------------------
-    def get_global_io_func2tile(
-        self,
-    ) -> tuple[dict[str, list[tuple[int, str]]], dict[str, list[tuple[int, str]]]]:
-        """
-        Get the global io of the computation graph.
-        """
-        global_in: dict[str, list[tuple[int, str]]] = {}
-        global_out: dict[str, list[tuple[int, str]]] = {}
-        for name, node in self.collocated_nodes.items():
-            global_in[name] = []
-            global_out[name] = []
-            for idx, (_, tile_name) in node.global_input_streams.items():
-                global_in[name].append((idx, tile_name))
-            for idx, (_, tile_name) in node.global_output_streams.items():
-                global_out[name].append((idx, tile_name))
-        return global_in, global_out
-
-    def get_global_io_tile2func(
-        self,
-        global_inputs: dict[int, DTensor],
-        global_outputs: dict[int, DTensor],
-    ) -> tuple[dict[int, dict[str, set[str]]], dict[int, dict[str, set[str]]]]:
-        """
-        Get the global io of the computation graph.
-        """
-        global_in: dict[int, dict[str, set[str]]] = {}
-        global_out: dict[int, dict[str, set[str]]] = {}
-        for idx, dtensor in global_inputs.items():
-            global_in[idx] = {k: set() for k in dtensor.global_placement.keys()}
-        for idx, dtensor in global_outputs.items():
-            global_out[idx] = {k: set() for k in dtensor.global_placement.keys()}
-        for name, node in self.collocated_nodes.items():
-            for idx, (_, tile_name) in node.global_input_streams.items():
-                global_in[idx][tile_name].add(name)
-            for idx, (_, tile_name) in node.global_output_streams.items():
-                global_out[idx][tile_name].add(name)
-        return global_in, global_out
-
     def get_node_dependencies(self) -> dict[str, set[str]]:
         dependencies: dict[str, set[str]] = {}
         for name, node in self.collocated_nodes.items():
@@ -401,7 +360,9 @@ class ComputationGraph:
         print("\n<<<<< Nodes >>>>>")
         for node in self.nodes.values():
             print(
-                f"{node.func_name}: input streams: {node.input_streams}, output streams: {node.output_streams}, global inputs: {node.global_input_streams}, global outputs: {node.global_output_streams}"
+                f"{node.func_name}: input streams: {node.input_streams}, output streams: {node.output_streams}, "
+                f"\tglobal inputs: {', '.join([str(dma_tile) for dma_tile in node.global_inputs])}, "
+                f"\tglobal outputs: {', '.join([str(dma_tile) for dma_tile in node.global_outputs])}"
             )
         print("\n<<<<< Edges >>>>>")
         for edge in self.edges.values():
