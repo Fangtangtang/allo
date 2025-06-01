@@ -91,9 +91,11 @@ class GlobalDMANode:
             return self.__str__()
 
     class IntraConnect:
-        def __init__(self, send_ports: list[int], recv_ports: list[int], offsets: list[int]):
-            self.send_ports = send_ports # send_port_id
-            self.recv_ports = recv_ports # recv_port_id
+        def __init__(
+            self, send_ports: list[int], recv_ports: list[int], offsets: list[int]
+        ):
+            self.send_ports = send_ports  # send_port_id
+            self.recv_ports = recv_ports  # recv_port_id
             self.offsets = offsets
 
         def __str__(self):
@@ -111,10 +113,11 @@ class GlobalDMANode:
         self.intra_connect: list[GlobalDMANode.IntraConnect] = []
 
     def print(self):
-        print(f"<<<<< {self.tile_id} >>>>>")
+        print(f"\n<<<<< DMA Tile {self.tile_id} >>>>>")
         print(f"send ports: {self.send_ports}")
         print(f"recv ports: {self.recv_ports}")
         print(f"intra connect: {self.intra_connect}")
+
 
 # ############################################################
 # Virtual Mapping Base Elements

@@ -482,7 +482,12 @@ class CodeGenerator:
             is_input: bool,
             coalesced_size: Size4D,
             tile_size: Size4D,
-        ) -> GlobalDMANode:
+        ) -> tuple[GlobalDMANode, int]:
+            """
+            Assign a memory tile to the given dtensor tiles.
+            If no memory tile is available, return None.
+            Else, return the assigned memory tile and the port id.
+            """
             send_need = len(connected_nodes) if is_input else 1
             recv_need = 1 if is_input else len(connected_nodes)
             send_size = tile_size if is_input else coalesced_size
@@ -490,61 +495,66 @@ class CodeGenerator:
             tile_total_size = tile_size.get_total_size()
             if os.environ.get("VERBOSE"):
                 print(f"send_need: {send_need}, recv_need: {recv_need}")
+            assigned_mem_tile = None
             # Attempt to use a new memory tile
             if (
                 len(used_mem_tiles) < MAX_MEM_TILES
                 and send_need <= Config.MEM_MAX_SEND
                 and recv_need <= Config.MEM_MAX_RECV
             ):
-                new_mem_tile = GlobalDMANode(
+                assigned_mem_tile = GlobalDMANode(
                     tile_id=len(used_mem_tiles),
                     send_port_num=Config.MEM_MAX_SEND,
                     recv_port_num=Config.MEM_MAX_RECV,
                 )
+                used_mem_tiles.append(assigned_mem_tile)
+            else:
+                # Attempt to use an existing memory tile
+                for mem_tile in used_mem_tiles:
+                    if (
+                        len(mem_tile.send_ports) + send_need <= Config.MEM_MAX_SEND
+                        and len(mem_tile.recv_ports) + recv_need <= Config.MEM_MAX_RECV
+                    ):
+                        assigned_mem_tile = mem_tile
+                        break
+            # Use new ports
+            if assigned_mem_tile is not None:
                 send_ports, recv_ports = [], []
                 for i in range(send_need):
                     port = GlobalDMANode.Port(
-                        id=len(new_mem_tile.send_ports),
+                        id=len(assigned_mem_tile.send_ports),
                         data_shape=send_size,
                         dtype=dtype,
                         connected_nodes=connected_nodes[i] if is_input else [],
                     )
-                    new_mem_tile.send_ports.append(port)
+                    assigned_mem_tile.send_ports.append(port)
                     send_ports.append(port.id)
                 for i in range(recv_need):
                     port = GlobalDMANode.Port(
-                        id=len(new_mem_tile.recv_ports),
+                        id=len(assigned_mem_tile.recv_ports),
                         data_shape=recv_size,
                         dtype=dtype,
                         connected_nodes=[] if is_input else connected_nodes[i],
                     )
-                    new_mem_tile.recv_ports.append(port)
+                    assigned_mem_tile.recv_ports.append(port)
                     recv_ports.append(port.id)
-                new_mem_tile.intra_connect.append(
+                assigned_mem_tile.intra_connect.append(
                     GlobalDMANode.IntraConnect(
                         send_ports,
                         recv_ports,
                         list(
                             range(
-                                0, len(connected_nodes) * tile_total_size, tile_total_size
+                                0,
+                                len(connected_nodes) * tile_total_size,
+                                tile_total_size,
                             )
                         ),
                     )
                 )
-               
-                used_mem_tiles.append(new_mem_tile)
-                new_mem_tile.print()
-                # assign ports
-
-                return new_mem_tile
-            # Attempt to use an existing memory tile
-            for mem_tile in used_mem_tiles:
-
-                pass
-                # TODO
-
-            # TODO
-            pass
+                assigned_mem_tile.print()
+                return assigned_mem_tile, send_ports[0] if is_input else recv_ports[0]
+            # TODO: port reuse
+            return None, -1
 
         def assign_shim_tile(send_need, recv_need):
             # TODO
@@ -556,6 +566,21 @@ class CodeGenerator:
             def parse_tag(tag: str) -> tuple[int, int]:
                 outer_tag, inner_tag = tag.split("-")
                 return int(outer_tag), int(inner_tag)
+
+            def partition(size: Size4D) -> Size4D:
+                """
+                Partition the dma task into multiple sub-tasks.
+                """
+                # find the first none-1 dim
+                for dim in range(4):
+                    if size.get_dim_size(dim) > 1:
+                        break
+                if dim >= 3:
+                    raise ValueError("Fail to partition")
+                size_part = size.copy()
+                partition_size = size.get_dim_size(dim) - 1
+                size_part.set_dim_size(dim, partition_size)
+                return size_part
 
             tile_dtype = dtensor.dtype
             tile_shape = dtensor.size
@@ -584,21 +609,46 @@ class CodeGenerator:
                     print("access:", coalesced_access)
                     print("=== coalesce_info ===", coalesce_info)
                 for offset, size in coalesced_access.items():
-                    total_size = size.get_total_size()
-                    coalesced_size = Size4D.coalesce(size, tile_size)
                     connected_nodes: list[list[str]] = []
                     for node in coalesce_info[offset]:
                         connected_nodes.append(
                             dma_tile_group.dma_tile_to_pes[offset_map[node]]
                         )
-
-                    assign_mem_tile(
-                        tile_dtype, connected_nodes, is_input, coalesced_size, tile_size
-                    )
-                    # if mem_tile is not None:
-
-                    #     # mem_tile = assign_mem_tile(offset_map, is_input)
-                    #     pass
+                    while size.get_total_size() != 0:
+                        coalesced_size = Size4D.coalesce(size, tile_size)
+                        assigned_mem_tile, port_id = assign_mem_tile(
+                            tile_dtype,
+                            connected_nodes,
+                            is_input,
+                            coalesced_size,
+                            tile_size,
+                        )
+                        if assigned_mem_tile is not None:
+                            break
+                        size_cp = size.copy()
+                        # keep partitioning until success
+                        while True:
+                            partitioned_size = partition(size_cp)
+                            coalesced_size = Size4D.coalesce(
+                                partitioned_size, tile_size
+                            )
+                            partitioned_connected_nodes = connected_nodes[
+                                : partitioned_size.get_total_size()
+                            ]
+                            assigned_mem_tile, port_id = assign_mem_tile(
+                                tile_dtype,
+                                partitioned_connected_nodes,
+                                is_input,
+                                coalesced_size,
+                                tile_size,
+                            )
+                            if assigned_mem_tile is not None:
+                                break
+                            size_cp = partitioned_size
+                        size = Size4D.subtract(size, partitioned_size)
+                        connected_nodes = connected_nodes[
+                            partitioned_size.get_total_size() :
+                        ]
 
         for input_idx, ordered_tile_group in global_in_tile_to_func.items():
             map_dtensor_to_physical_tiles(
@@ -606,12 +656,14 @@ class CodeGenerator:
                 ordered_tile_group,
                 is_input=True,
             )
+            print("--------------------------------")
         for output_idx, ordered_tile_group in global_out_tile_to_func.items():
             map_dtensor_to_physical_tiles(
                 self.global_outputs[output_idx],
                 ordered_tile_group,
                 is_input=False,
             )
+            print("--------------------------------")
 
         return used_mem_tiles, used_shim_tiles
 

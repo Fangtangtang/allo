@@ -189,6 +189,9 @@ class Size4D:
         self.size_c = size_c
         self.size_d = size_d
 
+    def copy(self) -> "Size4D":
+        return Size4D(self.size_a, self.size_b, self.size_c, self.size_d)
+
     @classmethod
     def from_list(cls, size_list: list[int]) -> "Size4D":
         assert (
@@ -204,6 +207,42 @@ class Size4D:
             (size_1.size_c * size_2.size_c),
             (size_1.size_d * size_2.size_d),
         )
+
+    @staticmethod
+    def subtract(a: "Size4D", b: "Size4D") -> "Size4D":
+        list_a, list_b = a.to_list(), b.to_list()
+        sub = False
+        for i in range(4):
+            if list_a[i] != list_b[i]:
+                if sub:
+                    raise ValueError("Cannot subtract")
+                sub = True
+                list_a[i] = list_a[i] - list_b[i]
+        return Size4D.from_list(list_a)
+
+    def get_dim_size(self, dim: int) -> int:
+        if dim == 0:
+            return self.size_a
+        elif dim == 1:
+            return self.size_b
+        elif dim == 2:
+            return self.size_c
+        elif dim == 3:
+            return self.size_d
+        else:
+            raise ValueError(f"Invalid dimension: {dim}")
+
+    def set_dim_size(self, dim: int, size: int):
+        if dim == 0:
+            self.size_a = size
+        elif dim == 1:
+            self.size_b = size
+        elif dim == 2:
+            self.size_c = size
+        elif dim == 3:
+            self.size_d = size
+        else:
+            raise ValueError(f"Invalid dimension: {dim}")
 
     def inc_on_dim(self, dim: int):
         if dim == 0:
