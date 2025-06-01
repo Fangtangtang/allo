@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import re
+import os
 from collections import defaultdict
 from dataclasses import dataclass
 import numpy as np
@@ -30,7 +31,7 @@ from ...memory import DTensor
 
 from .utils import get_element_type, device_config_map, Argument, Stream, Config
 from ..aie import map_kernels_to_device_mesh
-from .mapping import GlobalDMATile, GlobalDMANode
+from .mapping import GlobalDMANode
 
 
 @dataclass(frozen=True)

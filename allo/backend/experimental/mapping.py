@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import re
+from dataclasses import dataclass
 from ..._mlir.dialects import func as func_d, allo as allo_d
 from ..._mlir.ir import Type
 from .utils import Argument, parse_kernel_name
@@ -11,22 +12,60 @@ from ...memory import DTensor
 # ############################################################
 # Memory
 # ############################################################
+@dataclass
 class GlobalDMATile:
-    """
-    TODO: coalesced memory access
-        check dtensor.dtype, dtensor.size, dtensor.stride
-    """
+    global_id: int  # parameter idx
+    dtensor_name: str
+    tensor_tile_labels: str
 
-    def __init__(
-        self,
-        dtensor: DTensor,
-        tensor_tile_labels: list[str],
-    ):
-        self.dtensor: DTensor = dtensor
-        self.tensor_tile_labels: list[str] = tensor_tile_labels
+    def __hash__(self):
+        return hash((self.global_id, self.dtensor_name, self.tensor_tile_labels))
+
+    def __eq__(self, other):
+        return (
+            self.global_id == other.global_id
+            and self.dtensor_name == other.dtensor_name
+            and self.tensor_tile_labels == other.tensor_tile_labels
+        )
 
     def __str__(self):
-        return f"{self.dtensor.name}: {self.tensor_tile_labels}"
+        return f"{self.dtensor_name} ({self.tensor_tile_labels})"
+
+    def __repr__(self):
+        return f"{self.dtensor_name} ({self.tensor_tile_labels})"
+
+
+class DMATileGroup:
+    """
+    DMA tiles -> PEs (functions) using the same DMA tile.
+    """
+
+    def __init__(self):
+        self.dma_tile_to_pes: dict[GlobalDMATile, list[str]] = {}
+
+    def add_tile(self, tile: GlobalDMATile, pe: str):
+        if tile not in self.dma_tile_to_pes:
+            self.dma_tile_to_pes[tile] = []
+        self.dma_tile_to_pes[tile].append(pe)
+
+    def print(self):
+        for tile, pes in self.dma_tile_to_pes.items():
+            print(f"{tile}: {pes}")
+
+
+class OrderedDMATileGroup:
+    def __init__(self):
+        self.order_tag_to_tiles: dict[str, DMATileGroup] = {}
+
+    def add_tile(self, tile: GlobalDMATile, order_tag: str, pe: str):
+        if order_tag not in self.order_tag_to_tiles:
+            self.order_tag_to_tiles[order_tag] = DMATileGroup()
+        self.order_tag_to_tiles[order_tag].add_tile(tile, pe)
+
+    def print(self):
+        for order_tag, tiles in self.order_tag_to_tiles.items():
+            print(f"<<<<< {order_tag} >>>>>")
+            tiles.print()
 
 
 class GlobalDMANode:
@@ -51,7 +90,7 @@ class VirtualNode:
     def __init__(self, func: func_d.FuncOp):
         self.func_name: str = func.attributes["sym_name"].value
         self.func: func_d.FuncOp = func
-        # global <-> PE: global argument index -> (stream type, tile name)
+        # global <-> PE
         self.global_inputs: list[GlobalDMATile] = []
         self.global_outputs: list[GlobalDMATile] = []
         # inter-PE: input/output node name -> (stream type, stream name)
@@ -61,11 +100,19 @@ class VirtualNode:
             r"func\.func\s+@[\w\d_]+(\s*\()", r"func.func\1", str(self.func.operation)
         )
 
-    def add_global_input(self, dtensor: DTensor, indexes):
-        self.global_inputs.append(GlobalDMATile(dtensor, [dtensor.PE_tile_id_to_tensor_tile_id(indexes)]))
+    def add_global_input(self, global_id: int, dtensor: DTensor, indexes):
+        self.global_inputs.append(
+            GlobalDMATile(
+                global_id, dtensor.name, dtensor.PE_tile_id_to_tensor_tile_id(indexes)
+            )
+        )
 
-    def add_global_output(self, dtensor: DTensor, indexes):
-        self.global_outputs.append(GlobalDMATile(dtensor, [dtensor.PE_tile_id_to_tensor_tile_id(indexes)]))
+    def add_global_output(self, global_id: int, dtensor: DTensor, indexes):
+        self.global_outputs.append(
+            GlobalDMATile(
+                global_id, dtensor.name, dtensor.PE_tile_id_to_tensor_tile_id(indexes)
+            )
+        )
 
     def add_input(self, name: str, input_type: Type, src: str):
         self.input_streams[src] = (input_type, name)
@@ -97,19 +144,14 @@ class CollocatedBaseNode:
         self.name = name
         self.execution_queue: list[set["CollocatedBaseNode"]] = []
         # TODO: global io for collocated nodes
-        # global <-> PE: global argument index -> (stream type, tile name)
-        self.global_inputs: list[GlobalDMATile] = []
-        self.global_outputs: list[GlobalDMATile] = []
+        # global <-> PE: a list corresponding to the execution queue,
+        #               each element is a dict mapping CollocatedBaseNode id to a list of GlobalDMATile
+        self.global_inputs: list[dict[int, list[GlobalDMATile]]] = []
+        self.global_outputs: list[dict[int, list[GlobalDMATile]]] = []
         # input/output node id -> edge stream type
         # fixme: may conflict when having multiple input/output corresponding to the same node
         self.input_streams: dict[int, tuple[Type, str]] = {}
         self.output_streams: dict[int, tuple[Type, str]] = {}
-
-    def add_global_input(self, dma_tile: GlobalDMATile):
-        self.global_inputs.append(dma_tile)
-
-    def add_global_output(self, dma_tile: GlobalDMATile):
-        self.global_outputs.append(dma_tile)
 
     def add_input(self, node_id: int, input_type: Type, stream_name: str):
         self.input_streams[node_id] = (input_type, stream_name)
@@ -127,10 +169,14 @@ class CollocatedInitialNode(CollocatedBaseNode):
         super().__init__(v_node.func_name)
         self.v_node = v_node
         self.execution_queue.append({self})
+        self.global_inputs.append({self.id: v_node.global_inputs})
+        self.global_outputs.append({self.id: v_node.global_outputs})
 
 
 class CollocatedNode(CollocatedBaseNode):
+    # TODO: to be implemented
     def __init__(self):
+        raise NotImplementedError("CollocatedNode is not fully implemented")
         super().__init__(f"collocated_{len(CollocatedBaseNode.node_list)}")
 
     @staticmethod
@@ -182,11 +228,11 @@ class ComputationGraph:
                     continue
                 if is_input:
                     self.nodes[func_name].add_global_input(
-                        argument.dtensor, indexes
+                        idx, argument.dtensor, indexes
                     )
                 else:
                     self.nodes[func_name].add_global_output(
-                        argument.dtensor, indexes
+                        idx, argument.dtensor, indexes
                     )
         # construct edges
         for func_name, streams in stream_info.items():
@@ -286,11 +332,6 @@ class ComputationGraph:
             self.collocated_nodes[node.func_name] = initial_node
         # connect initial nodes
         for node in self.nodes.values():
-            # global
-            for global_input in node.global_inputs:
-                self.collocated_nodes[node.func_name].add_global_input(global_input)
-            for global_output in node.global_outputs:
-                self.collocated_nodes[node.func_name].add_global_output(global_output)
             # stream
             for src_name, (input_type, input_stream_name) in node.input_streams.items():
                 self.collocated_nodes[node.func_name].add_input(
@@ -343,6 +384,27 @@ class ComputationGraph:
     # ------------------------------------------------------------
     # Graph Information
     # ------------------------------------------------------------
+    def get_node_global_io(
+        self,
+    ) -> tuple[
+        dict[str, list[list[GlobalDMATile]]], dict[str, list[list[GlobalDMATile]]]
+    ]:
+        # TODO
+        global_in: dict[str, list[list[GlobalDMATile]]] = {}
+        global_out: dict[str, list[list[GlobalDMATile]]] = {}
+        for name, node in self.collocated_nodes.items():
+            global_in[name] = list()
+            global_out[name] = list()
+            assert (
+                len(node.global_inputs) == 1
+                and len(node.global_inputs[0]) == 1
+                and len(node.global_outputs) == 1
+                and len(node.global_outputs[0]) == 1
+            ), "To be implemented"
+            global_in[name].append(list(node.global_inputs[0].values())[0])
+            global_out[name].append(list(node.global_outputs[0].values())[0])
+        return global_in, global_out
+
     def get_node_dependencies(self) -> dict[str, set[str]]:
         dependencies: dict[str, set[str]] = {}
         for name, node in self.collocated_nodes.items():

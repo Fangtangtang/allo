@@ -28,7 +28,7 @@ from .utils import (
     read_tensor_from_file,
     codegen_host,
 )
-from .mapping import ComputationGraph
+from .mapping import ComputationGraph, GlobalDMATile, DMATileGroup, OrderedDMATileGroup
 
 
 class AIE_MLIRModule:
@@ -146,10 +146,8 @@ class AIE_MLIRModule:
             raise ValueError(
                 f"Device {device_type} has only {tile_num} tiles, but {len(self.virtual_computation_graph.collocated_nodes)} collocated nodes."
             )
-        # global DTensor tile -> functions that use the tile
-        # global_in, global_out = self.virtual_computation_graph.get_global_io_tile2func(
-        #     self.global_inputs, self.global_outputs
-        # )
+        # global inputs/outputs
+        global_in, global_out = self.virtual_computation_graph.get_node_global_io()
         # manage the order to avoid deadlocks
         dependencies = self.virtual_computation_graph.get_node_dependencies()
         node_order_tag: dict[str, int] = {}
@@ -166,8 +164,49 @@ class AIE_MLIRModule:
                     if node in deps:
                         deps.remove(node)
             tag += 1
-        # print("\t", global_in, "\n\t", global_out, "\n\t", node_order_tag)
-        return node_order_tag
+
+        if os.getenv("VERBOSE") == "1":
+            for func_name, global_io in global_in.items():
+                print(func_name, ", ".join([str(dma_tile) for dma_tile in global_io]))
+            print()
+            for func_name, global_io in global_out.items():
+                print(func_name, ", ".join([str(dma_tile) for dma_tile in global_io]))
+            print(node_order_tag)
+
+        # parameter id -> (order_tag -> (DMA Tile -> related PEs))
+        # TODO: better data structure
+        global_in_tile_to_func: dict[int, OrderedDMATileGroup] = {
+            i: OrderedDMATileGroup() for i in self.global_inputs.keys()
+        }
+        global_out_tile_to_func: dict[int, OrderedDMATileGroup] = {
+            i: OrderedDMATileGroup() for i in self.global_outputs.keys()
+        }
+        for func_name, io_info in global_in.items():
+            outer_tag = node_order_tag[func_name]
+            for i, dma_tile in enumerate(io_info):
+                inner_tag = f"{outer_tag}-{i}"
+                for tile_ in dma_tile:
+                    global_in_tile_to_func[tile_.global_id].add_tile(
+                        tile_, inner_tag, func_name
+                    )
+        for func_name, io_info in global_out.items():
+            outer_tag = node_order_tag[func_name]
+            for i, dma_tile in enumerate(io_info):
+                inner_tag = f"{outer_tag}-{i}"
+                for tile_ in dma_tile:
+                    global_out_tile_to_func[tile_.global_id].add_tile(
+                        tile_, inner_tag, func_name
+                    )
+
+        if os.getenv("VERBOSE") == "1":
+            print("\n<<<<<<< global_in_tile_to_func >>>>>>>>")
+            for i in global_in_tile_to_func.keys():
+                global_in_tile_to_func[i].print()
+            print("\n<<<<<<< global_out_tile_to_func >>>>>>>>")
+            for i in global_out_tile_to_func.keys():
+                global_out_tile_to_func[i].print()
+
+        return global_in, global_out, node_order_tag
 
     def analyze_kernel_parameters(self):
         """
@@ -250,9 +289,7 @@ class AIE_MLIRModule:
             # TODO: update streams and core_func_args
             pass
         # TODO
-        func_order_tag = (
-            self.virtual_to_logical(device_type)
-        )
+        global_in, global_out, func_order_tag = self.virtual_to_logical(device_type)
         # inject external kernels
         use_external_kernels, injected_kernels, include_src = inject_external_kernels(
             self.allo_module, self.top_func_name
