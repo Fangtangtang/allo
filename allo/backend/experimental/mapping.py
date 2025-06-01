@@ -90,20 +90,31 @@ class GlobalDMANode:
         def __repr__(self):
             return self.__str__()
 
+    class IntraConnect:
+        def __init__(self, send_ports: list[int], recv_ports: list[int], offsets: list[int]):
+            self.send_ports = send_ports # send_port_id
+            self.recv_ports = recv_ports # recv_port_id
+            self.offsets = offsets
+
+        def __str__(self):
+            return f"(send:{self.send_ports} <=> recv:{self.recv_ports}, offsets={self.offsets})"
+
+        def __repr__(self):
+            return self.__str__()
+
     def __init__(self, tile_id: int, send_port_num: int, recv_port_num: int):
         self.tile_id = tile_id
         self.max_send = send_port_num
         self.max_recv = recv_port_num
         self.send_ports: list[GlobalDMANode.Port] = []
         self.recv_ports: list[GlobalDMANode.Port] = []
-        # send_port_id -> (recv_port_id, offset)
-        self.intra_connect: dict[int, tuple[int, int]] = {}
+        self.intra_connect: list[GlobalDMANode.IntraConnect] = []
 
     def print(self):
         print(f"<<<<< {self.tile_id} >>>>>")
         print(f"send ports: {self.send_ports}")
         print(f"recv ports: {self.recv_ports}")
-
+        print(f"intra connect: {self.intra_connect}")
 
 # ############################################################
 # Virtual Mapping Base Elements

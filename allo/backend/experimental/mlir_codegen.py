@@ -487,6 +487,7 @@ class CodeGenerator:
             recv_need = 1 if is_input else len(connected_nodes)
             send_size = tile_size if is_input else coalesced_size
             recv_size = coalesced_size if is_input else tile_size
+            tile_total_size = tile_size.get_total_size()
             if os.environ.get("VERBOSE"):
                 print(f"send_need: {send_need}, recv_need: {recv_need}")
             # Attempt to use a new memory tile
@@ -500,6 +501,7 @@ class CodeGenerator:
                     send_port_num=Config.MEM_MAX_SEND,
                     recv_port_num=Config.MEM_MAX_RECV,
                 )
+                send_ports, recv_ports = [], []
                 for i in range(send_need):
                     port = GlobalDMANode.Port(
                         id=len(new_mem_tile.send_ports),
@@ -508,6 +510,7 @@ class CodeGenerator:
                         connected_nodes=connected_nodes[i] if is_input else [],
                     )
                     new_mem_tile.send_ports.append(port)
+                    send_ports.append(port.id)
                 for i in range(recv_need):
                     port = GlobalDMANode.Port(
                         id=len(new_mem_tile.recv_ports),
@@ -516,12 +519,19 @@ class CodeGenerator:
                         connected_nodes=[] if is_input else connected_nodes[i],
                     )
                     new_mem_tile.recv_ports.append(port)
-                tile_total_size = tile_size.get_total_size()
-                # fixme
-                for i in range(send_need):
-                    for j in range(recv_need):
-                        new_mem_tile.intra_connect[i] = (j, tile_total_size * i)
-
+                    recv_ports.append(port.id)
+                new_mem_tile.intra_connect.append(
+                    GlobalDMANode.IntraConnect(
+                        send_ports,
+                        recv_ports,
+                        list(
+                            range(
+                                0, len(connected_nodes) * tile_total_size, tile_total_size
+                            )
+                        ),
+                    )
+                )
+               
                 used_mem_tiles.append(new_mem_tile)
                 new_mem_tile.print()
                 # assign ports
