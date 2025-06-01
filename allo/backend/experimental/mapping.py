@@ -16,23 +16,23 @@ from ...memory import DTensor
 class GlobalDMATile:
     global_id: int  # parameter idx
     dtensor_name: str
-    tensor_tile_labels: str
+    tensor_tile_label: str
 
     def __hash__(self):
-        return hash((self.global_id, self.dtensor_name, self.tensor_tile_labels))
+        return hash((self.global_id, self.dtensor_name, self.tensor_tile_label))
 
     def __eq__(self, other):
         return (
             self.global_id == other.global_id
             and self.dtensor_name == other.dtensor_name
-            and self.tensor_tile_labels == other.tensor_tile_labels
+            and self.tensor_tile_label == other.tensor_tile_label
         )
 
     def __str__(self):
-        return f"{self.dtensor_name} ({self.tensor_tile_labels})"
+        return f"{self.dtensor_name} ({self.tensor_tile_label})"
 
     def __repr__(self):
-        return f"{self.dtensor_name} ({self.tensor_tile_labels})"
+        return f"{self.dtensor_name} ({self.tensor_tile_label})"
 
 
 class DMATileGroup:
@@ -54,6 +54,12 @@ class DMATileGroup:
 
 
 class OrderedDMATileGroup:
+    """
+    order_tag -> DMATileGroup
+
+    `order_tag` is useful to determine the correct (deadlock-free) order of tile transfer.
+    """
+
     def __init__(self):
         self.order_tag_to_tiles: dict[str, DMATileGroup] = {}
 
@@ -69,14 +75,18 @@ class OrderedDMATileGroup:
 
 
 class GlobalDMANode:
+    class Port:
+        def __init__(self, data_shape: list, dtype: str, connected_nodes: list[str]):
+            self.data_shape = data_shape
+            self.dtype = dtype
+            self.connected_nodes = connected_nodes
+
     def __init__(self, tile_id: int, send_port_num: int, recv_port_num: int):
         self.tile_id = tile_id
-        self.send_ports: list[dict[str, GlobalDMATile]] = [
-            {} for _ in range(send_port_num)
-        ]
-        self.recv_ports: list[dict[str, GlobalDMATile]] = [
-            {} for _ in range(recv_port_num)
-        ]
+        self.max_send = send_port_num
+        self.max_recv = recv_port_num
+        self.send_ports: list[GlobalDMANode.Port] = []
+        self.recv_ports: list[GlobalDMANode.Port] = []
 
     def send_data(self, tag: str, data: GlobalDMATile):
         # TODO

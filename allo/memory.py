@@ -3,6 +3,7 @@
 
 import re
 from itertools import product
+from dataclasses import dataclass
 
 
 class Layout:
@@ -121,6 +122,139 @@ class Layout:
         return f"Layout({result})"
 
 
+@dataclass(frozen=True)
+class Offset4D:
+    offset_a: int
+    offset_b: int
+    offset_c: int
+    offset_d: int
+
+    def get_offset(self, dim: int) -> int:
+        if dim == 0:
+            return self.offset_a
+        elif dim == 1:
+            return self.offset_b
+        elif dim == 2:
+            return self.offset_c
+        elif dim == 3:
+            return self.offset_d
+        else:
+            raise ValueError(f"Invalid dimension: {dim}")
+
+    def get_next_offset(self, dim: int) -> "Offset4D":
+        if dim == 0:
+            return Offset4D(
+                self.offset_a + 1, self.offset_b, self.offset_c, self.offset_d
+            )
+        elif dim == 1:
+            return Offset4D(
+                self.offset_a, self.offset_b + 1, self.offset_c, self.offset_d
+            )
+        elif dim == 2:
+            return Offset4D(
+                self.offset_a, self.offset_b, self.offset_c + 1, self.offset_d
+            )
+        elif dim == 3:
+            return Offset4D(
+                self.offset_a, self.offset_b, self.offset_c, self.offset_d + 1
+            )
+        else:
+            raise ValueError(f"Invalid dimension: {dim}")
+
+    def to_list(self) -> list[int]:
+        return [self.offset_a, self.offset_b, self.offset_c, self.offset_d]
+
+    def __eq__(self, other) -> bool:
+        return (
+            self.offset_a == other.offset_a
+            and self.offset_b == other.offset_b
+            and self.offset_c == other.offset_c
+            and self.offset_d == other.offset_d
+        )
+
+    def __hash__(self) -> int:
+        return hash((self.offset_a, self.offset_b, self.offset_c, self.offset_d))
+
+    def __str__(self) -> str:
+        return f"offset4D ({self.offset_a}, {self.offset_b}, {self.offset_c}, {self.offset_d})"
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+
+@dataclass()
+class Size4D:
+    size_a: int
+    size_b: int
+    size_c: int
+    size_d: int
+
+    def inc_on_dim(self, dim: int):
+        if dim == 0:
+            self.size_a += 1
+        elif dim == 1:
+            self.size_b += 1
+        elif dim == 2:
+            self.size_c += 1
+        elif dim == 3:
+            self.size_d += 1
+        else:
+            raise ValueError(f"Invalid dimension: {dim}")
+
+    def to_list(self) -> list[int]:
+        return [self.size_a, self.size_b, self.size_c, self.size_d]
+
+    def __eq__(self, other) -> bool:
+        return (
+            self.size_a == other.size_a
+            and self.size_b == other.size_b
+            and self.size_c == other.size_c
+            and self.size_d == other.size_d
+        )
+
+    def __hash__(self) -> int:
+        return hash((self.size_a, self.size_b, self.size_c, self.size_d))
+
+    def __str__(self) -> str:
+        return f"size4D ({self.size_a}, {self.size_b}, {self.size_c}, {self.size_d})"
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+
+def coalesce_memory_access(offsets: list[Offset4D]) -> dict[Offset4D, Size4D]:
+    """
+    Coalesce memory tileaccess.
+        The default way is sending each tiling separately.
+        But we can try to coalesce some.
+    """
+    access: dict[Offset4D, Size4D] = {offset: Size4D(1, 1, 1, 1) for offset in offsets}
+    coalesce_dim = 3
+    while coalesce_dim >= 0:
+        sorted_offsets = sorted(
+            access.keys(),
+            key=lambda x: (x.offset_a, x.offset_b, x.offset_c, x.offset_d),
+        )
+        coalesed = set()
+        base_offset, base_size = None, None
+        for offset in sorted_offsets:
+            if offset in coalesed:
+                continue
+            if base_offset is None:
+                base_offset, base_size = offset, access[offset]
+            else:
+                base_offset = base_offset.get_next_offset(coalesce_dim)
+                if base_offset in access:
+                    base_size.inc_on_dim(coalesce_dim)
+                    coalesed.add(offset)
+                else:
+                    base_offset, base_size = offset, access[offset]
+        for offset in coalesed:
+            access.pop(offset)
+        coalesce_dim -= 1
+    return access
+
+
 class DTensor:
     """
     Distributed tensor.
@@ -170,19 +304,19 @@ class DTensor:
             return
         self.access_pattern_set = True
         # tensor tile ID -> address offset
-        self.offset_map: dict[str, tuple[int, int, int, int]] = {}
+        self.offset_map: dict[str, Offset4D] = {}
         partition_str = "".join([p[0] for p in self.layout.placement])
         if len(self.shape) == 1:
             if partition_str == "S":
                 for i, key in enumerate(sorted(list(self.global_placement.keys()))):
-                    self.offset_map[key] = (0, 0, i, 0)
+                    self.offset_map[key] = Offset4D(0, 0, i, 0)
                 shard_size = self.shape[0] // self.mapping[0]
                 device_dims = [2]  # partition idx = 2
                 size = [1, 1, self.mapping[0], shard_size]
                 stride = [0, 0, shard_size, 1]
             elif partition_str == "R":
                 for key in self.global_placement.keys():
-                    self.offset_map[key] = (0, 0, 0, 0)
+                    self.offset_map[key] = Offset4D(0, 0, 0, 0)
                 device_dims = []  # no partition
                 size = [1, 1, 1, self.shape[0]]
                 stride = [0, 0, 0, 1]
@@ -193,7 +327,7 @@ class DTensor:
             device_a, device_b = self.layout.get_mapped_device_dim(self.mapping)
             if partition_str == "SS":
                 for i, key in enumerate(sorted(list(self.global_placement.keys()))):
-                    self.offset_map[key] = (i // device_b, i % device_b, 0, 0)
+                    self.offset_map[key] = Offset4D(i // device_b, i % device_b, 0, 0)
                 device_dims = [0, 1]
                 size = [device_a, device_b, tensor_m // device_a, tensor_n // device_b]
                 stride = [
@@ -204,14 +338,14 @@ class DTensor:
                 ]
             elif partition_str == "SR":
                 for i, key in enumerate(sorted(list(self.global_placement.keys()))):
-                    self.offset_map[key] = (0, i % device_a, 0, 0)
+                    self.offset_map[key] = Offset4D(0, i % device_a, 0, 0)
                 # First dim sharded across all devices, second replicated
                 device_dims = [1]
                 size = [1, device_a, tensor_m // device_a, tensor_n]
                 stride = [0, (tensor_m // device_a) * tensor_n, tensor_n, 1]
             elif partition_str == "RS":
                 for i, key in enumerate(sorted(list(self.global_placement.keys()))):
-                    self.offset_map[key] = (0, i % device_b, 0, 0)
+                    self.offset_map[key] = Offset4D(0, i % device_b, 0, 0)
                 # First dim replicated, second sharded across second dim of mesh
                 device_dims = [1]
                 size = [1, device_b, tensor_m, tensor_n // device_b]

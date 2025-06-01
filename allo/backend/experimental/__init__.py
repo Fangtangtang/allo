@@ -129,23 +129,10 @@ class AIE_MLIRModule:
         )
         self.virtual_computation_graph.print_graph()
 
-    def virtual_to_logical(self, device_type: str) -> tuple[
-        dict[int, dict[str, set[str]]],
-        dict[int, dict[str, set[str]]],
-        dict[str, set[str]],
+    def analyze_global_io(self) -> tuple[
+        dict[int, OrderedDMATileGroup],
+        dict[int, OrderedDMATileGroup],
     ]:
-        """
-        Transform the virtual computation graph to logical computation graph.
-        """
-        device_config = device_config_map[device_type]
-        assert device_config is not None, f"Device type {device_type} not supported"
-        tile_num = 1
-        for i in device_config["mesh"]:
-            tile_num *= i
-        if tile_num < len(self.virtual_computation_graph.collocated_nodes):
-            raise ValueError(
-                f"Device {device_type} has only {tile_num} tiles, but {len(self.virtual_computation_graph.collocated_nodes)} collocated nodes."
-            )
         # global inputs/outputs
         global_in, global_out = self.virtual_computation_graph.get_node_global_io()
         # manage the order to avoid deadlocks
@@ -173,8 +160,6 @@ class AIE_MLIRModule:
                 print(func_name, ", ".join([str(dma_tile) for dma_tile in global_io]))
             print(node_order_tag)
 
-        # parameter id -> (order_tag -> (DMA Tile -> related PEs))
-        # TODO: better data structure
         global_in_tile_to_func: dict[int, OrderedDMATileGroup] = {
             i: OrderedDMATileGroup() for i in self.global_inputs.keys()
         }
@@ -206,7 +191,7 @@ class AIE_MLIRModule:
             for i in global_out_tile_to_func.keys():
                 global_out_tile_to_func[i].print()
 
-        return global_in, global_out, node_order_tag
+        return global_in_tile_to_func, global_out_tile_to_func
 
     def analyze_kernel_parameters(self):
         """
@@ -289,7 +274,7 @@ class AIE_MLIRModule:
             # TODO: update streams and core_func_args
             pass
         # TODO
-        global_in, global_out, func_order_tag = self.virtual_to_logical(device_type)
+        global_in_tile_to_func, global_out_tile_to_func = self.analyze_global_io()
         # inject external kernels
         use_external_kernels, injected_kernels, include_src = inject_external_kernels(
             self.allo_module, self.top_func_name
@@ -318,13 +303,12 @@ class AIE_MLIRModule:
             self.core_func_args,
             self.streams,
         )
-        # used_mem_tiles, used_shim_tiles = (
-        #     code_generator.map_global_io_to_physical_tiles(
-        #         global_in_tile_tensor2func,
-        #         global_out_tile_tensor2func,
-        #         func_order_tag,
-        #     )
-        # )
+        used_mem_tiles, used_shim_tiles = (
+            code_generator.map_global_io_to_physical_tiles(
+                global_in_tile_to_func, global_out_tile_to_func
+            )
+        )
+
         self.aie_module = code_generator.aie_codegen_experimental(
             core_func_groups,
             external_funcs,

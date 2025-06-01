@@ -27,11 +27,11 @@ from ..._mlir.ir import InsertionPoint
 
 from ..utils import format_str
 from ..._mlir.dialects import func as allo_func_d
-from ...memory import DTensor
+from ...memory import DTensor, Offset4D, coalesce_memory_access
 
 from .utils import get_element_type, device_config_map, Argument, Stream, Config
 from ..aie import map_kernels_to_device_mesh
-from .mapping import GlobalDMANode
+from .mapping import GlobalDMANode, OrderedDMATileGroup, DMATileGroup
 
 
 @dataclass(frozen=True)
@@ -464,9 +464,8 @@ class CodeGenerator:
 
     def map_global_io_to_physical_tiles(
         self,
-        global_in_tile_tensor2func: dict[int, dict[str, set[str]]],
-        global_out_tile_tensor2func: dict[int, dict[str, set[str]]],
-        func_order_tag: dict[str, int],
+        global_in_tile_to_func: dict[int, OrderedDMATileGroup],
+        global_out_tile_to_func: dict[int, OrderedDMATileGroup],
     ) -> tuple[list[GlobalDMANode], list[GlobalDMANode]]:
 
         # ------------------------------------------------------------
@@ -477,20 +476,22 @@ class CodeGenerator:
         used_shim_tiles: list[GlobalDMANode] = []
         # ------------------------------------------------------------
 
-        def assign_mem_tile(send_need, recv_need) -> GlobalDMANode:
+        def assign_mem_tile(
+            offset_map: dict[Offset4D, DMATensorTile], is_input: bool
+        ) -> GlobalDMANode:
             # Attempt to use a new memory tile
-            if (
-                len(used_mem_tiles) < MAX_MEM_TILES
-                and send_need <= Config.MEM_MAX_SEND
-                and recv_need <= Config.MEM_MAX_RECV
-            ):
-                new_mem_tile = GlobalDMANode(
-                    tile_id=len(used_mem_tiles),
-                    send_port_num=Config.MEM_MAX_SEND,
-                    recv_port_num=Config.MEM_MAX_RECV,
-                )
-                used_mem_tiles.append(new_mem_tile)
-                return new_mem_tile
+            # if (
+            #     len(used_mem_tiles) < MAX_MEM_TILES
+            #     and send_need <= Config.MEM_MAX_SEND
+            #     and recv_need <= Config.MEM_MAX_RECV
+            # ):
+            #     new_mem_tile = GlobalDMANode(
+            #         tile_id=len(used_mem_tiles),
+            #         send_port_num=Config.MEM_MAX_SEND,
+            #         recv_port_num=Config.MEM_MAX_RECV,
+            #     )
+            #     used_mem_tiles.append(new_mem_tile)
+            #     return new_mem_tile
             # Attempt to use an existing memory tile
             for mem_tile in used_mem_tiles:
 
@@ -505,53 +506,47 @@ class CodeGenerator:
             pass
 
         def map_dtensor_to_physical_tiles(
-            dtensor: DTensor, tile_to_funcs: dict[str, set[str]], is_input: bool
+            dtensor: DTensor, ordered_tile_group: OrderedDMATileGroup, is_input: bool
         ):
-            device_dims, size, stride = dtensor.get_access_pattern()
-            tensor_tiles = sorted(list(dtensor.global_placement.keys()))
-            # Different ports for different tensor tiles.
-            # Each port can have multiple destinations.
-            mem_send_need = len(tensor_tiles) if is_input else 1
-            mem_recv_need = 1 if is_input else len(tensor_tiles)
-            mem_tile = assign_mem_tile(mem_send_need, mem_recv_need)
-            if mem_tile is not None:
-                # send total DTensor in one go
-                shim_send_need = 1
-                shim_recv_need = 1
-                shim_tile = assign_shim_tile(shim_send_need, shim_recv_need)
-                if shim_tile is not None:
-                    tensor_tile = DMATensorTile(
-                        dtensor_tile_id=0,
-                        shim_id=shim_tile.tile_id,
-                        mem_id=mem_tile.tile_id,
-                        tensor_tile_labels=tensor_tiles,
-                        offset=[0, 0, 0, 0],
-                        size=size,
-                        stride=stride,
+            def parse_tag(tag: str) -> tuple[int, int]:
+                outer_tag, inner_tag = tag.split("-")
+                return int(outer_tag), int(inner_tag)
+
+            # Tags sorted in lexicographic order are used to preserve the data transfer sequence.
+            # tiles in DMATileGroup with the same tage can be sent in parallel.
+            for tag in sorted(
+                list(ordered_tile_group.order_tag_to_tiles.keys()), key=parse_tag
+            ):
+                dma_tile_group: DMATileGroup = ordered_tile_group.order_tag_to_tiles[
+                    tag
+                ]
+                offset_map: dict[Offset4D, DMATensorTile] = {}
+                for dma_tile in dma_tile_group.dma_tile_to_pes.keys():
+                    offset_map[dtensor.offset_map[dma_tile.tensor_tile_label]] = (
+                        dma_tile
                     )
-
-            # mem tile
-            mem_send_need = len(tensor_tiles) if is_input else 1
-            mem_recv_need = 1 if is_input else len(tensor_tiles)
-
-            # TODO
+                coalesced_access = coalesce_memory_access(list(offset_map.keys()))
+                if os.environ.get("VERBOSE"):
+                    print()
+                    print(offset_map)
+                    print("coalesced_access:", coalesced_access)
+                # mem_tile = assign_mem_tile(offset_map, is_input)
             pass
 
-        for input_idx, tile_to_funcs in global_in_tile_tensor2func.items():
+        for input_idx, ordered_tile_group in global_in_tile_to_func.items():
             map_dtensor_to_physical_tiles(
                 self.global_inputs[input_idx],
-                tile_to_funcs,
+                ordered_tile_group,
                 is_input=True,
             )
-        for output_idx, tile_to_funcs in global_out_tile_tensor2func.items():
+        for output_idx, ordered_tile_group in global_out_tile_to_func.items():
             map_dtensor_to_physical_tiles(
                 self.global_outputs[output_idx],
-                tile_to_funcs,
+                ordered_tile_group,
                 is_input=False,
             )
 
         return used_mem_tiles, used_shim_tiles
-        # TODO
 
     # ############################################################
     # AIE Code Generation
