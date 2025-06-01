@@ -27,7 +27,7 @@ from ..._mlir.ir import InsertionPoint
 
 from ..utils import format_str
 from ..._mlir.dialects import func as allo_func_d
-from ...memory import DTensor, Offset4D, coalesce_memory_access
+from ...memory import DTensor, Offset4D, Size4D, coalesce_memory_access
 
 from .utils import get_element_type, device_config_map, Argument, Stream, Config
 from ..aie import map_kernels_to_device_mesh
@@ -477,21 +477,56 @@ class CodeGenerator:
         # ------------------------------------------------------------
 
         def assign_mem_tile(
-            offset_map: dict[Offset4D, DMATensorTile], is_input: bool
+            dtype: str,
+            connected_nodes: list[list[str]],
+            is_input: bool,
+            coalesced_size: Size4D,
+            tile_size: Size4D,
         ) -> GlobalDMANode:
+            send_need = len(connected_nodes) if is_input else 1
+            recv_need = 1 if is_input else len(connected_nodes)
+            send_size = tile_size if is_input else coalesced_size
+            recv_size = coalesced_size if is_input else tile_size
+            if os.environ.get("VERBOSE"):
+                print(f"send_need: {send_need}, recv_need: {recv_need}")
             # Attempt to use a new memory tile
-            # if (
-            #     len(used_mem_tiles) < MAX_MEM_TILES
-            #     and send_need <= Config.MEM_MAX_SEND
-            #     and recv_need <= Config.MEM_MAX_RECV
-            # ):
-            #     new_mem_tile = GlobalDMANode(
-            #         tile_id=len(used_mem_tiles),
-            #         send_port_num=Config.MEM_MAX_SEND,
-            #         recv_port_num=Config.MEM_MAX_RECV,
-            #     )
-            #     used_mem_tiles.append(new_mem_tile)
-            #     return new_mem_tile
+            if (
+                len(used_mem_tiles) < MAX_MEM_TILES
+                and send_need <= Config.MEM_MAX_SEND
+                and recv_need <= Config.MEM_MAX_RECV
+            ):
+                new_mem_tile = GlobalDMANode(
+                    tile_id=len(used_mem_tiles),
+                    send_port_num=Config.MEM_MAX_SEND,
+                    recv_port_num=Config.MEM_MAX_RECV,
+                )
+                for i in range(send_need):
+                    port = GlobalDMANode.Port(
+                        id=len(new_mem_tile.send_ports),
+                        data_shape=send_size,
+                        dtype=dtype,
+                        connected_nodes=connected_nodes[i] if is_input else [],
+                    )
+                    new_mem_tile.send_ports.append(port)
+                for i in range(recv_need):
+                    port = GlobalDMANode.Port(
+                        id=len(new_mem_tile.recv_ports),
+                        data_shape=recv_size,
+                        dtype=dtype,
+                        connected_nodes=[] if is_input else connected_nodes[i],
+                    )
+                    new_mem_tile.recv_ports.append(port)
+                tile_total_size = tile_size.get_total_size()
+                # fixme
+                for i in range(send_need):
+                    for j in range(recv_need):
+                        new_mem_tile.intra_connect[i] = (j, tile_total_size * i)
+
+                used_mem_tiles.append(new_mem_tile)
+                new_mem_tile.print()
+                # assign ports
+
+                return new_mem_tile
             # Attempt to use an existing memory tile
             for mem_tile in used_mem_tiles:
 
@@ -512,6 +547,11 @@ class CodeGenerator:
                 outer_tag, inner_tag = tag.split("-")
                 return int(outer_tag), int(inner_tag)
 
+            tile_dtype = dtensor.dtype
+            tile_shape = dtensor.size
+            for i in dtensor.shared_dims:
+                tile_shape[i] = 1
+            tile_size = Size4D.from_list(tile_shape)
             # Tags sorted in lexicographic order are used to preserve the data transfer sequence.
             # tiles in DMATileGroup with the same tage can be sent in parallel.
             for tag in sorted(
@@ -525,13 +565,30 @@ class CodeGenerator:
                     offset_map[dtensor.offset_map[dma_tile.tensor_tile_label]] = (
                         dma_tile
                     )
-                coalesced_access = coalesce_memory_access(list(offset_map.keys()))
+                coalesced_access, coalesce_info = coalesce_memory_access(
+                    list(offset_map.keys())
+                )
                 if os.environ.get("VERBOSE"):
                     print()
                     print(offset_map)
-                    print("coalesced_access:", coalesced_access)
-                # mem_tile = assign_mem_tile(offset_map, is_input)
-            pass
+                    print("access:", coalesced_access)
+                    print("=== coalesce_info ===", coalesce_info)
+                for offset, size in coalesced_access.items():
+                    total_size = size.get_total_size()
+                    coalesced_size = Size4D.coalesce(size, tile_size)
+                    connected_nodes: list[list[str]] = []
+                    for node in coalesce_info[offset]:
+                        connected_nodes.append(
+                            dma_tile_group.dma_tile_to_pes[offset_map[node]]
+                        )
+
+                    assign_mem_tile(
+                        tile_dtype, connected_nodes, is_input, coalesced_size, tile_size
+                    )
+                    # if mem_tile is not None:
+
+                    #     # mem_tile = assign_mem_tile(offset_map, is_input)
+                    #     pass
 
         for input_idx, ordered_tile_group in global_in_tile_to_func.items():
             map_dtensor_to_physical_tiles(

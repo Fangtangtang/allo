@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from ..._mlir.dialects import func as func_d, allo as allo_d
 from ..._mlir.ir import Type
 from .utils import Argument, parse_kernel_name
-from ...memory import DTensor
+from ...memory import DTensor, Size4D, Offset4D
 
 
 # ############################################################
@@ -76,10 +76,19 @@ class OrderedDMATileGroup:
 
 class GlobalDMANode:
     class Port:
-        def __init__(self, data_shape: list, dtype: str, connected_nodes: list[str]):
+        def __init__(
+            self, id: int, data_shape: Size4D, dtype: str, connected_nodes: list[str]
+        ):
+            self.id = id
             self.data_shape = data_shape
             self.dtype = dtype
             self.connected_nodes = connected_nodes
+
+        def __str__(self):
+            return f"Port(data_shape={self.data_shape}, dtype={self.dtype}, connected_nodes={self.connected_nodes})"
+
+        def __repr__(self):
+            return self.__str__()
 
     def __init__(self, tile_id: int, send_port_num: int, recv_port_num: int):
         self.tile_id = tile_id
@@ -87,10 +96,13 @@ class GlobalDMANode:
         self.max_recv = recv_port_num
         self.send_ports: list[GlobalDMANode.Port] = []
         self.recv_ports: list[GlobalDMANode.Port] = []
+        # send_port_id -> (recv_port_id, offset)
+        self.intra_connect: dict[int, tuple[int, int]] = {}
 
-    def send_data(self, tag: str, data: GlobalDMATile):
-        # TODO
-        pass
+    def print(self):
+        print(f"<<<<< {self.tile_id} >>>>>")
+        print(f"send ports: {self.send_ports}")
+        print(f"recv ports: {self.recv_ports}")
 
 
 # ############################################################

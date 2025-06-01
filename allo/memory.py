@@ -182,12 +182,28 @@ class Offset4D:
         return self.__str__()
 
 
-@dataclass()
 class Size4D:
-    size_a: int
-    size_b: int
-    size_c: int
-    size_d: int
+    def __init__(self, size_a: int, size_b: int, size_c: int, size_d: int):
+        self.size_a = size_a
+        self.size_b = size_b
+        self.size_c = size_c
+        self.size_d = size_d
+
+    @classmethod
+    def from_list(cls, size_list: list[int]) -> "Size4D":
+        assert (
+            len(size_list) == 4
+        ), f"Size4D must have 4 dimensions, but got {len(size_list)}"
+        return cls(*size_list)
+
+    @staticmethod
+    def coalesce(size_1: "Size4D", size_2: "Size4D") -> "Size4D":
+        return Size4D(
+            (size_1.size_a * size_2.size_a),
+            (size_1.size_b * size_2.size_b),
+            (size_1.size_c * size_2.size_c),
+            (size_1.size_d * size_2.size_d),
+        )
 
     def inc_on_dim(self, dim: int):
         if dim == 0:
@@ -200,6 +216,9 @@ class Size4D:
             self.size_d += 1
         else:
             raise ValueError(f"Invalid dimension: {dim}")
+
+    def get_total_size(self) -> int:
+        return self.size_a * self.size_b * self.size_c * self.size_d
 
     def to_list(self) -> list[int]:
         return [self.size_a, self.size_b, self.size_c, self.size_d]
@@ -222,13 +241,18 @@ class Size4D:
         return self.__str__()
 
 
-def coalesce_memory_access(offsets: list[Offset4D]) -> dict[Offset4D, Size4D]:
+def coalesce_memory_access(
+    offsets: list[Offset4D],
+) -> tuple[dict[Offset4D, Size4D], dict[Offset4D, list[Offset4D]]]:
     """
     Coalesce memory tileaccess.
         The default way is sending each tiling separately.
         But we can try to coalesce some.
     """
     access: dict[Offset4D, Size4D] = {offset: Size4D(1, 1, 1, 1) for offset in offsets}
+    coalesce_info: dict[Offset4D, list[Offset4D]] = {
+        offset: [offset] for offset in offsets
+    }
     coalesce_dim = 3
     while coalesce_dim >= 0:
         sorted_offsets = sorted(
@@ -236,23 +260,25 @@ def coalesce_memory_access(offsets: list[Offset4D]) -> dict[Offset4D, Size4D]:
             key=lambda x: (x.offset_a, x.offset_b, x.offset_c, x.offset_d),
         )
         coalesed = set()
-        base_offset, base_size = None, None
+        base_offset, inc_offset, base_size = None, None, None
         for offset in sorted_offsets:
             if offset in coalesed:
                 continue
             if base_offset is None:
-                base_offset, base_size = offset, access[offset]
+                base_offset, inc_offset, base_size = offset, offset, access[offset]
             else:
-                base_offset = base_offset.get_next_offset(coalesce_dim)
-                if base_offset in access:
+                inc_offset = inc_offset.get_next_offset(coalesce_dim)
+                if inc_offset in access:
                     base_size.inc_on_dim(coalesce_dim)
                     coalesed.add(offset)
+                    coalesce_info[base_offset].extend(coalesce_info[inc_offset])
                 else:
-                    base_offset, base_size = offset, access[offset]
+                    base_offset, inc_offset, base_size = offset, offset, access[offset]
         for offset in coalesed:
             access.pop(offset)
+            coalesce_info.pop(offset)
         coalesce_dim -= 1
-    return access
+    return access, coalesce_info
 
 
 class DTensor:
