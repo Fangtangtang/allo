@@ -31,7 +31,7 @@ from ...memory import DTensor, Offset4D, Size4D, coalesce_memory_access
 
 from .utils import get_element_type, device_config_map, Argument, Stream, Config
 from ..aie import map_kernels_to_device_mesh
-from .mapping import GlobalDMANode, OrderedDMATileGroup, DMATileGroup
+from .mapping import GlobalDMANode, OrderedDMATileGroup, DMATileGroup, ComputationGraph
 
 
 @dataclass(frozen=True)
@@ -207,6 +207,7 @@ class CodeGenerator:
         top_function: allo_func_d.FuncOp,
         core_func_args: dict[str, dict[int, tuple[Argument, bool]]],
         streams: dict[str, Stream],
+        virtual_computation_graph: ComputationGraph = None,
     ):
         self.device_type = device_type
         self.device_config = device_config_map[device_type]
@@ -217,6 +218,7 @@ class CodeGenerator:
         self.top_function = top_function
         self.core_func_args = core_func_args
         self.streams = streams
+        self.virtual_computation_graph: ComputationGraph = virtual_computation_graph
 
         self.tile_map: dict[str, aie_d.TileOp] = {}
         self.fifo_map: dict[str, aie_d.object_fifo] = {}
@@ -489,7 +491,9 @@ class CodeGenerator:
         list[GlobalDMANode],
         dict[str, list["CodeGenerator.GlobalIODMA"]],
     ]:
-
+        """
+        Map the global io to physical tiles. (memory/shim tiles in AIE)
+        """
         # ------------------------------------------------------------
         MAX_MEM_TILES = self.device_config["mem_tile_num"]
         MAX_SHIM_TILES = self.device_config["shim_tile_num"]
@@ -526,7 +530,7 @@ class CodeGenerator:
                 and recv_need <= Config.MEM_MAX_RECV
             ):
                 assigned_mem_tile = GlobalDMANode(
-                    tile_name=f"mem_tile_{len(self.used_mem_tiles)}",
+                    tile_name=f"{len(self.used_mem_tiles)}_mem_tile",
                     send_port_num=Config.MEM_MAX_SEND,
                     recv_port_num=Config.MEM_MAX_RECV,
                 )
@@ -595,7 +599,7 @@ class CodeGenerator:
             # Attempt to use a new shim tile
             if len(self.used_shim_tiles) < MAX_SHIM_TILES:
                 assigned_shim_tile = GlobalDMANode(
-                    tile_name=f"shim_tile_{len(self.used_shim_tiles)}",
+                    tile_name=f"{len(self.used_shim_tiles)}_shim_tile",
                     send_port_num=Config.SHIM_MAX_SEND,
                     recv_port_num=Config.SHIM_MAX_RECV,
                 )
@@ -789,20 +793,129 @@ class CodeGenerator:
             print(self.global_io_dma)
             print("########################################################\n\n")
 
+    def map_core_func_to_physical_tiles(self) -> dict[str, tuple[int, int]]:
+        """
+        Map the core functions to physical tiles.
+        TODO:
+            - mapping strategies should be selected by cost
+            - careful with nodes with multiple inputs/outputs
+              (if ports are exceeded, we should try to assign them to adjacent compute tiles to share local memory)
+        """
+        core_fucn_mapping: dict[str, tuple[int, int]] = {}
+        mesh_shape = self.device_config["mesh"]
+        max_row, max_col = mesh_shape
+        tile_used = np.zeros(mesh_shape, dtype=bool)
+        # connected nodes are grouped into chains when COMPUTE_TILE_WITH_SHARED_MEMORY == 2
+        if Config.COMPUTE_TILE_WITH_SHARED_MEMORY == 2:
+
+            class NodeDeque:
+                def __init__(self, node_name: str):
+                    self.nodes: list[str] = [node_name]
+
+                @staticmethod
+                def connect(
+                    node_1: str,
+                    node_2: str,
+                    node_deque1: "NodeDeque",
+                    node_deque2: "NodeDeque",
+                ):
+                    if node_2 == node_deque2.nodes[-1]:
+                        node_1, node_2 = node_2, node_1
+                        node_deque1, node_deque2 = node_deque2, node_deque1
+                    if node_1 == node_deque1.nodes[0]:
+                        node_deque1.nodes.reverse()
+                    if node_2 == node_deque2.nodes[-1]:
+                        node_deque2.nodes.reverse()
+                    node_deque1.nodes.extend(node_deque2.nodes)
+                    return node_deque1
+
+                def __str__(self):
+                    return f"NodeDeque({self.nodes})"
+
+                def __repr__(self):
+                    return self.__str__()
+
+            connection_info = self.virtual_computation_graph.get_connection()
+            connection_info.sort(key=lambda x: x[0], reverse=True)
+            grouped_nodes: dict[str, NodeDeque] = {
+                name: NodeDeque(name)
+                for name in self.virtual_computation_graph.collocated_nodes.keys()
+            }
+            for connection in connection_info:
+                grouped_a, grouped_b = (
+                    grouped_nodes[connection[1]],
+                    grouped_nodes[connection[2]],
+                )
+                if grouped_a is None or grouped_b is None:
+                    continue
+                new_group = NodeDeque.connect(
+                    connection[1], connection[2], grouped_a, grouped_b
+                )
+                grouped_nodes.pop(connection[1])
+                grouped_nodes.pop(connection[2])
+                grouped_nodes[new_group.nodes[0]] = new_group
+                grouped_nodes[new_group.nodes[-1]] = new_group
+            # TODO: map nodes according to global io
+            # heuristic
+            traverse_idx = 0
+            sorted_values = [grouped_nodes[key] for key in sorted(grouped_nodes.keys())]
+            assigned = set()
+            for deque in sorted_values:
+                if deque in assigned:
+                    continue
+                assigned.add(deque)
+                head = deque.nodes[0]
+                while tile_used[traverse_idx // max_col][traverse_idx % max_col]:
+                    traverse_idx += 1
+                    if traverse_idx >= max_row * max_col:
+                        raise ValueError("Too many nodes")
+                col_idx = traverse_idx % max_col
+                row_idx = traverse_idx // max_col
+                core_fucn_mapping[head] = (row_idx, col_idx)
+                tile_used[row_idx][col_idx] = True
+                reverse = False
+                for node in deque.nodes[1:]:
+                    while tile_used[row_idx][col_idx]:
+                        if reverse:
+                            row_idx -= 1
+                            if row_idx < 0:
+                                row_idx = 0
+                                col_idx += 1
+                                reverse = not reverse
+                        else:
+                            row_idx += 1
+                            if row_idx >= max_row:
+                                row_idx = max_row - 1
+                                col_idx += 1
+                                reverse = not reverse
+                    core_fucn_mapping[node] = (row_idx, col_idx)
+                    tile_used[row_idx][col_idx] = True
+            if os.environ.get("VERBOSE"):
+                print("<<< Mapping >>>")
+                for node, (row, col) in core_fucn_mapping.items():
+                    print(f"{node}: ({row}, {col})")
+                print()
+            return core_fucn_mapping
+        else:
+            raise ValueError("To be implemented")
+
     # ############################################################
     # AIE Code Generation
     # ############################################################
     def aie_codegen_experimental(
         self,
-        core_func_groups: dict[str, list[allo_func_d.FuncOp]],
+        core_funcs: list[allo_func_d.FuncOp],
         external_funcs: list[allo_func_d.FuncOp],
         use_external_kernels: dict[str, bool],
+        global_in_tile_to_func: dict[int, OrderedDMATileGroup],
+        global_out_tile_to_func: dict[int, OrderedDMATileGroup],
     ) -> aie_ir.Module:
-        assert (
-            self.used_mem_tiles is not None
-            and self.used_shim_tiles is not None
-            and self.global_io_dma is not None
+        # mapping to physical/logical
+        # TODO: co-designed mapping to different types of tiles
+        self.map_global_io_to_physical_tiles(
+            global_in_tile_to_func, global_out_tile_to_func
         )
+        core_function_mapping = self.map_core_func_to_physical_tiles()
         # fixme: maybe better to resolve this using IR constructor
         for func in external_funcs:
             self.external_functions += format_str(str(func), indent=4)
@@ -838,10 +951,22 @@ class CodeGenerator:
             assert not end_op is None
 
             with aie_ir.InsertionPoint(end_op):
+                # shim tiles
+                for i, shim_tile in enumerate(self.used_shim_tiles):
+                    self.tile_map[shim_tile.tile_name] = aie_d.TileOp(col=i, row=0)
                 # mem tiles
-                pass
+                for i, mem_tile in enumerate(self.used_mem_tiles):
+                    self.tile_map[mem_tile.tile_name] = aie_d.TileOp(col=i, row=1)
+                # compute tiles
+                for func_name, (row, col) in core_function_mapping.items():
+                    self.tile_map[func_name] = aie_d.TileOp(col=col, row=row + 2)
+                # define fifos and link them
+                # TODO
 
-        pass
+                # compute logic on each compute tile
+
+                # runtime sequence
+        return self.aie_module
 
     def aie_codegen(
         self,

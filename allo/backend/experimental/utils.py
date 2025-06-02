@@ -38,6 +38,8 @@ class Config:
     MEM_MAX_RECV = 6
     SHIM_MAX_SEND = 2
     SHIM_MAX_RECV = 2
+    # fixme: can be optimized
+    COMPUTE_TILE_WITH_SHARED_MEMORY = 2
 
 
 device_config_map = {
@@ -208,7 +210,7 @@ def parse_kernel_name(name: str):
 
 def inject_external_kernels(
     module: allo_ir.ir.Module, top_function_name: str
-) -> tuple[dict[str, bool], dict]:
+) -> tuple[dict[str, bool], dict[str, tuple[str, str]], set[str]]:
     """
     Inject external kernels for compute cores.
 
@@ -224,8 +226,8 @@ def inject_external_kernels(
                             strings (C++ code and preprocessor defines).
         - include_src: A set of C++ include directives needed for the external kernels.
     """
-    use_external_kernels = {}
-    injected_kernels: dict = {}
+    use_external_kernels: dict[str, bool] = {}
+    injected_kernels: dict[str, tuple[str, str]] = {}
     include_src: set[str] = set()
 
     with module.context, allo_ir.ir.Location.unknown():
@@ -315,6 +317,37 @@ def get_df_kernels(module: allo_ir.ir.Module) -> list[allo_func_d.FuncOp]:
         if isinstance(func, allo_func_d.FuncOp) and "df.kernel" in func.attributes:
             df_kernels.append(func)
     return df_kernels
+
+
+def classify_aie_functions_experimental(
+    module: allo_ir.ir.Module, top_function_name: str
+) -> tuple[allo_func_d.FuncOp, list[allo_func_d.FuncOp], list[allo_func_d.FuncOp]]:
+    """
+    Classify the functions in allo module as
+        - top
+        - compute core functions
+        - external kernel functions
+    """
+    top_func: allo_func_d.FuncOp = None
+    core_funcs: list[allo_func_d.FuncOp] = []
+    external_funcs: list[allo_func_d.FuncOp] = []
+    with module.context, allo_ir.ir.Location.unknown():
+        for func in module.body.operations:
+            if isinstance(func, allo_func_d.FuncOp):
+                if (
+                    "sym_visibility" in func.attributes
+                    and func.attributes["sym_visibility"].value == "private"
+                ):
+                    external_funcs.append(func)
+                elif func.attributes["sym_name"].value == top_function_name:
+                    top_func = func
+                elif "df.kernel" in func.attributes:
+                    core_funcs.append(func)
+                else:
+                    raise ValueError(
+                        f"Unknown function type: {func.attributes['sym_name'].value}"
+                    )
+    return top_func, core_funcs, external_funcs
 
 
 def classify_aie_functions(

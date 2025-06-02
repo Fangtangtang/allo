@@ -3,6 +3,7 @@
 
 import re
 from dataclasses import dataclass
+from collections import defaultdict
 from ..._mlir.dialects import func as func_d, allo as allo_d
 from ..._mlir.ir import Type
 from .utils import Argument, parse_kernel_name
@@ -187,14 +188,25 @@ class CollocatedBaseNode:
         self.global_outputs: list[dict[int, list[GlobalDMATile]]] = []
         # input/output node id -> edge stream type
         # fixme: may conflict when having multiple input/output corresponding to the same node
-        self.input_streams: dict[int, tuple[Type, str]] = {}
-        self.output_streams: dict[int, tuple[Type, str]] = {}
+        self.input_streams: dict[int, list[tuple[Type, str]]] = defaultdict(list)
+        self.output_streams: dict[int, list[tuple[Type, str]]] = defaultdict(list)
 
     def add_input(self, node_id: int, input_type: Type, stream_name: str):
-        self.input_streams[node_id] = (input_type, stream_name)
+        self.input_streams[node_id].append((input_type, stream_name))
 
     def add_output(self, node_id: int, output_type: Type, stream_name: str):
-        self.output_streams[node_id] = (output_type, stream_name)
+        self.output_streams[node_id].append((output_type, stream_name))
+
+    def __str__(self):
+        _str = f"[{self.id}] {self.name}\n"
+        _str += f"\tinput streams: {self.input_streams}\n"
+        _str += f"\toutput streams: {self.output_streams}\n"
+        _str += f"\tglobal inputs: {self.global_inputs}\n"
+        _str += f"\tglobal outputs: {self.global_outputs}\n"
+        return _str
+
+    def __repr__(self):
+        return self.__str__()
 
 
 class CollocatedInitialNode(CollocatedBaseNode):
@@ -449,6 +461,26 @@ class ComputationGraph:
             for node_id in node.input_streams.keys():
                 dependencies[name].add(CollocatedBaseNode.node_list[node_id].name)
         return dependencies
+
+    def get_connection(self) -> list[tuple[int, str, str]]:
+        """
+        return a list of tuples (connection number, node_1, node_2)
+        do not consider the direction of the connection
+        node_1 and node_2 are the names of the nodes, the order is decided by node_id
+        """
+        connections: list[tuple[int, str, str]] = []
+        nodes = list(self.collocated_nodes.values())
+        nodes.sort(key=lambda x: x.id)
+        for i in range(len(nodes)):
+            for j in range(i + 1, len(nodes)):
+                connection_num = 0
+                if nodes[i].id in nodes[j].input_streams:
+                    connection_num += len(nodes[j].input_streams[nodes[i].id])
+                if nodes[j].id in nodes[i].input_streams:
+                    connection_num += len(nodes[i].input_streams[nodes[j].id])
+                if connection_num > 0:
+                    connections.append((connection_num, nodes[i].name, nodes[j].name))
+        return connections
 
     # ------------------------------------------------------------
     # Print Graph

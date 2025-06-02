@@ -20,10 +20,10 @@ from .mlir_codegen import CodeGenerator, Argument, Stream
 from .utils import (
     Argument,
     Stream,
-    device_config_map,
     inject_external_kernels,
     get_df_kernels,
     classify_aie_functions,
+    classify_aie_functions_experimental,
     codegen_external_kernels,
     read_tensor_from_file,
     codegen_host,
@@ -127,7 +127,8 @@ class AIE_MLIRModule:
             stream_types_dict,
             self.core_func_args,
         )
-        self.virtual_computation_graph.print_graph()
+        if os.getenv("VERBOSE") == "1":
+            self.virtual_computation_graph.print_graph()
 
     def analyze_global_io(self) -> tuple[
         dict[int, OrderedDMATileGroup],
@@ -291,10 +292,9 @@ class AIE_MLIRModule:
         with self.allo_module.context:
             mlir_pass_manager.parse(pipeline).run(self.allo_module.operation)
         # code generation
-        top_func, core_func_groups, external_funcs = classify_aie_functions(
+        top_func, core_funcs, external_funcs = classify_aie_functions_experimental(
             self.allo_module, self.top_func_name
         )
-        # TODO
         code_generator = CodeGenerator(
             device_type,
             self.global_inputs,
@@ -302,15 +302,16 @@ class AIE_MLIRModule:
             top_func,
             self.core_func_args,
             self.streams,
-        )
-        code_generator.map_global_io_to_physical_tiles(
-            global_in_tile_to_func, global_out_tile_to_func
+            self.virtual_computation_graph,
         )
         self.aie_module = code_generator.aie_codegen_experimental(
-            core_func_groups,
+            core_funcs,
             external_funcs,
             use_external_kernels,
+            global_in_tile_to_func,
+            global_out_tile_to_func,
         )
+        print(self.aie_module)
 
     def collect_io(
         self,
