@@ -110,6 +110,7 @@ class GlobalDMANode:
         self.max_recv = recv_port_num
         self.send_ports: list[GlobalDMANode.Port] = []
         self.recv_ports: list[GlobalDMANode.Port] = []
+        # connect send ports to recv ports
         self.intra_connect: list[GlobalDMANode.IntraConnect] = []
 
     def print(self):

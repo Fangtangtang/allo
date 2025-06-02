@@ -462,11 +462,25 @@ class CodeGenerator:
                 aie_scf_d.YieldOp([])
             aie_d.EndOp()
 
+    @dataclass(frozen=True)
+    class GlobalIODMA:
+        dtensor: DTensor
+        connected_node: int
+        port_id: int
+        offset: list[int]
+        size: list[int]
+        stride: list[int]
+        is_input: bool
+
     def map_global_io_to_physical_tiles(
         self,
         global_in_tile_to_func: dict[int, OrderedDMATileGroup],
         global_out_tile_to_func: dict[int, OrderedDMATileGroup],
-    ) -> tuple[list[GlobalDMANode], list[GlobalDMANode]]:
+    ) -> tuple[
+        list[GlobalDMANode],
+        list[GlobalDMANode],
+        dict[str, list["CodeGenerator.GlobalIODMA"]],
+    ]:
 
         # ------------------------------------------------------------
         MAX_MEM_TILES = self.device_config["mem_tile_num"]
@@ -474,6 +488,7 @@ class CodeGenerator:
 
         used_mem_tiles: list[GlobalDMANode] = []
         used_shim_tiles: list[GlobalDMANode] = []
+        global_io_dma: dict[str, list[CodeGenerator.GlobalIODMA]] = defaultdict(list)
         # ------------------------------------------------------------
 
         def assign_mem_tile(
@@ -551,14 +566,73 @@ class CodeGenerator:
                         ),
                     )
                 )
-                assigned_mem_tile.print()
-                return assigned_mem_tile, send_ports[0] if is_input else recv_ports[0]
+                if os.environ.get("VERBOSE"):
+                    print("\nassigned_mem_tile: ", end="")
+                    assigned_mem_tile.print()
+                return assigned_mem_tile, recv_ports[0] if is_input else send_ports[0]
             # TODO: port reuse
             return None, -1
 
-        def assign_shim_tile(send_need, recv_need):
-            # TODO
-            pass
+        def assign_shim_tile(
+            mem_tile: GlobalDMANode,
+            port_id: int,
+            is_input: bool,
+        ) -> tuple[GlobalDMANode, int]:
+            port: GlobalDMANode.Port = (
+                mem_tile.send_ports[port_id]
+                if is_input
+                else mem_tile.recv_ports[port_id]
+            )
+            assigned_shim_tile = None
+            # Attempt to use a new shim tile
+            if len(used_shim_tiles) < MAX_SHIM_TILES:
+                assigned_shim_tile = GlobalDMANode(
+                    tile_id=len(used_shim_tiles),
+                    send_port_num=Config.SHIM_MAX_SEND,
+                    recv_port_num=Config.SHIM_MAX_RECV,
+                )
+                used_shim_tiles.append(assigned_shim_tile)
+            else:
+                for shim_tile in used_shim_tiles:
+                    if (
+                        len(shim_tile.send_ports) + 1 <= Config.SHIM_MAX_SEND
+                        and len(shim_tile.recv_ports) + 1 <= Config.SHIM_MAX_RECV
+                    ):
+                        assigned_shim_tile = shim_tile
+                        break
+            # Use new ports
+            if assigned_shim_tile is not None:
+                connected_mem = [f"{port.id}_mem"]
+                send_port = GlobalDMANode.Port(
+                    id=len(assigned_shim_tile.send_ports),
+                    data_shape=port.data_shape,
+                    dtype=port.dtype,
+                    connected_nodes=connected_mem if is_input else [],
+                )
+                assigned_shim_tile.send_ports.append(send_port)
+                recv_port = GlobalDMANode.Port(
+                    id=len(assigned_shim_tile.recv_ports),
+                    data_shape=port.data_shape,
+                    dtype=port.dtype,
+                    connected_nodes=[] if is_input else connected_mem,
+                )
+                assigned_shim_tile.recv_ports.append(recv_port)
+                port.connected_nodes.append(
+                    f"{send_port.id}_shim" if is_input else f"{recv_port.id}_shim"
+                )
+                assigned_shim_tile.intra_connect.append(
+                    GlobalDMANode.IntraConnect(
+                        send_ports=[send_port.id],
+                        recv_ports=[recv_port.id],
+                        offsets=[0],
+                    )
+                )
+                if os.environ.get("VERBOSE"):
+                    print("\nassigned_shim_tile: ", end="")
+                    assigned_shim_tile.print()
+                return assigned_shim_tile, recv_port.id if is_input else send_port.id
+                # TODO: port reuse
+            return None, -1
 
         def map_dtensor_to_physical_tiles(
             dtensor: DTensor, ordered_tile_group: OrderedDMATileGroup, is_input: bool
@@ -608,6 +682,7 @@ class CodeGenerator:
                     print(offset_map)
                     print("access:", coalesced_access)
                     print("=== coalesce_info ===", coalesce_info)
+                offset_id = 0
                 for offset, size in coalesced_access.items():
                     connected_nodes: list[list[str]] = []
                     for node in coalesce_info[offset]:
@@ -624,6 +699,22 @@ class CodeGenerator:
                             tile_size,
                         )
                         if assigned_mem_tile is not None:
+                            assigned_shim_tile, shim_port_id = assign_shim_tile(
+                                assigned_mem_tile,
+                                port_id,
+                                is_input,
+                            )
+                            global_io_dma[tag].append(
+                                CodeGenerator.GlobalIODMA(
+                                    dtensor=dtensor,
+                                    connected_node=assigned_shim_tile.tile_id,
+                                    port_id=shim_port_id,
+                                    offset=coalesce_info[offset][offset_id].to_list(),
+                                    size=coalesced_size.to_list(),
+                                    stride=dtensor.stride,
+                                    is_input=is_input,
+                                )
+                            )
                             break
                         size_cp = size.copy()
                         # keep partitioning until success
@@ -643,12 +734,30 @@ class CodeGenerator:
                                 tile_size,
                             )
                             if assigned_mem_tile is not None:
+                                assigned_shim_tile, shim_port_id = assign_shim_tile(
+                                    assigned_mem_tile,
+                                    port_id,
+                                    is_input,
+                                )
+                                global_io_dma[tag].append(
+                                    CodeGenerator.GlobalIODMA(
+                                        dtensor=dtensor,
+                                        connected_node=assigned_shim_tile.tile_id,
+                                        port_id=shim_port_id,
+                                        offset=coalesce_info[offset][
+                                            offset_id
+                                        ].to_list(),
+                                        size=coalesced_size.to_list(),
+                                        stride=dtensor.stride,
+                                        is_input=is_input,
+                                    )
+                                )
                                 break
                             size_cp = partitioned_size
                         size = Size4D.subtract(size, partitioned_size)
-                        connected_nodes = connected_nodes[
-                            partitioned_size.get_total_size() :
-                        ]
+                        inc = partitioned_size.get_total_size()
+                        connected_nodes = connected_nodes[inc:]
+                        offset_id += inc
 
         for input_idx, ordered_tile_group in global_in_tile_to_func.items():
             map_dtensor_to_physical_tiles(
@@ -656,16 +765,15 @@ class CodeGenerator:
                 ordered_tile_group,
                 is_input=True,
             )
-            print("--------------------------------")
         for output_idx, ordered_tile_group in global_out_tile_to_func.items():
             map_dtensor_to_physical_tiles(
                 self.global_outputs[output_idx],
                 ordered_tile_group,
                 is_input=False,
             )
-            print("--------------------------------")
-
-        return used_mem_tiles, used_shim_tiles
+        if os.environ.get("VERBOSE"):
+            print(global_io_dma)
+        return used_mem_tiles, used_shim_tiles, global_io_dma
 
     # ############################################################
     # AIE Code Generation
