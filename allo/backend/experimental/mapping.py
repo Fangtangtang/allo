@@ -104,8 +104,8 @@ class GlobalDMANode:
         def __repr__(self):
             return self.__str__()
 
-    def __init__(self, tile_id: int, send_port_num: int, recv_port_num: int):
-        self.tile_id = tile_id
+    def __init__(self, tile_name: str, send_port_num: int, recv_port_num: int):
+        self.tile_name = tile_name
         self.max_send = send_port_num
         self.max_recv = recv_port_num
         self.send_ports: list[GlobalDMANode.Port] = []
@@ -114,7 +114,7 @@ class GlobalDMANode:
         self.intra_connect: list[GlobalDMANode.IntraConnect] = []
 
     def print(self):
-        print(f"\n<<<<< DMA Tile {self.tile_id} >>>>>")
+        print(f"\n<<<<< DMA Tile {self.tile_name} >>>>>")
         print(f"send ports: {self.send_ports}")
         print(f"recv ports: {self.recv_ports}")
         print(f"intra connect: {self.intra_connect}")

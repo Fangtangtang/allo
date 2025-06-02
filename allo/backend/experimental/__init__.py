@@ -303,12 +303,9 @@ class AIE_MLIRModule:
             self.core_func_args,
             self.streams,
         )
-        used_mem_tiles, used_shim_tiles, global_io_dma = (
-            code_generator.map_global_io_to_physical_tiles(
-                global_in_tile_to_func, global_out_tile_to_func
-            )
+        code_generator.map_global_io_to_physical_tiles(
+            global_in_tile_to_func, global_out_tile_to_func
         )
-
         self.aie_module = code_generator.aie_codegen_experimental(
             core_func_groups,
             external_funcs,

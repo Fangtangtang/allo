@@ -224,6 +224,14 @@ class CodeGenerator:
         self.compute_core_io: dict[str : dict[DTensor, str]] = {}
         self.external_functions: str = ""
 
+        # ------------------------------------------------------------
+        # Experimental
+        # ------------------------------------------------------------
+        self.used_mem_tiles: list[GlobalDMANode] = None
+        self.used_shim_tiles: list[GlobalDMANode] = None
+        self.global_io_dma: dict[str, list[CodeGenerator.GlobalIODMA]] = None
+        # ------------------------------------------------------------
+
         self.aie_module = None  # The top-level AIE IR module
         self.global_ip: aie_ir.InsertionPoint = (
             None  # mark the inserting point for buffers
@@ -465,7 +473,7 @@ class CodeGenerator:
     @dataclass(frozen=True)
     class GlobalIODMA:
         dtensor: DTensor
-        connected_node: int
+        connected_node: str
         port_id: int
         offset: list[int]
         size: list[int]
@@ -486,9 +494,9 @@ class CodeGenerator:
         MAX_MEM_TILES = self.device_config["mem_tile_num"]
         MAX_SHIM_TILES = self.device_config["shim_tile_num"]
 
-        used_mem_tiles: list[GlobalDMANode] = []
-        used_shim_tiles: list[GlobalDMANode] = []
-        global_io_dma: dict[str, list[CodeGenerator.GlobalIODMA]] = defaultdict(list)
+        self.used_mem_tiles = []
+        self.used_shim_tiles = []
+        self.global_io_dma = defaultdict(list)
         # ------------------------------------------------------------
 
         def assign_mem_tile(
@@ -513,19 +521,19 @@ class CodeGenerator:
             assigned_mem_tile = None
             # Attempt to use a new memory tile
             if (
-                len(used_mem_tiles) < MAX_MEM_TILES
+                len(self.used_mem_tiles) < MAX_MEM_TILES
                 and send_need <= Config.MEM_MAX_SEND
                 and recv_need <= Config.MEM_MAX_RECV
             ):
                 assigned_mem_tile = GlobalDMANode(
-                    tile_id=len(used_mem_tiles),
+                    tile_name=f"mem_tile_{len(self.used_mem_tiles)}",
                     send_port_num=Config.MEM_MAX_SEND,
                     recv_port_num=Config.MEM_MAX_RECV,
                 )
-                used_mem_tiles.append(assigned_mem_tile)
+                self.used_mem_tiles.append(assigned_mem_tile)
             else:
                 # Attempt to use an existing memory tile
-                for mem_tile in used_mem_tiles:
+                for mem_tile in self.used_mem_tiles:
                     if (
                         len(mem_tile.send_ports) + send_need <= Config.MEM_MAX_SEND
                         and len(mem_tile.recv_ports) + recv_need <= Config.MEM_MAX_RECV
@@ -579,21 +587,21 @@ class CodeGenerator:
             is_input: bool,
         ) -> tuple[GlobalDMANode, int]:
             port: GlobalDMANode.Port = (
-                mem_tile.send_ports[port_id]
+                mem_tile.recv_ports[port_id]
                 if is_input
-                else mem_tile.recv_ports[port_id]
+                else mem_tile.send_ports[port_id]
             )
             assigned_shim_tile = None
             # Attempt to use a new shim tile
-            if len(used_shim_tiles) < MAX_SHIM_TILES:
+            if len(self.used_shim_tiles) < MAX_SHIM_TILES:
                 assigned_shim_tile = GlobalDMANode(
-                    tile_id=len(used_shim_tiles),
+                    tile_name=f"shim_tile_{len(self.used_shim_tiles)}",
                     send_port_num=Config.SHIM_MAX_SEND,
                     recv_port_num=Config.SHIM_MAX_RECV,
                 )
-                used_shim_tiles.append(assigned_shim_tile)
+                self.used_shim_tiles.append(assigned_shim_tile)
             else:
-                for shim_tile in used_shim_tiles:
+                for shim_tile in self.used_shim_tiles:
                     if (
                         len(shim_tile.send_ports) + 1 <= Config.SHIM_MAX_SEND
                         and len(shim_tile.recv_ports) + 1 <= Config.SHIM_MAX_RECV
@@ -602,7 +610,7 @@ class CodeGenerator:
                         break
             # Use new ports
             if assigned_shim_tile is not None:
-                connected_mem = [f"{port.id}_mem"]
+                connected_mem = [mem_tile.tile_name]
                 send_port = GlobalDMANode.Port(
                     id=len(assigned_shim_tile.send_ports),
                     data_shape=port.data_shape,
@@ -617,9 +625,7 @@ class CodeGenerator:
                     connected_nodes=[] if is_input else connected_mem,
                 )
                 assigned_shim_tile.recv_ports.append(recv_port)
-                port.connected_nodes.append(
-                    f"{send_port.id}_shim" if is_input else f"{recv_port.id}_shim"
-                )
+                port.connected_nodes.append(assigned_shim_tile.tile_name)
                 assigned_shim_tile.intra_connect.append(
                     GlobalDMANode.IntraConnect(
                         send_ports=[send_port.id],
@@ -704,10 +710,10 @@ class CodeGenerator:
                                 port_id,
                                 is_input,
                             )
-                            global_io_dma[tag].append(
+                            self.global_io_dma[tag].append(
                                 CodeGenerator.GlobalIODMA(
                                     dtensor=dtensor,
-                                    connected_node=assigned_shim_tile.tile_id,
+                                    connected_node=assigned_shim_tile.tile_name,
                                     port_id=shim_port_id,
                                     offset=coalesce_info[offset][offset_id].to_list(),
                                     size=coalesced_size.to_list(),
@@ -739,10 +745,10 @@ class CodeGenerator:
                                     port_id,
                                     is_input,
                                 )
-                                global_io_dma[tag].append(
+                                self.global_io_dma[tag].append(
                                     CodeGenerator.GlobalIODMA(
                                         dtensor=dtensor,
-                                        connected_node=assigned_shim_tile.tile_id,
+                                        connected_node=assigned_shim_tile.tile_name,
                                         port_id=shim_port_id,
                                         offset=coalesce_info[offset][
                                             offset_id
@@ -772,8 +778,16 @@ class CodeGenerator:
                 is_input=False,
             )
         if os.environ.get("VERBOSE"):
-            print(global_io_dma)
-        return used_mem_tiles, used_shim_tiles, global_io_dma
+            print("\n\n########################################################")
+            print("used_mem_tiles:")
+            for mem_tile in self.used_mem_tiles:
+                mem_tile.print()
+            print("\nused_shim_tiles:")
+            for shim_tile in self.used_shim_tiles:
+                shim_tile.print()
+            print("\nglobal_io_dma:")
+            print(self.global_io_dma)
+            print("########################################################\n\n")
 
     # ############################################################
     # AIE Code Generation
@@ -784,6 +798,11 @@ class CodeGenerator:
         external_funcs: list[allo_func_d.FuncOp],
         use_external_kernels: dict[str, bool],
     ) -> aie_ir.Module:
+        assert (
+            self.used_mem_tiles is not None
+            and self.used_shim_tiles is not None
+            and self.global_io_dma is not None
+        )
         # fixme: maybe better to resolve this using IR constructor
         for func in external_funcs:
             self.external_functions += format_str(str(func), indent=4)
@@ -797,7 +816,31 @@ class CodeGenerator:
                 }
             }
         """
-        # io_mapping, mem_tile_num, shim_tile_num = map_global_io(inputs, outputs)
+
+        # TODO
+        with aie_ir.Context() as ctx, aie_ir.Location.unknown():
+            # module wrapper
+            self.aie_module = aie_ir.Module.parse(wrapper_code, ctx)
+            # find device op: aie.device(device_type)
+            device_op = None
+            for op in self.aie_module.body.operations:
+                if isinstance(op, aie_d.DeviceOp):
+                    device_op = op
+                    break
+            assert device_op is not None, "aie.device not found"
+            device_body = device_op.regions[0].blocks[0]
+            # insert operations in the device body, before `aie.end``
+            end_op = None
+            for op in device_body.operations:
+                if isinstance(op, aie_d.EndOp):
+                    end_op = op
+                    break
+            assert not end_op is None
+
+            with aie_ir.InsertionPoint(end_op):
+                # mem tiles
+                pass
+
         pass
 
     def aie_codegen(
