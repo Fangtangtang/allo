@@ -31,7 +31,14 @@ from ...memory import DTensor, Offset4D, Size4D, coalesce_memory_access
 
 from .utils import get_element_type, device_config_map, Argument, Stream, Config
 from ..aie import map_kernels_to_device_mesh
-from .mapping import GlobalDMANode, OrderedDMATileGroup, DMATileGroup, ComputationGraph
+from .mapping import (
+    GlobalDMANode,
+    OrderedDMATileGroup,
+    DMATileGroup,
+    ComputationGraph,
+    DMAFIFO,
+    DMAFIFOManager,
+)
 
 
 @dataclass(frozen=True)
@@ -232,6 +239,7 @@ class CodeGenerator:
         self.used_mem_tiles: list[GlobalDMANode] = None
         self.used_shim_tiles: list[GlobalDMANode] = None
         self.global_io_dma: dict[str, list[CodeGenerator.GlobalIODMA]] = None
+        self.fifo_manager: DMAFIFOManager = None
         # ------------------------------------------------------------
 
         self.aie_module = None  # The top-level AIE IR module
@@ -632,8 +640,8 @@ class CodeGenerator:
                 port.connected_nodes.append(assigned_shim_tile.tile_name)
                 assigned_shim_tile.intra_connect.append(
                     GlobalDMANode.IntraConnect(
-                        send_ports=[send_port.id],
-                        recv_ports=[recv_port.id],
+                        send_port_ids=[send_port.id],
+                        recv_port_ids=[recv_port.id],
                         offsets=[0],
                     )
                 )
@@ -809,6 +817,29 @@ class CodeGenerator:
                     print(f"    {dma}")
             print("########################################################\n\n")
 
+    def bind_port_to_fifo(self):
+        self.fifo_manager = DMAFIFOManager()
+        for dma_nodes in zip(self.used_shim_tiles, self.used_mem_tiles):
+            for dma_node in dma_nodes:
+                for send_port in dma_node.send_ports:
+                    dma_fifo = self.fifo_manager.get_or_create_fifo(
+                        src=[dma_node.tile_name],
+                        dst=send_port.connected_nodes,
+                        data_shape=send_port.data_shape,
+                        dtype=send_port.dtype,
+                    )
+                    send_port.bind_to_fifo(dma_fifo)
+                for recv_port in dma_node.recv_ports:
+                    dma_fifo = self.fifo_manager.get_or_create_fifo(
+                        src=recv_port.connected_nodes,
+                        dst=[dma_node.tile_name],
+                        data_shape=recv_port.data_shape,
+                        dtype=recv_port.dtype,
+                    )
+                    recv_port.bind_to_fifo(dma_fifo)
+        if os.environ.get("VERBOSE"):
+            self.fifo_manager.print()
+
     def map_core_func_to_physical_tiles(self) -> dict[str, tuple[int, int]]:
         """
         Map the core functions to physical tiles.
@@ -931,6 +962,7 @@ class CodeGenerator:
         self.map_global_io_to_physical_tiles(
             global_in_tile_to_func, global_out_tile_to_func
         )
+        self.bind_port_to_fifo()
         core_function_mapping = self.map_core_func_to_physical_tiles()
         # fixme: maybe better to resolve this using IR constructor
         for func in external_funcs:
@@ -976,50 +1008,46 @@ class CodeGenerator:
                 # compute tiles
                 for func_name, (row, col) in core_function_mapping.items():
                     self.tile_map[func_name] = aie_d.TileOp(col=col, row=row + 2)
-                # define fifos and link them
-                for shim_node in self.used_shim_tiles:
-                    shim_tile = self.tile_map[shim_node.tile_name]
-                    for send_port in shim_node.send_ports:
-                        # skip the ones connected to externel
-                        if len(send_port.connected_nodes) == 0:
-                            continue
-                        mem_tiles = []
-                        for node in send_port.connected_nodes:
-                            mem_tiles.append(self.tile_map[node])
-                        memref_type = aie_ir.MemRefType.get(
-                            send_port.data_shape.to_list(),
-                            get_element_type(str(send_port.dtype)),
+                # define fifos
+                for dma_fifo in self.fifo_manager.fifo_map.values():
+                    if len(dma_fifo.src) == 0 or len(dma_fifo.dst) == 0:
+                        # from/to global
+                        continue
+                    self.fifo_map[dma_fifo.name] = aie_d.object_fifo(
+                        dma_fifo.name,
+                        self.tile_map[dma_fifo.src[0]],
+                        [self.tile_map[node] for node in dma_fifo.dst],
+                        depth=2,
+                        datatype=aie_ir.MemRefType.get(
+                            dma_fifo.data_shape.to_list(),
+                            get_element_type(str(dma_fifo.dtype)),
+                        ),
+                    )
+                # link fifos: in aie, mem tile serves as the linkages
+                for dma_node in self.used_mem_tiles:
+                    for connect in dma_node.intra_connect:
+                        producer = [
+                            self.fifo_map[
+                                dma_node.recv_ports[recv_port_id].bind_fifo.name
+                            ]
+                            for recv_port_id in connect.recv_port_ids
+                        ]
+                        consumer = [
+                            self.fifo_map[
+                                dma_node.send_ports[send_port_id].bind_fifo.name
+                            ]
+                            for send_port_id in connect.send_port_ids
+                        ]
+                        # fixme: is it possible that both producer and consumer are not single fifo?
+                        producer_offset = [] if len(producer) == 1 else connect.offsets
+                        consumer_offset = [] if len(consumer) == 1 else connect.offsets
+                        aie_d.object_fifo_link(
+                            producer, consumer, producer_offset, consumer_offset
                         )
-                        name = f"{shim_node.tile_name}_send_{send_port.id}"
-                        self.fifo_map[name] = aie_d.object_fifo(
-                            name, shim_tile, mem_tiles, depth=2, datatype=memref_type
-                        )
-                    for recv_port in shim_node.recv_ports:
-                        # skip the ones connected to externel
-                        if len(recv_port.connected_nodes) == 0:
-                            continue
-                        mem_tiles = []
-                        for node in recv_port.connected_nodes:
-                            mem_tiles.append(self.tile_map[node])
-                        memref_type = aie_ir.MemRefType.get(
-                            recv_port.data_shape.to_list(),
-                            get_element_type(str(recv_port.dtype)),
-                        )
-                        name = f"{shim_node.tile_name}_recv_{recv_port.id}"
-                        assert (
-                            len(mem_tiles) == 1
-                        ), "Only one mem tile is supported for recv port"
-                        self.fifo_map[name] = aie_d.object_fifo(
-                            name,
-                            mem_tiles[0],
-                            [shim_tile],
-                            depth=2,
-                            datatype=memref_type,
-                        )
-                print(self.fifo_map)
 
+                # compute <-> compute
                 # TODO
-                print(self.global_io_dma)
+
                 # compute logic on each compute tile
                 for func in core_funcs:
                     func_name = func.attributes["sym_name"].value

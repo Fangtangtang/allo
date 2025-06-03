@@ -76,6 +76,58 @@ class OrderedDMATileGroup:
             tiles.print()
 
 
+class DMAFIFO:
+    def __init__(
+        self,
+        name: str,
+        src: list[str],
+        dst: list[str],
+        data_shape: list[int],
+        dtype: str,
+    ):
+        self.name = name
+        self.src = sorted(src)
+        self.dst = sorted(dst)
+        self.data_shape = data_shape
+        self.dtype = dtype
+
+    def __str__(self):
+        return f"FIFO({self.name}, src={self.src}, dst={self.dst}, {self.dtype}{self.data_shape})"
+
+    def __repr__(self):
+        return self.__str__()
+
+
+class DMAFIFOManager:
+    def __init__(self):
+        self.fifo_map: dict[tuple, DMAFIFO] = {}
+
+    def get_or_create_fifo(
+        self, src: list[str], dst: list[str], data_shape: Size4D, dtype: str
+    ) -> DMAFIFO:
+        src, dst = sorted(src), sorted(dst)
+        key = (tuple(src), tuple(dst), data_shape, dtype)
+
+        if key in self.fifo_map:
+            return self.fifo_map[key]
+        else:
+            fifo = DMAFIFO(
+                name=f"fifo_{len(self.fifo_map)}",
+                src=src,
+                dst=dst,
+                data_shape=data_shape,
+                dtype=dtype,
+            )
+            self.fifo_map[key] = fifo
+            return fifo
+
+    def print(self):
+        print("\n***** DMA FIFOs *****")
+        for key, fifo in self.fifo_map.items():
+            print(f"{key}: {fifo}")
+        print("***** DMA FIFOs *****\n")
+
+
 class GlobalDMANode:
     class Port:
         def __init__(
@@ -85,6 +137,13 @@ class GlobalDMANode:
             self.data_shape = data_shape
             self.dtype = dtype
             self.connected_nodes = connected_nodes
+            self.bind_fifo = None
+
+        def bind_to_fifo(self, fifo: DMAFIFO):
+            assert (
+                self.bind_fifo is None
+            ), f"Port {self.id} already bound to {self.bind_fifo}"
+            self.bind_fifo = fifo
 
         def __str__(self):
             return f"Port(data_shape={self.data_shape}, dtype={self.dtype}, connected_nodes={self.connected_nodes})"
@@ -94,14 +153,14 @@ class GlobalDMANode:
 
     class IntraConnect:
         def __init__(
-            self, send_ports: list[int], recv_ports: list[int], offsets: list[int]
+            self, send_port_ids: list[int], recv_port_ids: list[int], offsets: list[int]
         ):
-            self.send_ports = send_ports  # send_port_id
-            self.recv_ports = recv_ports  # recv_port_id
+            self.send_port_ids = send_port_ids  # send_port_id
+            self.recv_port_ids = recv_port_ids  # recv_port_id
             self.offsets = offsets
 
         def __str__(self):
-            return f"(send:{self.send_ports} <=> recv:{self.recv_ports}, offsets={self.offsets})"
+            return f"(send:{self.send_port_ids} <=> recv:{self.recv_port_ids}, offsets={self.offsets})"
 
         def __repr__(self):
             return self.__str__()
