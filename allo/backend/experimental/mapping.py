@@ -15,25 +15,25 @@ from ...memory import DTensor, Size4D, Offset4D
 # ############################################################
 @dataclass
 class GlobalDMATile:
-    global_id: int  # parameter idx
-    dtensor_name: str
+    func_param_idx: int  # parameter idx
+    dtensor_id: int
     tensor_tile_label: str
 
     def __hash__(self):
-        return hash((self.global_id, self.dtensor_name, self.tensor_tile_label))
+        return hash((self.func_param_idx, self.dtensor_id, self.tensor_tile_label))
 
     def __eq__(self, other):
         return (
-            self.global_id == other.global_id
-            and self.dtensor_name == other.dtensor_name
+            self.func_param_idx == other.func_param_idx
+            and self.dtensor_id == other.dtensor_id
             and self.tensor_tile_label == other.tensor_tile_label
         )
 
     def __str__(self):
-        return f"{self.dtensor_name} ({self.tensor_tile_label})"
+        return f"{self.dtensor_id} ({self.tensor_tile_label})"
 
     def __repr__(self):
-        return f"{self.dtensor_name} ({self.tensor_tile_label})"
+        return f"{self.dtensor_id} ({self.tensor_tile_label})"
 
 
 class DMATileGroup:
@@ -138,17 +138,21 @@ class VirtualNode:
             r"func\.func\s+@[\w\d_]+(\s*\()", r"func.func\1", str(self.func.operation)
         )
 
-    def add_global_input(self, global_id: int, dtensor: DTensor, indexes):
+    def add_global_input(self, func_param_idx: int, dtensor: DTensor, indexes):
         self.global_inputs.append(
             GlobalDMATile(
-                global_id, dtensor.name, dtensor.PE_tile_id_to_tensor_tile_id(indexes)
+                func_param_idx,
+                dtensor.global_id,
+                dtensor.PE_tile_id_to_tensor_tile_id(indexes),
             )
         )
 
-    def add_global_output(self, global_id: int, dtensor: DTensor, indexes):
+    def add_global_output(self, func_param_idx: int, dtensor: DTensor, indexes):
         self.global_outputs.append(
             GlobalDMATile(
-                global_id, dtensor.name, dtensor.PE_tile_id_to_tensor_tile_id(indexes)
+                func_param_idx,
+                dtensor.global_id,
+                dtensor.PE_tile_id_to_tensor_tile_id(indexes),
             )
         )
 

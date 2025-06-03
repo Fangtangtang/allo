@@ -199,7 +199,7 @@ aie_external_kernel_ctype_map = {
 
 
 def parse_kernel_name(name: str):
-    match = re.match(r"([a-zA-Z_]+)((?:_\d+)+)$", name)
+    match = re.match(r"(.+?)(_\d+(?:_\d+)*)$", name)
     if not match:
         raise ValueError(f"Invalid format: {name}")
 

@@ -116,7 +116,6 @@ class AIE_MLIRModule:
             and self.global_inputs is not None
             and self.global_outputs is not None
         ), "Analysis of kernel parameters should be done before initializing virtual graph"
-        print(self.core_func_args)
         for idx, dtensor in self.global_inputs.items():
             print(idx, dtensor.global_placement)
 
@@ -172,7 +171,7 @@ class AIE_MLIRModule:
             for i, dma_tile in enumerate(io_info):
                 inner_tag = f"{outer_tag}-{i}"
                 for tile_ in dma_tile:
-                    global_in_tile_to_func[tile_.global_id].add_tile(
+                    global_in_tile_to_func[tile_.dtensor_id].add_tile(
                         tile_, inner_tag, func_name
                     )
         for func_name, io_info in global_out.items():
@@ -180,7 +179,7 @@ class AIE_MLIRModule:
             for i, dma_tile in enumerate(io_info):
                 inner_tag = f"{outer_tag}-{i}"
                 for tile_ in dma_tile:
-                    global_out_tile_to_func[tile_.global_id].add_tile(
+                    global_out_tile_to_func[tile_.dtensor_id].add_tile(
                         tile_, inner_tag, func_name
                     )
 
@@ -230,6 +229,7 @@ class AIE_MLIRModule:
                             io_idx
                         ].type.shape
                         global_idx = self.func_args[self.top_func_name].index(argument)
+                        argument.dtensor.set_global_id(global_idx)
                         if io_type == "in":
                             self.global_inputs[global_idx] = argument.dtensor
                         else:

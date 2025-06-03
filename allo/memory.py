@@ -336,6 +336,7 @@ class DTensor:
             # tensor tile ID -> PE tile IDs
             self.global_placement: dict[str, tuple] = layout.get_placement(mapping)
         self.access_pattern_set = False
+        self.global_id = None
         self.type_as_param: list = None
 
     def get_local_shape(self):
@@ -353,6 +354,9 @@ class DTensor:
                 # count from right to left
                 local_shape.append(s // self.mapping[-dim - 1])
         return tuple(local_shape)
+
+    def set_global_id(self, global_id: int):
+        self.global_id = global_id
 
     def set_access_pattern(self):
         """
@@ -417,7 +421,7 @@ class DTensor:
                 stride = [0, tensor_n // device_b, tensor_n, 1]
             elif partition_str == "RR":
                 for key in self.global_placement.keys():
-                    self.offset_map[key] = (0, 0, 0, 0)
+                    self.offset_map[key] = Offset4D(0, 0, 0, 0)
                 # Both dimensions replicated
                 device_dims = []
                 size = [1, 1, tensor_m, tensor_n]
