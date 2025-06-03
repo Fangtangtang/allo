@@ -28,7 +28,7 @@ from .utils import (
     read_tensor_from_file,
     codegen_host,
 )
-from .mapping import ComputationGraph, GlobalDMATile, OrderedDMATileGroup
+from .mapping import ComputationGraph, OrderedDMATileGroup
 
 
 class AIE_MLIRModule:

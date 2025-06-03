@@ -682,9 +682,13 @@ class CodeGenerator:
                 tag = sorted_tags[idx]
                 dma_tile_group: DMATileGroup = ordered_tile_group.dma_tile_groups[tag]
                 offset_map: dict[Offset4D, list[str]] = {}
-                # fixme: this is an ugly hack. We need more elegant and robust way to handle this.
-                while len(offset_map) < Config.IO_TILE_LOSE_FACTOR and idx+update < len(sorted_tags):
-                    dma_tile_group = ordered_tile_group.dma_tile_groups[sorted_tags[idx+update]]
+                # fixme: this is an ugly and problematic hack. We need more elegant and robust way to handle this.
+                while len(
+                    offset_map
+                ) < Config.IO_TILE_LOSE_FACTOR and idx + update < len(sorted_tags):
+                    dma_tile_group = ordered_tile_group.dma_tile_groups[
+                        sorted_tags[idx + update]
+                    ]
                     for dma_tile in dma_tile_group.dma_tile_to_pes.keys():
                         offset_map[dtensor.offset_map[dma_tile.tensor_tile_label]] = (
                             dma_tile_group.dma_tile_to_pes[dma_tile]
@@ -799,7 +803,10 @@ class CodeGenerator:
             for shim_tile in self.used_shim_tiles:
                 shim_tile.print()
             print("\nglobal_io_dma:")
-            print(self.global_io_dma)
+            for tag, dma_list in self.global_io_dma.items():
+                print(f"#: {tag}")
+                for dma in dma_list:
+                    print(f"    {dma}")
             print("########################################################\n\n")
 
     def map_core_func_to_physical_tiles(self) -> dict[str, tuple[int, int]]:
@@ -970,11 +977,67 @@ class CodeGenerator:
                 for func_name, (row, col) in core_function_mapping.items():
                     self.tile_map[func_name] = aie_d.TileOp(col=col, row=row + 2)
                 # define fifos and link them
-                # TODO
+                for shim_node in self.used_shim_tiles:
+                    shim_tile = self.tile_map[shim_node.tile_name]
+                    for send_port in shim_node.send_ports:
+                        # skip the ones connected to externel
+                        if len(send_port.connected_nodes) == 0:
+                            continue
+                        mem_tiles = []
+                        for node in send_port.connected_nodes:
+                            mem_tiles.append(self.tile_map[node])
+                        memref_type = aie_ir.MemRefType.get(
+                            send_port.data_shape.to_list(),
+                            get_element_type(str(send_port.dtype)),
+                        )
+                        name = f"{shim_node.tile_name}_send_{send_port.id}"
+                        self.fifo_map[name] = aie_d.object_fifo(
+                            name, shim_tile, mem_tiles, depth=2, datatype=memref_type
+                        )
+                    for recv_port in shim_node.recv_ports:
+                        # skip the ones connected to externel
+                        if len(recv_port.connected_nodes) == 0:
+                            continue
+                        mem_tiles = []
+                        for node in recv_port.connected_nodes:
+                            mem_tiles.append(self.tile_map[node])
+                        memref_type = aie_ir.MemRefType.get(
+                            recv_port.data_shape.to_list(),
+                            get_element_type(str(recv_port.dtype)),
+                        )
+                        name = f"{shim_node.tile_name}_recv_{recv_port.id}"
+                        assert (
+                            len(mem_tiles) == 1
+                        ), "Only one mem tile is supported for recv port"
+                        self.fifo_map[name] = aie_d.object_fifo(
+                            name,
+                            mem_tiles[0],
+                            [shim_tile],
+                            depth=2,
+                            datatype=memref_type,
+                        )
+                print(self.fifo_map)
 
+                # TODO
+                print(self.global_io_dma)
                 # compute logic on each compute tile
+                for func in core_funcs:
+                    func_name = func.attributes["sym_name"].value
+                    func_core = aie_d.Core(
+                        tile=self.tile_map[func_name],
+                        link_with=(
+                            "external.o" if use_external_kernels[func_name] else None
+                        ),
+                    )
+                    if self.global_ip is None:
+                        self.global_ip = aie_ir.InsertionPoint(func_core)
+                    # TODO
+                    # self.build_core_function(
+                    #     func_core, func, self.core_func_args[func_name_w_id]
+                    # )
 
                 # runtime sequence
+                # TODO
         return self.aie_module
 
     def aie_codegen(
