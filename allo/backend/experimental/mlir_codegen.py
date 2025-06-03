@@ -674,11 +674,9 @@ class CodeGenerator:
             # Tags sorted in lexicographic order are used to preserve the data transfer sequence.
             # tiles in DMATileGroup with the same tage can be sent in parallel.
             for tag in sorted(
-                list(ordered_tile_group.order_tag_to_tiles.keys()), key=parse_tag
+                list(ordered_tile_group.dma_tile_groups.keys()), key=parse_tag
             ):
-                dma_tile_group: DMATileGroup = ordered_tile_group.order_tag_to_tiles[
-                    tag
-                ]
+                dma_tile_group: DMATileGroup = ordered_tile_group.dma_tile_groups[tag]
                 offset_map: dict[Offset4D, DMATensorTile] = {}
                 for dma_tile in dma_tile_group.dma_tile_to_pes.keys():
                     offset_map[dtensor.offset_map[dma_tile.tensor_tile_label]] = (
@@ -714,6 +712,8 @@ class CodeGenerator:
                                 port_id,
                                 is_input,
                             )
+                            if assigned_shim_tile is None:
+                                raise ValueError("Fail to assign shim tile")
                             self.global_io_dma[tag].append(
                                 CodeGenerator.GlobalIODMA(
                                     dtensor=dtensor,
@@ -749,6 +749,8 @@ class CodeGenerator:
                                     port_id,
                                     is_input,
                                 )
+                                if assigned_shim_tile is None:
+                                    raise ValueError("Fail to assign shim tile")
                                 self.global_io_dma[tag].append(
                                     CodeGenerator.GlobalIODMA(
                                         dtensor=dtensor,

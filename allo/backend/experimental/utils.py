@@ -38,7 +38,9 @@ class Config:
     MEM_MAX_RECV = 6
     SHIM_MAX_SEND = 2
     SHIM_MAX_RECV = 2
-    # fixme: can be optimized
+
+    # fixme: some hyper-parameters, can be optimized
+    IO_TILE_LOSE_FACTOR = 4
     COMPUTE_TILE_WITH_SHARED_MEMORY = 2
 
 

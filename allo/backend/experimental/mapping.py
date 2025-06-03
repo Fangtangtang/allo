@@ -41,7 +41,8 @@ class DMATileGroup:
     DMA tiles -> PEs (functions) using the same DMA tile.
     """
 
-    def __init__(self):
+    def __init__(self, order_tag: str):
+        self.order_tag = order_tag
         self.dma_tile_to_pes: dict[GlobalDMATile, list[str]] = {}
 
     def add_tile(self, tile: GlobalDMATile, pe: str):
@@ -62,15 +63,15 @@ class OrderedDMATileGroup:
     """
 
     def __init__(self):
-        self.order_tag_to_tiles: dict[str, DMATileGroup] = {}
+        self.dma_tile_groups: dict[str, DMATileGroup] = {}
 
     def add_tile(self, tile: GlobalDMATile, order_tag: str, pe: str):
-        if order_tag not in self.order_tag_to_tiles:
-            self.order_tag_to_tiles[order_tag] = DMATileGroup()
-        self.order_tag_to_tiles[order_tag].add_tile(tile, pe)
+        if order_tag not in self.dma_tile_groups:
+            self.dma_tile_groups[order_tag] = DMATileGroup(order_tag)
+        self.dma_tile_groups[order_tag].add_tile(tile, pe)
 
     def print(self):
-        for order_tag, tiles in self.order_tag_to_tiles.items():
+        for order_tag, tiles in self.dma_tile_groups.items():
             print(f"<<<<< {order_tag} >>>>>")
             tiles.print()
 

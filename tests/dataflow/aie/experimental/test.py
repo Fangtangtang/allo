@@ -87,8 +87,81 @@ def _test_gemm_2D():
     # print("PASSED!")
 
 
+def _test_summa_2x2():
+    Ty = int32
+    M, K, N = 8, 8, 8
+    P0, P1 = 2, 2
+
+    La = Layout("RS1")
+    Lb = Layout("S1S0")
+
+    @df.region()
+    def top():
+        row_fifo = df.array(df.pipe(dtype=Ty, shape=(M, N // 2), depth=1), shape=(P0,))
+        final_fifo = df.array(df.pipe(dtype=Ty, shape=(M, N), depth=P0), shape=(P0,))
+
+        @df.kernel(mapping=[P0, P1])
+        def summa(A: Ty[M, K] @ La, B: Ty[K, N] @ Lb):
+            i, j = df.get_pid()
+
+            P_tile: Ty[M, N // 2] = allo.matmul(A, B)
+
+            with allo.meta_if(j == 1):
+                row_fifo[i].put(P_tile)
+            with allo.meta_else():
+                F_tile: Ty[M, N] = 0
+                right_half: Ty[M, N // 2] = row_fifo[i].get()
+                with allo.meta_for(M) as m:
+                    with allo.meta_for(N // 2) as n:
+                        F_tile[m, n] = P_tile[m, n]
+                        F_tile[m, n + N // 2] = right_half[m, n]
+                final_fifo[i].put(F_tile)
+
+        @df.kernel(mapping=[1])
+        def write_c(C: Ty[M, N]):
+            agg: Ty[M, N] = 0
+            with allo.meta_for(P0) as i:
+                agg[:, :] += final_fifo[i].get()
+            C[:, :] = agg
+
+    mod = df.build(top, target="aie-mlir")
+
+def _test_summa():
+    Ty = int32
+    M, K, N = 32, 32, 32
+    P0, P1 = 4, 4
+
+    La = Layout("RS0")
+    Lb = Layout("S0S1")
+    Lc = Layout("RS1")
+
+    @df.region()
+    def top():
+        column_fifo = df.array(
+            df.pipe(dtype=Ty, shape=(M, N // P0), depth=1), shape=(P0, P1 - 1)
+        )
+
+        @df.kernel(mapping=[P0, P1])
+        def summa(B: Ty[K, N] @ Lb, A: Ty[M, K] @ La, C: Ty[M, N] @ Lc):
+            i, j = df.get_pid()
+
+            P_tile: Ty[M, N // P0] = allo.matmul(A, B)
+
+            with allo.meta_if(j == 0):
+                P_tile[:, :] += column_fifo[i, j].get()
+                C[:, :] = P_tile
+            with allo.meta_elif(j == P1 - 1):
+                column_fifo[i, j - 1].put(P_tile)
+            with allo.meta_else():
+                P_tile[:, :] += column_fifo[i, j].get()
+                column_fifo[i, j - 1].put(P_tile)
+
+    mod = df.build(top, target="aie-mlir")
+
 if __name__ == "__main__":
-    _test_tensor_parallelism()
+    # _test_summa()
+    _test_summa_2x2()
+    # _test_tensor_parallelism()
     # _test_gemm_1D()
     # _test_gemm_2D()
     # _test_gemm_1D_i16_i16()
