@@ -160,9 +160,9 @@ def _test_summa():
 
 if __name__ == "__main__":
     # _test_summa()
-    _test_summa_2x2()
+    # _test_summa_2x2()
     # _test_tensor_parallelism()
     # _test_gemm_1D()
-    # _test_gemm_2D()
+    _test_gemm_2D()
     # _test_gemm_1D_i16_i16()
     # _test_gemm_2D_i16_i32()

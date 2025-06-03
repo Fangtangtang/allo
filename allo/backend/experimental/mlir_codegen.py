@@ -673,15 +673,23 @@ class CodeGenerator:
             tile_size = Size4D.from_list(tile_shape)
             # Tags sorted in lexicographic order are used to preserve the data transfer sequence.
             # tiles in DMATileGroup with the same tage can be sent in parallel.
-            for tag in sorted(
+            sorted_tags = sorted(
                 list(ordered_tile_group.dma_tile_groups.keys()), key=parse_tag
-            ):
+            )
+            idx = 0
+            while idx < len(sorted_tags):
+                update = 0
+                tag = sorted_tags[idx]
                 dma_tile_group: DMATileGroup = ordered_tile_group.dma_tile_groups[tag]
-                offset_map: dict[Offset4D, DMATensorTile] = {}
-                for dma_tile in dma_tile_group.dma_tile_to_pes.keys():
-                    offset_map[dtensor.offset_map[dma_tile.tensor_tile_label]] = (
-                        dma_tile
-                    )
+                offset_map: dict[Offset4D, list[str]] = {}
+                # fixme: this is an ugly hack. We need more elegant and robust way to handle this.
+                while len(offset_map) < Config.IO_TILE_LOSE_FACTOR and idx+update < len(sorted_tags):
+                    dma_tile_group = ordered_tile_group.dma_tile_groups[sorted_tags[idx+update]]
+                    for dma_tile in dma_tile_group.dma_tile_to_pes.keys():
+                        offset_map[dtensor.offset_map[dma_tile.tensor_tile_label]] = (
+                            dma_tile_group.dma_tile_to_pes[dma_tile]
+                        )
+                    update += 1
                 coalesced_access, coalesce_info = coalesce_memory_access(
                     list(offset_map.keys())
                 )
@@ -694,9 +702,7 @@ class CodeGenerator:
                 for offset, size in coalesced_access.items():
                     connected_nodes: list[list[str]] = []
                     for node in coalesce_info[offset]:
-                        connected_nodes.append(
-                            dma_tile_group.dma_tile_to_pes[offset_map[node]]
-                        )
+                        connected_nodes.append(offset_map[node])
                     while size.get_total_size() != 0:
                         coalesced_size = Size4D.coalesce(size, tile_size)
                         assigned_mem_tile, port_id = assign_mem_tile(
@@ -770,6 +776,7 @@ class CodeGenerator:
                         inc = partitioned_size.get_total_size()
                         connected_nodes = connected_nodes[inc:]
                         offset_id += inc
+                idx += update
 
         for input_idx, ordered_tile_group in global_in_tile_to_func.items():
             map_dtensor_to_physical_tiles(
