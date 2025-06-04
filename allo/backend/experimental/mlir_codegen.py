@@ -239,28 +239,13 @@ class CodeGenerator:
         self.used_mem_tiles: list[GlobalDMANode] = None
         self.used_shim_tiles: list[GlobalDMANode] = None
         self.global_io_dma: dict[str, list[CodeGenerator.GlobalIODMA]] = None
-        self.fifo_manager: DMAFIFOManager = None
+        self.fifo_manager: DMAFIFOManager = DMAFIFOManager()
         # ------------------------------------------------------------
 
         self.aie_module = None  # The top-level AIE IR module
         self.global_ip: aie_ir.InsertionPoint = (
             None  # mark the inserting point for buffers
         )
-
-    def collect_stream_info(self, streams: dict[str, Stream], context):
-        """
-        Extract and update allo.stream element types from the top_function body.
-
-        Args:
-            - streams (dict[str, Stream]): Dictionary of allo.stream objects.
-            - context: The current allo MLIR context.
-        """
-        for func_block in self.top_function.body:
-            for op in func_block.operations:
-                if op.name == "allo.stream_construct":
-                    streams[op.attributes["name"].value].set_element_type(
-                        str(op.res.type), context
-                    )
 
     def preporocess_dumped_core_func(
         self,
@@ -818,7 +803,6 @@ class CodeGenerator:
             print("########################################################\n\n")
 
     def bind_port_to_fifo(self):
-        self.fifo_manager = DMAFIFOManager()
         for dma_nodes in zip(self.used_shim_tiles, self.used_mem_tiles):
             for dma_node in dma_nodes:
                 for send_port in dma_node.send_ports:
@@ -1048,21 +1032,21 @@ class CodeGenerator:
                 # compute <-> compute
                 # TODO
 
-                # compute logic on each compute tile
-                for func in core_funcs:
-                    func_name = func.attributes["sym_name"].value
-                    func_core = aie_d.Core(
-                        tile=self.tile_map[func_name],
-                        link_with=(
-                            "external.o" if use_external_kernels[func_name] else None
-                        ),
-                    )
-                    if self.global_ip is None:
-                        self.global_ip = aie_ir.InsertionPoint(func_core)
-                    # TODO
-                    # self.build_core_function(
-                    #     func_core, func, self.core_func_args[func_name_w_id]
-                    # )
+                # # compute logic on each compute tile
+                # for func in core_funcs:
+                #     func_name = func.attributes["sym_name"].value
+                #     func_core = aie_d.Core(
+                #         tile=self.tile_map[func_name],
+                #         link_with=(
+                #             "external.o" if use_external_kernels[func_name] else None
+                #         ),
+                #     )
+                #     if self.global_ip is None:
+                #         self.global_ip = aie_ir.InsertionPoint(func_core)
+                #     # TODO
+                #     # self.build_core_function(
+                #     #     func_core, func, self.core_func_args[func_name_w_id]
+                #     # )
 
                 # runtime sequence
                 # TODO
@@ -1237,7 +1221,6 @@ class CodeGenerator:
                                     mem_stride[:-1] if io == "in" else [],
                                 )
                 # compute <-> compute
-                self.collect_stream_info(self.streams, self.top_function.context)
                 for stream_name, stream in self.streams.items():
                     src_tile = self.tile_map[f"compute_{stream.src}"]
                     dst_tile = [self.tile_map[f"compute_{stream.dst}"]]

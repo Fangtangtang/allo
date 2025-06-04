@@ -431,6 +431,13 @@ class AIE_MLIRModule:
         top_func, core_func_groups, external_funcs = classify_aie_functions(
             self.allo_module, self.top_func_name
         )
+        # update stream information
+        for func_block in top_func.body:
+            for op in func_block.operations:
+                if op.name == "allo.stream_construct":
+                    self.streams[op.attributes["name"].value].set_element_type(
+                        str(op.res.type), top_func.context
+                    )
         code_generator = CodeGenerator(
             device_type,
             self.global_inputs,
