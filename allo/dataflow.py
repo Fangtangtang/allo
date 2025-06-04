@@ -344,6 +344,7 @@ def build(
             s.func_args,
             project,
             stream_info,
+            stream_types_dict,
         )
         aie_mod.build()
         # aie_mod.build_experimental(

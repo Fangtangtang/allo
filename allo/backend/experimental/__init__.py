@@ -43,6 +43,7 @@ class AIE_MLIRModule:
         func_args: dict,
         project_dir: str,
         stream_info: dict,
+        stream_types_dict: dict[str, Type],
     ):
         """
         Note: the module is data-driven,
@@ -61,7 +62,7 @@ class AIE_MLIRModule:
         self.streams: dict[str, Stream] = {}
         self.stream_info: dict[str, dict[str, bool]] = {}
         self._init_func_args(func_args)
-        self._init_streams(stream_info)
+        self._init_streams(stream_info, stream_types_dict)
 
         # index in top fucntion argument list -> DTensor
         self.global_inputs: dict[int, DTensor] = None
@@ -91,13 +92,16 @@ class AIE_MLIRModule:
                 else:
                     raise ValueError(f"Unresolved function argument {arg}")
 
-    def _init_streams(self, stream_info: dict):
+    def _init_streams(self, stream_info: dict, stream_types_dict: dict[str, Type]):
         """
         Collect allo.stream information for each function.
         """
         for func_name, info_list in stream_info.items():
             self.stream_info[func_name] = {}
             for name, io in info_list:
+                self.streams[name].set_element_type(
+                    str(stream_types_dict[name]), self.allo_module.context
+                )
                 if io == "in":
                     self.streams[name].dst = func_name
                     self.stream_info[func_name][name] = True
@@ -431,13 +435,6 @@ class AIE_MLIRModule:
         top_func, core_func_groups, external_funcs = classify_aie_functions(
             self.allo_module, self.top_func_name
         )
-        # update stream information
-        for func_block in top_func.body:
-            for op in func_block.operations:
-                if op.name == "allo.stream_construct":
-                    self.streams[op.attributes["name"].value].set_element_type(
-                        str(op.res.type), top_func.context
-                    )
         code_generator = CodeGenerator(
             device_type,
             self.global_inputs,

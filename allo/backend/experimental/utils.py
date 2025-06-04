@@ -100,6 +100,7 @@ class Stream:
         if self.depth >= 0:
             assert type_str == self.type_str
             return
+        self.type_str = type_str
         match = re.match(r"!allo\.stream<([^,]+),\s*(\d+)>", type_str)
         shape: list[int] = None
         dtype: str = None
