@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from collections import defaultdict
 from ..._mlir.dialects import func as func_d, allo as allo_d
 from ..._mlir.ir import Type
-from .utils import Argument, parse_kernel_name
+from .utils import Argument, parse_kernel_name, Stream, StreamType
 from ...memory import DTensor, Size4D, Offset4D
 
 
@@ -84,15 +84,17 @@ class DMAFIFO:
         dst: list[str],
         data_shape: list[int],
         dtype: str,
+        depth: int = 2,
     ):
         self.name = name
         self.src = sorted(src)
         self.dst = sorted(dst)
         self.data_shape = data_shape
         self.dtype = dtype
+        self.depth = depth
 
     def __str__(self):
-        return f"FIFO({self.name}, src={self.src}, dst={self.dst}, {self.dtype}{self.data_shape})"
+        return f"FIFO({self.name}, src={self.src}, dst={self.dst}, {self.dtype}{self.data_shape}, depth={self.depth})"
 
     def __repr__(self):
         return self.__str__()
@@ -192,8 +194,8 @@ class VirtualNode:
         self.global_inputs: list[GlobalDMATile] = []
         self.global_outputs: list[GlobalDMATile] = []
         # inter-PE: input/output node name -> (stream type, stream name)
-        self.input_streams: dict[str, tuple[Type, str]] = {}
-        self.output_streams: dict[str, tuple[Type, str]] = {}
+        self.input_streams: dict[str, tuple[StreamType, str]] = {}
+        self.output_streams: dict[str, tuple[StreamType, str]] = {}
         self.op_tag: str = re.sub(
             r"func\.func\s+@[\w\d_]+(\s*\()", r"func.func\1", str(self.func.operation)
         )
@@ -216,19 +218,11 @@ class VirtualNode:
             )
         )
 
-    def add_input(self, name: str, input_type: Type, src: str):
+    def add_input(self, name: str, input_type: StreamType, src: str):
         self.input_streams[src] = (input_type, name)
 
-    def add_output(self, name: str, output_type: Type, dst: str):
+    def add_output(self, name: str, output_type: StreamType, dst: str):
         self.output_streams[dst] = (output_type, name)
-
-
-class VirtualEdge:
-    def __init__(self, name: str, stream_type: Type):
-        self.name: str = name
-        self.type: Type = stream_type
-        self.src: VirtualNode = None
-        self.dst: VirtualNode = None
 
 
 # ############################################################
@@ -252,13 +246,13 @@ class CollocatedBaseNode:
         self.global_outputs: list[dict[int, list[GlobalDMATile]]] = []
         # input/output node id -> edge stream type
         # fixme: may conflict when having multiple input/output corresponding to the same node
-        self.input_streams: dict[int, list[tuple[Type, str]]] = defaultdict(list)
-        self.output_streams: dict[int, list[tuple[Type, str]]] = defaultdict(list)
+        self.input_streams: dict[int, list[tuple[StreamType, str]]] = defaultdict(list)
+        self.output_streams: dict[int, list[tuple[StreamType, str]]] = defaultdict(list)
 
-    def add_input(self, node_id: int, input_type: Type, stream_name: str):
+    def add_input(self, node_id: int, input_type: StreamType, stream_name: str):
         self.input_streams[node_id].append((input_type, stream_name))
 
-    def add_output(self, node_id: int, output_type: Type, stream_name: str):
+    def add_output(self, node_id: int, output_type: StreamType, stream_name: str):
         self.output_streams[node_id].append((output_type, stream_name))
 
     def __str__(self):
@@ -322,14 +316,11 @@ class ComputationGraph:
     def __init__(
         self,
         df_kernels: list[func_d.FuncOp],
-        stream_info: dict[
-            str, list[tuple[str, str]]
-        ],  # function naem -> list((stream_name, direction))
-        stream_types_dict: dict[str, Type],
+        stream_map: dict[str, Stream],
         core_func_args: dict[str, dict[int, tuple[Argument, bool]]],
     ):
         self.nodes: dict[str, VirtualNode] = {}
-        self.edges: dict[str, VirtualEdge] = {}
+        self.edges: dict[str, Stream] = dict(stream_map)
         # construct nodes
         for func in df_kernels:
             func_name = func.attributes["sym_name"].value
@@ -347,31 +338,11 @@ class ComputationGraph:
                     self.nodes[func_name].add_global_output(
                         idx, argument.dtensor, indexes
                     )
-        # construct edges
-        for func_name, streams in stream_info.items():
-            node = self.nodes.get(func_name)
-            if node is None:
-                raise ValueError(f"Function {func_name} not found in computation graph")
-            for stream_name, direction in streams:
-                edge = self.edges.get(stream_name)
-                if edge is None:
-                    edge = VirtualEdge(stream_name, stream_types_dict[stream_name])
-                    self.edges[stream_name] = edge
-                if direction == "in":
-                    assert edge.dst is None
-                    edge.dst = node
-                elif direction == "out":
-                    assert edge.src is None
-                    edge.src = node
-                else:
-                    raise ValueError(
-                        f"Invalid stream direction '{direction}' for {func_name}"
-                    )
         # collect nodes' inputs/outputs
         for edge in self.edges.values():
             assert edge.src is not None and edge.dst is not None
-            edge.src.add_output(edge.name, edge.type, edge.dst.func_name)
-            edge.dst.add_input(edge.name, edge.type, edge.src.func_name)
+            self.nodes[edge.src].add_output(edge.name, edge.type, edge.dst)
+            self.nodes[edge.dst].add_input(edge.name, edge.type, edge.src)
 
         self.collocated_nodes: dict[str, CollocatedBaseNode] = {}
         self.initialize_collocated_nodes()
@@ -562,7 +533,7 @@ class ComputationGraph:
         print("\n<<<<< Edges >>>>>")
         for edge in self.edges.values():
             print(
-                f"{edge.src.func_name} -> {edge.dst.func_name}: {edge.name} ({edge.type})"
+                f"{self.nodes[edge.src].func_name} -> {self.nodes[edge.dst].func_name}: {edge.name} ({edge.type})"
             )
         print("<<<<< Computation Graph >>>>>\n")
 

@@ -346,12 +346,10 @@ def build(
             stream_info,
             stream_types_dict,
         )
-        aie_mod.build()
-        # aie_mod.build_experimental(
-        #     stream_info,
-        #     stream_types_dict,
-        #     enable_virtual_mapping=True
-        # )
+        # aie_mod.build()
+        aie_mod.build_experimental(
+            enable_virtual_mapping=True
+        )
         return aie_mod
 
     if target == "simulator":

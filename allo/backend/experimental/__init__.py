@@ -112,9 +112,7 @@ class AIE_MLIRModule:
     # ############################################################
     # Build
     # ############################################################
-    def _init_virtual_graph(
-        self, stream_info: dict, stream_types_dict: dict[str, Type]
-    ):
+    def _init_virtual_graph(self):
         assert (
             self.core_func_args is not None
             and self.global_inputs is not None
@@ -126,8 +124,7 @@ class AIE_MLIRModule:
         df_kernels = get_df_kernels(self.allo_module)
         self.virtual_computation_graph: ComputationGraph = ComputationGraph(
             df_kernels,
-            stream_info,
-            stream_types_dict,
+            self.streams,
             self.core_func_args,
         )
         if os.getenv("VERBOSE") == "1":
@@ -262,8 +259,6 @@ class AIE_MLIRModule:
 
     def build_experimental(
         self,
-        stream_info: dict,
-        stream_types_dict: dict[str, Type],
         device_type="npu1_4col",
         enable_virtual_mapping: bool = False,
     ):
@@ -273,7 +268,7 @@ class AIE_MLIRModule:
         os.makedirs(build_dir)
 
         self.analyze_kernel_parameters()
-        self._init_virtual_graph(stream_info, stream_types_dict)
+        self._init_virtual_graph()
         if enable_virtual_mapping:
             # TODO: transformation on virtual map. may modify allo_module here
             # TODO: update streams and core_func_args

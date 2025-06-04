@@ -56,6 +56,21 @@ device_config_map = {
 # ############################################################
 # MLIR Code Generation
 # ############################################################
+
+
+@dataclass(frozen=True)
+class StreamType:
+    depth: int
+    shape: list[int]
+    dtype: str
+
+    def __str__(self):
+        return f"({self.dtype} {self.shape}, depth={self.depth})"
+
+    def __repr__(self):
+        return self.__str__()
+
+
 class Stream:
     """
     Allo Stream class
@@ -64,9 +79,7 @@ class Stream:
     def __init__(self, name: str):
         self.name = name
         self.type_str = None
-        self.depth = -1
-        self.shape: list[int] = None
-        self.dtype: str = None
+        self.type: StreamType = None
         self.allo_element_type: Type = None  # element type in allo context
         self.is_tensor = False  # whether the stream carries tensor data
 
@@ -80,9 +93,7 @@ class Stream:
         """
         self.name = stream.name
         self.type_str = stream.type_str
-        self.depth = stream.depth
-        self.shape = stream.shape
-        self.dtype = stream.dtype
+        self.type = stream.type
         self.allo_element_type = stream.allo_element_type
         self.is_tensor = stream.is_tensor
         self.src = updated_src
@@ -97,7 +108,7 @@ class Stream:
             - type_str (str): The IR type string
             - context (Context): The current allo MLIR context used for constructing types
         """
-        if self.depth >= 0:
+        if self.type is not None:
             assert type_str == self.type_str
             return
         self.type_str = type_str
@@ -107,7 +118,7 @@ class Stream:
         if match:
             with context, allo_ir.ir.Location.unknown():
                 element_type_str = match.group(1)
-                self.depth = int(match.group(2))
+                depth = int(match.group(2))
                 memref_match = re.match(
                     r"memref<([0-9x\?]*)x?([a-z0-9]+)>", element_type_str
                 )
@@ -148,14 +159,13 @@ class Stream:
                     shape,
                     get_element_allo_type(dtype),
                 )
-                self.shape = shape
-                self.dtype = dtype
+                self.type = StreamType(depth, shape, dtype)
                 self.is_tensor = len(shape) > 0
         else:
             raise ValueError(f"Invalid stream type {type_str}.")
 
     def __str__(self):
-        return f"Stream (name={self.name}, depth={self.depth}, dtype={self.allo_element_type}, is_tensor={self.is_tensor}, src={self.src}, dst={self.dst})"
+        return f"Stream (name={self.name}, dtype={self.allo_element_type}, is_tensor={self.is_tensor}, src={self.src}, dst={self.dst})"
 
 
 @dataclass

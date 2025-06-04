@@ -36,7 +36,6 @@ from .mapping import (
     OrderedDMATileGroup,
     DMATileGroup,
     ComputationGraph,
-    DMAFIFO,
     DMAFIFOManager,
 )
 
@@ -1001,7 +1000,7 @@ class CodeGenerator:
                         dma_fifo.name,
                         self.tile_map[dma_fifo.src[0]],
                         [self.tile_map[node] for node in dma_fifo.dst],
-                        depth=2,
+                        depth=dma_fifo.depth,
                         datatype=aie_ir.MemRefType.get(
                             dma_fifo.data_shape.to_list(),
                             get_element_type(str(dma_fifo.dtype)),
@@ -1228,10 +1227,10 @@ class CodeGenerator:
                         stream_name,
                         src_tile,
                         dst_tile,
-                        depth=stream.depth,
+                        depth=stream.type.depth,
                         datatype=aie_ir.MemRefType.get(
-                            stream.shape,
-                            get_element_type(str(stream.dtype)),
+                            stream.type.shape,
+                            get_element_type(str(stream.type.dtype)),
                         ),
                     )
 
