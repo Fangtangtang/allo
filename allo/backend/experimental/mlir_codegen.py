@@ -238,6 +238,9 @@ class CodeGenerator:
         self.used_mem_tiles: list[GlobalDMANode] = None
         self.used_shim_tiles: list[GlobalDMANode] = None
         self.global_io_dma: dict[str, list[CodeGenerator.GlobalIODMA]] = None
+        self.function_port_map: dict[str, dict[DTensor, GlobalDMANode.Port]] = (
+            defaultdict(lambda: defaultdict(GlobalDMANode.Port))
+        )
         self.fifo_manager: DMAFIFOManager = DMAFIFOManager()
         # ------------------------------------------------------------
 
@@ -444,7 +447,7 @@ class CodeGenerator:
                 for alloc_op in alloc_ops:
                     buffer_op = aie_d.BufferOp(
                         buffer=alloc_op.results[0].type,
-                        tile=self.tile_map[f"compute_{parsed_function.name.value}"],
+                        tile=func_core.tile,
                         ip=self.global_ip,
                     )
                     for old, new in zip(alloc_op.results, buffer_op.results):
@@ -501,11 +504,12 @@ class CodeGenerator:
             is_input: bool,
             coalesced_size: Size4D,
             tile_size: Size4D,
-        ) -> tuple[GlobalDMANode, int]:
+        ) -> tuple[GlobalDMANode, int, list[int]]:
             """
+            fixme: maybe too aie-specific?
             Assign a memory tile to the given dtensor tiles.
             If no memory tile is available, return None.
-            Else, return the assigned memory tile and the port id.
+            Else, return the assigned memory tile, the port id to shim, and the port ids to compute.
             """
             send_need = len(connected_nodes) if is_input else 1
             recv_need = 1 if is_input else len(connected_nodes)
@@ -573,9 +577,13 @@ class CodeGenerator:
                 if os.environ.get("VERBOSE"):
                     print("\nassigned_mem_tile: ", end="")
                     assigned_mem_tile.print()
-                return assigned_mem_tile, recv_ports[0] if is_input else send_ports[0]
+                return (
+                    assigned_mem_tile,
+                    recv_ports[0] if is_input else send_ports[0],
+                    send_ports if is_input else recv_ports,
+                )
             # TODO: port reuse
-            return None, -1
+            return None, -1, []
 
         def assign_shim_tile(
             mem_tile: GlobalDMANode,
@@ -658,6 +666,10 @@ class CodeGenerator:
                 size_part.set_dim_size(dim, partition_size)
                 return size_part
 
+            def register_function_param_port(port: GlobalDMANode.Port):
+                for node in port.connected_nodes:
+                    self.function_port_map[node][dtensor] = port
+
             tile_dtype = dtensor.dtype
             tile_shape = dtensor.size
             for i in dtensor.shared_dims:
@@ -701,7 +713,7 @@ class CodeGenerator:
                         connected_nodes.append(offset_map[node])
                     while size.get_total_size() != 0:
                         coalesced_size = Size4D.coalesce(size, tile_size)
-                        assigned_mem_tile, port_id = assign_mem_tile(
+                        assigned_mem_tile, port_id, ports_to_compute = assign_mem_tile(
                             tile_dtype,
                             connected_nodes,
                             is_input,
@@ -709,6 +721,14 @@ class CodeGenerator:
                             tile_size,
                         )
                         if assigned_mem_tile is not None:
+                            for port in ports_to_compute:
+                                register_function_param_port(
+                                    (
+                                        assigned_mem_tile.send_ports[port]
+                                        if is_input
+                                        else assigned_mem_tile.recv_ports[port]
+                                    ),
+                                )
                             assigned_shim_tile, shim_port_id = assign_shim_tile(
                                 assigned_mem_tile,
                                 port_id,
@@ -738,14 +758,24 @@ class CodeGenerator:
                             partitioned_connected_nodes = connected_nodes[
                                 : partitioned_size.get_total_size()
                             ]
-                            assigned_mem_tile, port_id = assign_mem_tile(
-                                tile_dtype,
-                                partitioned_connected_nodes,
-                                is_input,
-                                coalesced_size,
-                                tile_size,
+                            assigned_mem_tile, port_id, ports_to_compute = (
+                                assign_mem_tile(
+                                    tile_dtype,
+                                    partitioned_connected_nodes,
+                                    is_input,
+                                    coalesced_size,
+                                    tile_size,
+                                )
                             )
                             if assigned_mem_tile is not None:
+                                for port in ports_to_compute:
+                                    register_function_param_port(
+                                        (
+                                            assigned_mem_tile.send_ports[port]
+                                            if is_input
+                                            else assigned_mem_tile.recv_ports[port]
+                                        ),
+                                    )
                                 assigned_shim_tile, shim_port_id = assign_shim_tile(
                                     assigned_mem_tile,
                                     port_id,
@@ -822,6 +852,11 @@ class CodeGenerator:
                     recv_port.bind_to_fifo(dma_fifo)
         if os.environ.get("VERBOSE"):
             self.fifo_manager.print()
+        # bind function ports to fifos
+        for func_name, port_map in self.function_port_map.items():
+            self.compute_core_io[func_name] = {}
+            for dtensor, port in port_map.items():
+                self.compute_core_io[func_name][dtensor] = port.bind_fifo.name
 
     def map_core_func_to_physical_tiles(self) -> dict[str, tuple[int, int]]:
         """
@@ -945,6 +980,14 @@ class CodeGenerator:
         self.map_global_io_to_physical_tiles(
             global_in_tile_to_func, global_out_tile_to_func
         )
+
+        if os.environ.get("VERBOSE"):
+            print("<<< function_port_map >>>")
+            for func_name, port_map in self.function_port_map.items():
+                print(f"{func_name}:")
+                for dtensor, port in port_map.items():
+                    print(f"  {dtensor}: {port}")
+
         self.bind_port_to_fifo()
         core_function_mapping = self.map_core_func_to_physical_tiles()
         # fixme: maybe better to resolve this using IR constructor
@@ -961,7 +1004,6 @@ class CodeGenerator:
             }
         """
 
-        # TODO
         with aie_ir.Context() as ctx, aie_ir.Location.unknown():
             # module wrapper
             self.aie_module = aie_ir.Module.parse(wrapper_code, ctx)
@@ -992,6 +1034,19 @@ class CodeGenerator:
                 for func_name, (row, col) in core_function_mapping.items():
                     self.tile_map[func_name] = aie_d.TileOp(col=col, row=row + 2)
                 # define fifos
+                # - stream fifos: compute <-> compute
+                for stream_name, stream in self.streams.items():
+                    self.fifo_map[stream_name] = aie_d.object_fifo(
+                        stream_name,
+                        self.tile_map[stream.src],
+                        self.tile_map[stream.dst],
+                        depth=stream.type.depth,
+                        datatype=aie_ir.MemRefType.get(
+                            stream.type.shape,
+                            get_element_type(str(stream.type.dtype)),
+                        ),
+                    )
+                # - io fifos: shim <-> mem <-> compute
                 for dma_fifo in self.fifo_manager.fifo_map.values():
                     if len(dma_fifo.src) == 0 or len(dma_fifo.dst) == 0:
                         # from/to global
@@ -1028,26 +1083,41 @@ class CodeGenerator:
                             producer, consumer, producer_offset, consumer_offset
                         )
 
-                # compute <-> compute
-                # TODO
-
-                # # compute logic on each compute tile
-                # for func in core_funcs:
-                #     func_name = func.attributes["sym_name"].value
-                #     func_core = aie_d.Core(
-                #         tile=self.tile_map[func_name],
-                #         link_with=(
-                #             "external.o" if use_external_kernels[func_name] else None
-                #         ),
-                #     )
-                #     if self.global_ip is None:
-                #         self.global_ip = aie_ir.InsertionPoint(func_core)
-                #     # TODO
-                #     # self.build_core_function(
-                #     #     func_core, func, self.core_func_args[func_name_w_id]
-                #     # )
+                # compute logic on each compute tile
+                for func in core_funcs:
+                    func_name = func.attributes["sym_name"].value
+                    func_core = aie_d.Core(
+                        tile=self.tile_map[func_name],
+                        link_with=(
+                            "external.o" if use_external_kernels[func_name] else None
+                        ),
+                    )
+                    if self.global_ip is None:
+                        self.global_ip = aie_ir.InsertionPoint(func_core)
+                    self.build_core_function(
+                        func_core, func, self.core_func_args[func_name]
+                    )
 
                 # runtime sequence
+                runtime_seq = aiex_d.RuntimeSequenceOp()
+                runtime_args = []
+                for i in range(len(self.global_inputs) + len(self.global_outputs)):
+                    arg = (
+                        self.global_inputs[i]
+                        if i in self.global_inputs
+                        else self.global_outputs[i]
+                    )
+                    runtime_args.append(
+                        aie_ir.MemRefType.get(
+                            arg.shape, get_element_type(str(arg.dtype))
+                        )
+                    )
+
+                runtime_seq_entry_block = runtime_seq.body.blocks.append(*runtime_args)
+                with aie_ir.InsertionPoint(runtime_seq_entry_block):
+                    # TODO
+                    pass
+
                 # TODO
         return self.aie_module
 

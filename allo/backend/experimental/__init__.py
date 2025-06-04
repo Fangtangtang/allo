@@ -310,7 +310,7 @@ class AIE_MLIRModule:
             global_in_tile_to_func,
             global_out_tile_to_func,
         )
-        print(self.aie_module)
+        print(str(self.aie_module))
 
     def collect_io(
         self,

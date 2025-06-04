@@ -5,7 +5,6 @@ import re
 from dataclasses import dataclass
 from collections import defaultdict
 from ..._mlir.dialects import func as func_d, allo as allo_d
-from ..._mlir.ir import Type
 from .utils import Argument, parse_kernel_name, Stream, StreamType
 from ...memory import DTensor, Size4D, Offset4D
 
