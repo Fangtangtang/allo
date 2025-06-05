@@ -373,7 +373,6 @@ class DTensor:
                 raise ValueError("Unsupported access pattern for 1D tensor.")
         elif len(self.shape) == 2:
             tensor_m, tensor_n = self.shape  # [tensor_m x tensor_n]
-            # device_a, device_b = self.layout.get_mapped_device_dim(self.mapping)
             if partition_str == "SS":
                 device_a, device_b = (
                     self.mapping[-partition_dim[0] - 1],

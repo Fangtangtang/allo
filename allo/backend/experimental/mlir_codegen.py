@@ -522,7 +522,6 @@ class CodeGenerator:
             send_size: list[int] = tile_shape if is_input else coalesced_size.to_list()
             recv_size: list[int] = coalesced_size.to_list() if is_input else tile_shape
             tile_total_size = tile_size.get_total_size()
-            print(f"tile_size: {tile_size}, {tile_shape}")
             if os.getenv("VERBOSE") == "1":
                 print(f"send_need: {send_need}, recv_need: {recv_need}")
             assigned_mem_tile = None
@@ -763,9 +762,9 @@ class CodeGenerator:
                                 CodeGenerator.GlobalIODMA(
                                     dtensor=dtensor,
                                     port=(
-                                        assigned_mem_tile.recv_ports[shim_port_id]
+                                        assigned_shim_tile.send_ports[shim_port_id]
                                         if is_input
-                                        else assigned_mem_tile.send_ports[shim_port_id]
+                                        else assigned_shim_tile.recv_ports[shim_port_id]
                                     ),
                                     offset=coalesce_info[offset][offset_id].to_list(),
                                     size=coalesced_size.to_list(),
@@ -813,12 +812,9 @@ class CodeGenerator:
                                 self.global_io_dma[tag].append(
                                     CodeGenerator.GlobalIODMA(
                                         dtensor=dtensor,
-                                        port=(
-                                            assigned_mem_tile.recv_ports[shim_port_id]
+                                        port=(assigned_shim_tile.send_ports[shim_port_id]
                                             if is_input
-                                            else assigned_mem_tile.send_ports[
-                                                shim_port_id
-                                            ]
+                                            else assigned_shim_tile.recv_ports[shim_port_id]
                                         ),
                                         offset=coalesce_info[offset][
                                             offset_id
@@ -1097,7 +1093,6 @@ class CodeGenerator:
                 # link fifos: in aie, mem tile serves as the linkages
                 for dma_node in self.used_mem_tiles:
                     for connect in dma_node.intra_connect:
-                        print(f"connect: {connect}")
                         producer = [
                             self.fifo_map[
                                 dma_node.recv_ports[recv_port_id].bind_fifo.name

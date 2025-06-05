@@ -77,14 +77,14 @@ def _test_gemm_2D():
         def gemm(A: TyI[M, K] @ LyA, B: TyI[K, N] @ LyB, C: TyO[M, N] @ LyC):
             C[:, :] = allo.matmul(A, B)
 
-    df.build(top, target="aie-mlir")
-    # mod = df.build(top, target="aie-mlir")
-    # A = np.random.randint(0, 64, (M, K)).astype(np.int32)
-    # B = np.random.randint(0, 64, (K, N)).astype(np.int32)
-    # C = np.zeros((M, N)).astype(np.int32)
-    # mod(A, B, C)
-    # np.testing.assert_allclose(C, A @ B, atol=1e-5)
-    # print("PASSED!")
+    # df.build(top, target="aie-mlir")
+    mod = df.build(top, target="aie-mlir")
+    A = np.random.randint(0, 64, (M, K)).astype(np.int32)
+    B = np.random.randint(0, 64, (K, N)).astype(np.int32)
+    C = np.zeros((M, N)).astype(np.int32)
+    mod(A, B, C)
+    np.testing.assert_allclose(C, A @ B, atol=1e-5)
+    print("PASSED!")
 
 
 def _test_summa_2x2():
