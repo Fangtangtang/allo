@@ -373,6 +373,7 @@ class CodeGenerator:
             cmax = aie_arith_d.ConstantOp(value=9223372036854775807, result=index_type)
             # scf.for %arg0 = %c0 to %cmax step %c1
             loop = aie_scf_d.ForOp(lower_bound=c0, upper_bound=cmax, step=c1)
+            print(self.compute_core_io)
             with aie_ir.InsertionPoint(loop.body):
                 # insert operations to get 'function parameter', acquire and subview
                 io_map = (
@@ -516,7 +517,7 @@ class CodeGenerator:
             send_size = tile_size if is_input else coalesced_size
             recv_size = coalesced_size if is_input else tile_size
             tile_total_size = tile_size.get_total_size()
-            if os.environ.get("VERBOSE"):
+            if os.getenv("VERBOSE") == "1":
                 print(f"send_need: {send_need}, recv_need: {recv_need}")
             assigned_mem_tile = None
             # Attempt to use a new memory tile
@@ -574,7 +575,7 @@ class CodeGenerator:
                         ),
                     )
                 )
-                if os.environ.get("VERBOSE"):
+                if os.getenv("VERBOSE") == "1":
                     print("\nassigned_mem_tile: ", end="")
                     assigned_mem_tile.print()
                 return (
@@ -637,7 +638,7 @@ class CodeGenerator:
                         offsets=[0],
                     )
                 )
-                if os.environ.get("VERBOSE"):
+                if os.getenv("VERBOSE") == "1":
                     print("\nassigned_shim_tile: ", end="")
                     assigned_shim_tile.print()
                 return assigned_shim_tile, recv_port.id if is_input else send_port.id
@@ -684,7 +685,6 @@ class CodeGenerator:
             while idx < len(sorted_tags):
                 update = 0
                 tag = sorted_tags[idx]
-                dma_tile_group: DMATileGroup = ordered_tile_group.dma_tile_groups[tag]
                 offset_map: dict[Offset4D, list[str]] = {}
                 # fixme: this is an ugly and problematic hack. We need more elegant and robust way to handle this.
                 while len(
@@ -694,14 +694,21 @@ class CodeGenerator:
                         sorted_tags[idx + update]
                     ]
                     for dma_tile in dma_tile_group.dma_tile_to_pes.keys():
-                        offset_map[dtensor.offset_map[dma_tile.tensor_tile_label]] = (
-                            dma_tile_group.dma_tile_to_pes[dma_tile]
-                        )
+                        if (
+                            dtensor.offset_map[dma_tile.tensor_tile_label]
+                            not in offset_map
+                        ):
+                            offset_map[
+                                dtensor.offset_map[dma_tile.tensor_tile_label]
+                            ] = []
+                        offset_map[
+                            dtensor.offset_map[dma_tile.tensor_tile_label]
+                        ].extend(dma_tile_group.dma_tile_to_pes[dma_tile])
                     update += 1
                 coalesced_access, coalesce_info = coalesce_memory_access(
                     list(offset_map.keys())
                 )
-                if os.environ.get("VERBOSE"):
+                if os.getenv("VERBOSE") == "1":
                     print()
                     print(offset_map)
                     print("access:", coalesced_access)
@@ -816,7 +823,7 @@ class CodeGenerator:
                 ordered_tile_group,
                 is_input=False,
             )
-        if os.environ.get("VERBOSE"):
+        if os.getenv("VERBOSE") == "1":
             print("\n\n########################################################")
             print("used_mem_tiles:")
             for mem_tile in self.used_mem_tiles:
@@ -850,7 +857,7 @@ class CodeGenerator:
                         dtype=recv_port.dtype,
                     )
                     recv_port.bind_to_fifo(dma_fifo)
-        if os.environ.get("VERBOSE"):
+        if os.getenv("VERBOSE") == "1":
             self.fifo_manager.print()
         # bind function ports to fifos
         for func_name, port_map in self.function_port_map.items():
@@ -955,7 +962,7 @@ class CodeGenerator:
                                 reverse = not reverse
                     core_fucn_mapping[node] = (row_idx, col_idx)
                     tile_used[row_idx][col_idx] = True
-            if os.environ.get("VERBOSE"):
+            if os.getenv("VERBOSE") == "1":
                 print("<<< Mapping >>>")
                 for node, (row, col) in core_fucn_mapping.items():
                     print(f"{node}: ({row}, {col})")
@@ -981,7 +988,7 @@ class CodeGenerator:
             global_in_tile_to_func, global_out_tile_to_func
         )
 
-        if os.environ.get("VERBOSE"):
+        if os.getenv("VERBOSE") == "1":
             print("<<< function_port_map >>>")
             for func_name, port_map in self.function_port_map.items():
                 print(f"{func_name}:")

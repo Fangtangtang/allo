@@ -430,7 +430,7 @@ class DTensor:
                 raise ValueError("Unsupported access pattern for 2D tensor.")
         else:
             raise ValueError("Unsupported access pattern.")
-
+        print(self.name, self.offset_map)
         self.shared_dims, self.size, self.stride = device_dims, size, stride
 
     def PE_tile_id_to_tensor_tile_id(self, pe_tile_id: tuple[int, ...]) -> str:
