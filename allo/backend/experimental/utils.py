@@ -38,6 +38,8 @@ class Config:
     MEM_MAX_RECV = 6
     SHIM_MAX_SEND = 2
     SHIM_MAX_RECV = 2
+    # https://github.com/Xilinx/mlir-aie/blob/46bb8c25967f173eebe56056661be226b3933a14/programming_guide/section-2/section-2d/DMATasks.md#best-practices-for-data-movement-and-synchronization-with-npu_dma_memcpy_nd
+    DMA_MAX_BDS = 16
 
     # fixme: some hyper-parameters, can be optimized
     IO_TILE_LOSE_FACTOR = 4

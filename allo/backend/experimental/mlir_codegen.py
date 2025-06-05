@@ -471,12 +471,16 @@ class CodeGenerator:
     @dataclass(frozen=True)
     class GlobalIODMA:
         dtensor: DTensor
-        connected_node: str
-        port_id: int
+        port: GlobalDMANode.Port
         offset: list[int]
         size: list[int]
         stride: list[int]
         is_input: bool
+
+    @staticmethod
+    def parse_tag(tag: str) -> tuple[int, int]:
+        outer_tag, inner_tag = tag.split("-")
+        return int(outer_tag), int(inner_tag)
 
     def map_global_io_to_physical_tiles(
         self,
@@ -648,10 +652,6 @@ class CodeGenerator:
         def map_dtensor_to_physical_tiles(
             dtensor: DTensor, ordered_tile_group: OrderedDMATileGroup, is_input: bool
         ):
-            def parse_tag(tag: str) -> tuple[int, int]:
-                outer_tag, inner_tag = tag.split("-")
-                return int(outer_tag), int(inner_tag)
-
             def partition(size: Size4D) -> Size4D:
                 """
                 Partition the dma task into multiple sub-tasks.
@@ -679,7 +679,8 @@ class CodeGenerator:
             # Tags sorted in lexicographic order are used to preserve the data transfer sequence.
             # tiles in DMATileGroup with the same tage can be sent in parallel.
             sorted_tags = sorted(
-                list(ordered_tile_group.dma_tile_groups.keys()), key=parse_tag
+                list(ordered_tile_group.dma_tile_groups.keys()),
+                key=CodeGenerator.parse_tag,
             )
             idx = 0
             while idx < len(sorted_tags):
@@ -746,8 +747,11 @@ class CodeGenerator:
                             self.global_io_dma[tag].append(
                                 CodeGenerator.GlobalIODMA(
                                     dtensor=dtensor,
-                                    connected_node=assigned_shim_tile.tile_name,
-                                    port_id=shim_port_id,
+                                    port=(
+                                        assigned_mem_tile.recv_ports[shim_port_id]
+                                        if is_input
+                                        else assigned_mem_tile.send_ports[shim_port_id]
+                                    ),
                                     offset=coalesce_info[offset][offset_id].to_list(),
                                     size=coalesced_size.to_list(),
                                     stride=dtensor.stride,
@@ -793,8 +797,13 @@ class CodeGenerator:
                                 self.global_io_dma[tag].append(
                                     CodeGenerator.GlobalIODMA(
                                         dtensor=dtensor,
-                                        connected_node=assigned_shim_tile.tile_name,
-                                        port_id=shim_port_id,
+                                        port=(
+                                            assigned_mem_tile.recv_ports[shim_port_id]
+                                            if is_input
+                                            else assigned_mem_tile.send_ports[
+                                                shim_port_id
+                                            ]
+                                        ),
                                         offset=coalesce_info[offset][
                                             offset_id
                                         ].to_list(),
@@ -1122,10 +1131,34 @@ class CodeGenerator:
 
                 runtime_seq_entry_block = runtime_seq.body.blocks.append(*runtime_args)
                 with aie_ir.InsertionPoint(runtime_seq_entry_block):
-                    # TODO
-                    pass
+                    sorted_tags = sorted(
+                        list(self.global_io_dma.keys()), key=CodeGenerator.parse_tag
+                    )
+                    launched_dma = []
+                    # use sorted tags to determine the data transfer sequence
+                    for tag in sorted_tags:
+                        for dma in self.global_io_dma[tag]:
+                            dma_fifo = self.fifo_map[dma.port.bind_fifo.name]
+                            aiex_d.NpuDmaMemcpyNd(
+                                metadata=dma_fifo,
+                                bd_id=len(launched_dma),
+                                mem=runtime_seq_entry_block.arguments[
+                                    dma.dtensor.global_id
+                                ],  # TODO: use the correct argument
+                                offsets=dma.offset,
+                                sizes=dma.size,
+                                strides=dma.stride,
+                                issue_token=True,
+                            )
+                            launched_dma.append(dma_fifo)
+                            if len(launched_dma) == Config.DMA_MAX_BDS:
+                                for launched_fifo in launched_dma:
+                                    aiex_d.dma_wait(launched_fifo)
+                                launched_dma.clear()
+                    for launched_fifo in launched_dma:
+                        aiex_d.dma_wait(launched_fifo)
+                    aie_d.EndOp()
 
-                # TODO
         return self.aie_module
 
     def aie_codegen(
