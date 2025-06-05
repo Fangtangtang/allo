@@ -518,7 +518,7 @@ class CodeGenerator:
             Else, return the assigned memory tile, the port id to shim, and the port ids to compute.
             """
             send_need = len(connected_nodes) if is_input else 1
-            recv_need = 1 if is_input else len(connected_nodes)
+            recv_need = 1 if is_input else sum(len(group) for group in connected_nodes)
             send_size: list[int] = tile_shape if is_input else coalesced_size.to_list()
             recv_size: list[int] = coalesced_size.to_list() if is_input else tile_shape
             tile_total_size = tile_size.get_total_size()
@@ -558,15 +558,27 @@ class CodeGenerator:
                     )
                     assigned_mem_tile.send_ports.append(port)
                     send_ports.append(port.id)
-                for i in range(recv_need):
-                    port = GlobalDMANode.Port(
-                        id=len(assigned_mem_tile.recv_ports),
-                        data_shape=recv_size,
-                        dtype=dtype,
-                        connected_nodes=[] if is_input else connected_nodes[i],
-                    )
-                    assigned_mem_tile.recv_ports.append(port)
-                    recv_ports.append(port.id)
+                if is_input:
+                    for i in range(recv_need):
+                        port = GlobalDMANode.Port(
+                            id=len(assigned_mem_tile.recv_ports),
+                            data_shape=recv_size,
+                            dtype=dtype,
+                            connected_nodes=[],
+                        )
+                        assigned_mem_tile.recv_ports.append(port)
+                        recv_ports.append(port.id)
+                else:
+                    for group in connected_nodes:
+                        for node in group:
+                            port = GlobalDMANode.Port(
+                                id=len(assigned_mem_tile.recv_ports),
+                                data_shape=recv_size,
+                                dtype=dtype,
+                                connected_nodes=[node],
+                            )
+                            assigned_mem_tile.recv_ports.append(port)
+                            recv_ports.append(port.id)
                 assigned_mem_tile.intra_connect.append(
                     GlobalDMANode.IntraConnect(
                         send_ports,
@@ -574,7 +586,7 @@ class CodeGenerator:
                         list(
                             range(
                                 0,
-                                len(connected_nodes) * tile_total_size,
+                                max(send_need, recv_need) * tile_total_size,
                                 tile_total_size,
                             )
                         ),
@@ -853,6 +865,7 @@ class CodeGenerator:
     def bind_port_to_fifo(self):
         for dma_nodes in zip(self.used_shim_tiles, self.used_mem_tiles):
             for dma_node in dma_nodes:
+                # fixme: fifo with only one src
                 for send_port in dma_node.send_ports:
                     dma_fifo = self.fifo_manager.get_or_create_fifo(
                         src=[dma_node.tile_name],
@@ -1083,6 +1096,7 @@ class CodeGenerator:
                 # link fifos: in aie, mem tile serves as the linkages
                 for dma_node in self.used_mem_tiles:
                     for connect in dma_node.intra_connect:
+                        print(f"connect: {connect}")
                         producer = [
                             self.fifo_map[
                                 dma_node.recv_ports[recv_port_id].bind_fifo.name
