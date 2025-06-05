@@ -522,6 +522,7 @@ class CodeGenerator:
             send_size: list[int] = tile_shape if is_input else coalesced_size.to_list()
             recv_size: list[int] = coalesced_size.to_list() if is_input else tile_shape
             tile_total_size = tile_size.get_total_size()
+            print(f"tile_size: {tile_size}, {tile_shape}")
             if os.getenv("VERBOSE") == "1":
                 print(f"send_need: {send_need}, recv_need: {recv_need}")
             assigned_mem_tile = None
@@ -740,7 +741,7 @@ class CodeGenerator:
                             is_input,
                             coalesced_size,
                             tile_size,
-                            tile_shape = dtensor.type_as_param
+                            tile_shape=dtensor.type_as_param,
                         )
                         if assigned_mem_tile is not None:
                             for port in ports_to_compute:
@@ -790,7 +791,7 @@ class CodeGenerator:
                                     is_input,
                                     coalesced_size,
                                     tile_size,
-                                    tile_shape = dtensor.type_as_param
+                                    tile_shape=dtensor.type_as_param,
                                 )
                             )
                             if assigned_mem_tile is not None:

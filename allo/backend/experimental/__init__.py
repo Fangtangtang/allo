@@ -118,8 +118,6 @@ class AIE_MLIRModule:
             and self.global_inputs is not None
             and self.global_outputs is not None
         ), "Analysis of kernel parameters should be done before initializing virtual graph"
-        for idx, dtensor in self.global_inputs.items():
-            print(idx, dtensor.global_placement)
 
         df_kernels = get_df_kernels(self.allo_module)
         self.virtual_computation_graph: ComputationGraph = ComputationGraph(

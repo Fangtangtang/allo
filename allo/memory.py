@@ -88,31 +88,6 @@ class Layout:
 
         return result
 
-    def get_mapped_device_dim(self, mapping):
-        partition = self.placement
-        if len(partition) == 2:
-            if len(mapping) == 1:
-                device_a, device_b = 1, mapping[0]
-            elif len(mapping) == 2:
-                if partition[0][0] == "S":
-                    partition[1] = (partition[1][0], 1 - partition[0][1])
-                elif partition[1][0] == "S":  # partition[0][0] == "R"
-                    partition[0] = (partition[0][0], 1 - partition[1][1])
-                else:  # "RR"
-                    partition[0] = (partition[0], 1)
-                    partition[1] = (partition[1], 0)
-                device_a, device_b = (
-                    mapping[-partition[0][1] - 1],
-                    mapping[-partition[1][1] - 1],
-                )
-            else:
-                device_a, device_b = (
-                    mapping[-partition[0][1] - 1],
-                    mapping[-partition[1][1] - 1],
-                )
-            return device_a, device_b
-        raise ValueError("get_mapped_device_dim unsupported currently.")
-
     def __repr__(self):
         result = ""
         for letter, number in self.placement:
@@ -194,9 +169,12 @@ class Size4D:
 
     @classmethod
     def from_list(cls, size_list: list[int]) -> "Size4D":
-        assert (
-            len(size_list) == 4
-        ), f"Size4D must have 4 dimensions, but got {len(size_list)}"
+        if len(size_list) > 4:
+            raise ValueError(
+                f"Size4D must have at most 4 dimensions, but got {len(size_list)}"
+            )
+        while len(size_list) < 4:
+            size_list.insert(0, 1)
         return cls(*size_list)
 
     @staticmethod
@@ -330,7 +308,7 @@ class DTensor:
         self.mapping = mapping  # mesh dims
         self.shape = shape  # tensor shape
         self.dtype = dtype
-        self.layout = layout
+        self.layout: Layout = layout
         self.name = name
         if layout is not None and mapping is not None:
             # tensor tile ID -> PE tile IDs
@@ -375,13 +353,15 @@ class DTensor:
         # tensor tile ID -> address offset
         self.offset_map: dict[str, Offset4D] = {}
         partition_str = "".join([p[0] for p in self.layout.placement])
+        partition_dim = [p[1] for p in self.layout.placement]
         if len(self.shape) == 1:
             if partition_str == "S":
+                dim = partition_dim[0]
                 for i, key in enumerate(sorted(list(self.global_placement.keys()))):
                     self.offset_map[key] = Offset4D(0, 0, i, 0)
-                shard_size = self.shape[0] // self.mapping[0]
+                shard_size = self.shape[0] // self.mapping[-dim - 1]
                 device_dims = [2]  # partition idx = 2
-                size = [1, 1, self.mapping[0], shard_size]
+                size = [1, 1, self.mapping[-dim - 1], shard_size]
                 stride = [0, 0, shard_size, 1]
             elif partition_str == "R":
                 for key in self.global_placement.keys():
@@ -393,8 +373,12 @@ class DTensor:
                 raise ValueError("Unsupported access pattern for 1D tensor.")
         elif len(self.shape) == 2:
             tensor_m, tensor_n = self.shape  # [tensor_m x tensor_n]
-            device_a, device_b = self.layout.get_mapped_device_dim(self.mapping)
+            # device_a, device_b = self.layout.get_mapped_device_dim(self.mapping)
             if partition_str == "SS":
+                device_a, device_b = (
+                    self.mapping[-partition_dim[0] - 1],
+                    self.mapping[-partition_dim[1] - 1],
+                )
                 for i, key in enumerate(sorted(list(self.global_placement.keys()))):
                     self.offset_map[key] = Offset4D(i // device_b, i % device_b, 0, 0)
                 device_dims = [0, 1]
@@ -405,16 +389,18 @@ class DTensor:
                     tensor_n,
                     1,
                 ]
-            elif partition_str == "SR":
+            elif partition_str == "SR":  # TODO: something is wrong here
+                device_a = self.mapping[-partition_dim[0] - 1]
                 for i, key in enumerate(sorted(list(self.global_placement.keys()))):
-                    self.offset_map[key] = Offset4D(0, i % device_a, 0, 0)
+                    self.offset_map[key] = Offset4D(i // device_a, i % device_a, 0, 0)
                 # First dim sharded across all devices, second replicated
                 device_dims = [1]
                 size = [1, device_a, tensor_m // device_a, tensor_n]
                 stride = [0, (tensor_m // device_a) * tensor_n, tensor_n, 1]
             elif partition_str == "RS":
+                device_b = self.mapping[-partition_dim[1] - 1]
                 for i, key in enumerate(sorted(list(self.global_placement.keys()))):
-                    self.offset_map[key] = Offset4D(0, i % device_b, 0, 0)
+                    self.offset_map[key] = Offset4D(i // device_b, i % device_b, 0, 0)
                 # First dim replicated, second sharded across second dim of mesh
                 device_dims = [1]
                 size = [1, device_b, tensor_m, tensor_n // device_b]
@@ -430,7 +416,6 @@ class DTensor:
                 raise ValueError("Unsupported access pattern for 2D tensor.")
         else:
             raise ValueError("Unsupported access pattern.")
-        print(self.name, self.offset_map)
         self.shared_dims, self.size, self.stride = device_dims, size, stride
 
     def PE_tile_id_to_tensor_tile_id(self, pe_tile_id: tuple[int, ...]) -> str:

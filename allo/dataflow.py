@@ -307,7 +307,7 @@ def build(
     func,
     target="vitis_hls",
     mode="csim",
-    project="top.prj",
+    project="top_.prj",
     configs=None,
     wrap_io=True,
     opt_default=True,
