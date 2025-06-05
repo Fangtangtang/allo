@@ -509,6 +509,7 @@ class CodeGenerator:
             is_input: bool,
             coalesced_size: Size4D,
             tile_size: Size4D,
+            tile_shape: list[int],
         ) -> tuple[GlobalDMANode, int, list[int]]:
             """
             fixme: maybe too aie-specific?
@@ -518,8 +519,8 @@ class CodeGenerator:
             """
             send_need = len(connected_nodes) if is_input else 1
             recv_need = 1 if is_input else len(connected_nodes)
-            send_size = tile_size if is_input else coalesced_size
-            recv_size = coalesced_size if is_input else tile_size
+            send_size: list[int] = tile_shape if is_input else coalesced_size.to_list()
+            recv_size: list[int] = coalesced_size.to_list() if is_input else tile_shape
             tile_total_size = tile_size.get_total_size()
             if os.getenv("VERBOSE") == "1":
                 print(f"send_need: {send_need}, recv_need: {recv_need}")
@@ -727,6 +728,7 @@ class CodeGenerator:
                             is_input,
                             coalesced_size,
                             tile_size,
+                            tile_shape = dtensor.type_as_param
                         )
                         if assigned_mem_tile is not None:
                             for port in ports_to_compute:
@@ -776,6 +778,7 @@ class CodeGenerator:
                                     is_input,
                                     coalesced_size,
                                     tile_size,
+                                    tile_shape = dtensor.type_as_param
                                 )
                             )
                             if assigned_mem_tile is not None:
@@ -1073,7 +1076,7 @@ class CodeGenerator:
                         [self.tile_map[node] for node in dma_fifo.dst],
                         depth=dma_fifo.depth,
                         datatype=aie_ir.MemRefType.get(
-                            dma_fifo.data_shape.to_list(),
+                            dma_fifo.data_shape,
                             get_element_type(str(dma_fifo.dtype)),
                         ),
                     )
@@ -1144,7 +1147,7 @@ class CodeGenerator:
                                 bd_id=len(launched_dma),
                                 mem=runtime_seq_entry_block.arguments[
                                     dma.dtensor.global_id
-                                ],  # TODO: use the correct argument
+                                ],
                                 offsets=dma.offset,
                                 sizes=dma.size,
                                 strides=dma.stride,

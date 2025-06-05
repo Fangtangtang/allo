@@ -104,10 +104,10 @@ class DMAFIFOManager:
         self.fifo_map: dict[tuple, DMAFIFO] = {}
 
     def get_or_create_fifo(
-        self, src: list[str], dst: list[str], data_shape: Size4D, dtype: str
+        self, src: list[str], dst: list[str], data_shape: list[str], dtype: str
     ) -> DMAFIFO:
         src, dst = sorted(src), sorted(dst)
-        key = (tuple(src), tuple(dst), data_shape, dtype)
+        key = (tuple(src), tuple(dst), tuple(data_shape), dtype)
 
         if key in self.fifo_map:
             return self.fifo_map[key]
@@ -132,7 +132,7 @@ class DMAFIFOManager:
 class GlobalDMANode:
     class Port:
         def __init__(
-            self, id: int, data_shape: Size4D, dtype: str, connected_nodes: list[str]
+            self, id: int, data_shape: list[int], dtype: str, connected_nodes: list[str]
         ):
             self.id = id
             self.data_shape = data_shape
