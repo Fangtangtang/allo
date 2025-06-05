@@ -373,7 +373,6 @@ class CodeGenerator:
             cmax = aie_arith_d.ConstantOp(value=9223372036854775807, result=index_type)
             # scf.for %arg0 = %c0 to %cmax step %c1
             loop = aie_scf_d.ForOp(lower_bound=c0, upper_bound=cmax, step=c1)
-            print(self.compute_core_io)
             with aie_ir.InsertionPoint(loop.body):
                 # insert operations to get 'function parameter', acquire and subview
                 io_map = (
@@ -812,9 +811,12 @@ class CodeGenerator:
                                 self.global_io_dma[tag].append(
                                     CodeGenerator.GlobalIODMA(
                                         dtensor=dtensor,
-                                        port=(assigned_shim_tile.send_ports[shim_port_id]
+                                        port=(
+                                            assigned_shim_tile.send_ports[shim_port_id]
                                             if is_input
-                                            else assigned_shim_tile.recv_ports[shim_port_id]
+                                            else assigned_shim_tile.recv_ports[
+                                                shim_port_id
+                                            ]
                                         ),
                                         offset=coalesce_info[offset][
                                             offset_id

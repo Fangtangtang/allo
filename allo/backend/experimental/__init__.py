@@ -307,6 +307,10 @@ class AIE_MLIRModule:
             global_in_tile_to_func,
             global_out_tile_to_func,
         )
+        self.post_codegen_build(injected_kernels, include_src)
+        return self
+
+    def post_codegen_build(self, injected_kernels, include_src):
         with open(
             os.path.join(self.project_dir, "top.mlir"), "w", encoding="utf-8"
         ) as f:
@@ -473,6 +477,10 @@ class AIE_MLIRModule:
         self.aie_module = code_generator.aie_codegen(
             core_func_groups, external_funcs, inputs, outputs, use_external_kernels
         )
+        self.post_codegen_build(injected_kernels, include_src)
+        return self
+
+    def post_codegen_build(self, injected_kernels, include_src):
         with open(
             os.path.join(self.project_dir, "top.mlir"), "w", encoding="utf-8"
         ) as f:
@@ -508,7 +516,6 @@ class AIE_MLIRModule:
             process.wait()
         if process.returncode != 0:
             raise RuntimeError("Failed to build AIE project.")
-        return self
 
     def help(self):
         # print the parameter list of the module
