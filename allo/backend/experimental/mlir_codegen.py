@@ -32,11 +32,11 @@ from ...memory import DTensor, Offset4D, Size4D, coalesce_memory_access
 from .utils import get_element_type, device_config_map, Argument, Stream, Config
 from ..aie import map_kernels_to_device_mesh
 from .mapping import (
-    GlobalDMANode,
+    SwitchNode,
     OrderedDMATileGroup,
     DMATileGroup,
     ComputationGraph,
-    DMAFIFOManager,
+    FIFOManager,
 )
 
 
@@ -235,13 +235,13 @@ class CodeGenerator:
         # ------------------------------------------------------------
         # Experimental
         # ------------------------------------------------------------
-        self.used_mem_tiles: list[GlobalDMANode] = None
-        self.used_shim_tiles: list[GlobalDMANode] = None
+        self.used_mem_tiles: list[SwitchNode] = None
+        self.used_shim_tiles: list[SwitchNode] = None
         self.global_io_dma: dict[str, list[CodeGenerator.GlobalIODMA]] = None
-        self.function_port_map: dict[str, dict[DTensor, GlobalDMANode.Port]] = (
-            defaultdict(lambda: defaultdict(GlobalDMANode.Port))
+        self.function_port_map: dict[str, dict[DTensor, SwitchNode.Port]] = (
+            defaultdict(lambda: defaultdict(SwitchNode.Port))
         )
-        self.fifo_manager: DMAFIFOManager = DMAFIFOManager()
+        self.fifo_manager: FIFOManager = FIFOManager()
         # ------------------------------------------------------------
 
         self.aie_module = None  # The top-level AIE IR module
@@ -470,7 +470,7 @@ class CodeGenerator:
     @dataclass(frozen=True)
     class GlobalIODMA:
         dtensor: DTensor
-        port: GlobalDMANode.Port
+        port: SwitchNode.Port
         offset: list[int]
         size: list[int]
         stride: list[int]
@@ -486,8 +486,8 @@ class CodeGenerator:
         global_in_tile_to_func: dict[int, OrderedDMATileGroup],
         global_out_tile_to_func: dict[int, OrderedDMATileGroup],
     ) -> tuple[
-        list[GlobalDMANode],
-        list[GlobalDMANode],
+        list[SwitchNode],
+        list[SwitchNode],
         dict[str, list["CodeGenerator.GlobalIODMA"]],
     ]:
         """
@@ -509,7 +509,7 @@ class CodeGenerator:
             coalesced_size: Size4D,
             tile_size: Size4D,
             tile_shape: list[int],
-        ) -> tuple[GlobalDMANode, int, list[int]]:
+        ) -> tuple[SwitchNode, int, list[int]]:
             """
             fixme: maybe too aie-specific?
             Assign a memory tile to the given dtensor tiles.
@@ -530,8 +530,8 @@ class CodeGenerator:
                 and send_need <= Config.MEM_MAX_SEND
                 and recv_need <= Config.MEM_MAX_RECV
             ):
-                assigned_mem_tile = GlobalDMANode(
-                    tile_name=f"{len(self.used_mem_tiles)}_mem_tile",
+                assigned_mem_tile = SwitchNode(
+                    name=f"{len(self.used_mem_tiles)}_mem_tile",
                     send_port_num=Config.MEM_MAX_SEND,
                     recv_port_num=Config.MEM_MAX_RECV,
                 )
@@ -549,7 +549,7 @@ class CodeGenerator:
             if assigned_mem_tile is not None:
                 send_ports, recv_ports = [], []
                 for i in range(send_need):
-                    port = GlobalDMANode.Port(
+                    port = SwitchNode.Port(
                         id=len(assigned_mem_tile.send_ports),
                         data_shape=send_size,
                         dtype=dtype,
@@ -559,7 +559,7 @@ class CodeGenerator:
                     send_ports.append(port.id)
                 if is_input:
                     for i in range(recv_need):
-                        port = GlobalDMANode.Port(
+                        port = SwitchNode.Port(
                             id=len(assigned_mem_tile.recv_ports),
                             data_shape=recv_size,
                             dtype=dtype,
@@ -570,7 +570,7 @@ class CodeGenerator:
                 else:
                     for group in connected_nodes:
                         for node in group:
-                            port = GlobalDMANode.Port(
+                            port = SwitchNode.Port(
                                 id=len(assigned_mem_tile.recv_ports),
                                 data_shape=recv_size,
                                 dtype=dtype,
@@ -579,7 +579,7 @@ class CodeGenerator:
                             assigned_mem_tile.recv_ports.append(port)
                             recv_ports.append(port.id)
                 assigned_mem_tile.intra_connect.append(
-                    GlobalDMANode.IntraConnect(
+                    SwitchNode.IntraConnect(
                         send_ports,
                         recv_ports,
                         list(
@@ -603,11 +603,11 @@ class CodeGenerator:
             return None, -1, []
 
         def assign_shim_tile(
-            mem_tile: GlobalDMANode,
+            mem_tile: SwitchNode,
             port_id: int,
             is_input: bool,
-        ) -> tuple[GlobalDMANode, int]:
-            port: GlobalDMANode.Port = (
+        ) -> tuple[SwitchNode, int]:
+            port: SwitchNode.Port = (
                 mem_tile.recv_ports[port_id]
                 if is_input
                 else mem_tile.send_ports[port_id]
@@ -615,8 +615,8 @@ class CodeGenerator:
             assigned_shim_tile = None
             # Attempt to use a new shim tile
             if len(self.used_shim_tiles) < MAX_SHIM_TILES:
-                assigned_shim_tile = GlobalDMANode(
-                    tile_name=f"{len(self.used_shim_tiles)}_shim_tile",
+                assigned_shim_tile = SwitchNode(
+                    name=f"{len(self.used_shim_tiles)}_shim_tile",
                     send_port_num=Config.SHIM_MAX_SEND,
                     recv_port_num=Config.SHIM_MAX_RECV,
                 )
@@ -631,24 +631,24 @@ class CodeGenerator:
                         break
             # Use new ports
             if assigned_shim_tile is not None:
-                connected_mem = [mem_tile.tile_name]
-                send_port = GlobalDMANode.Port(
+                connected_mem = [mem_tile.name]
+                send_port = SwitchNode.Port(
                     id=len(assigned_shim_tile.send_ports),
                     data_shape=port.data_shape,
                     dtype=port.dtype,
                     connected_nodes=connected_mem if is_input else [],
                 )
                 assigned_shim_tile.send_ports.append(send_port)
-                recv_port = GlobalDMANode.Port(
+                recv_port = SwitchNode.Port(
                     id=len(assigned_shim_tile.recv_ports),
                     data_shape=port.data_shape,
                     dtype=port.dtype,
                     connected_nodes=[] if is_input else connected_mem,
                 )
                 assigned_shim_tile.recv_ports.append(recv_port)
-                port.connected_nodes.append(assigned_shim_tile.tile_name)
+                port.connected_nodes.append(assigned_shim_tile.name)
                 assigned_shim_tile.intra_connect.append(
-                    GlobalDMANode.IntraConnect(
+                    SwitchNode.IntraConnect(
                         send_port_ids=[send_port.id],
                         recv_port_ids=[recv_port.id],
                         offsets=[0],
@@ -679,7 +679,7 @@ class CodeGenerator:
                 size_part.set_dim_size(dim, partition_size)
                 return size_part
 
-            def register_function_param_port(port: GlobalDMANode.Port):
+            def register_function_param_port(port: SwitchNode.Port):
                 for node in port.connected_nodes:
                     self.function_port_map[node][dtensor] = port
 
@@ -866,7 +866,7 @@ class CodeGenerator:
             for dma_node in dma_nodes:
                 for send_port in dma_node.send_ports:
                     dma_fifo = self.fifo_manager.get_or_create_fifo(
-                        src=dma_node.tile_name,
+                        src=dma_node.name,
                         dst=send_port.connected_nodes,
                         data_shape=send_port.data_shape,
                         dtype=send_port.dtype,
@@ -882,7 +882,7 @@ class CodeGenerator:
                             if len(recv_port.connected_nodes) == 1
                             else None
                         ),
-                        dst=[dma_node.tile_name],
+                        dst=[dma_node.name],
                         data_shape=recv_port.data_shape,
                         dtype=recv_port.dtype,
                     )
@@ -1063,10 +1063,10 @@ class CodeGenerator:
             with aie_ir.InsertionPoint(end_op):
                 # shim tiles
                 for i, shim_tile in enumerate(self.used_shim_tiles):
-                    self.tile_map[shim_tile.tile_name] = aie_d.TileOp(col=i, row=0)
+                    self.tile_map[shim_tile.name] = aie_d.TileOp(col=i, row=0)
                 # mem tiles
                 for i, mem_tile in enumerate(self.used_mem_tiles):
-                    self.tile_map[mem_tile.tile_name] = aie_d.TileOp(col=i, row=1)
+                    self.tile_map[mem_tile.name] = aie_d.TileOp(col=i, row=1)
                 # compute tiles
                 for func_name, (row, col) in core_function_mapping.items():
                     self.tile_map[func_name] = aie_d.TileOp(col=col, row=row + 2)

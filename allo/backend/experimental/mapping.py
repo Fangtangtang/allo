@@ -75,7 +75,7 @@ class OrderedDMATileGroup:
             tiles.print()
 
 
-class DMAFIFO:
+class FIFO:
     def __init__(
         self,
         name: str,
@@ -99,20 +99,20 @@ class DMAFIFO:
         return self.__str__()
 
 
-class DMAFIFOManager:
+class FIFOManager:
     def __init__(self):
-        self.fifo_map: dict[tuple, DMAFIFO] = {}
+        self.fifo_map: dict[tuple, FIFO] = {}
 
     def get_or_create_fifo(
         self, src: str, dst: list[str], data_shape: list[str], dtype: str
-    ) -> DMAFIFO:
+    ) -> FIFO:
         dst = sorted(dst)
         key = (src, tuple(dst), tuple(data_shape), dtype)
 
         if key in self.fifo_map:
             return self.fifo_map[key]
         else:
-            fifo = DMAFIFO(
+            fifo = FIFO(
                 name=f"fifo_{len(self.fifo_map)}",
                 src=src,
                 dst=dst,
@@ -129,7 +129,7 @@ class DMAFIFOManager:
         print("***** DMA FIFOs *****\n")
 
 
-class GlobalDMANode:
+class SwitchNode:
     class Port:
         def __init__(
             self, id: int, data_shape: list[int], dtype: str, connected_nodes: list[str]
@@ -140,7 +140,7 @@ class GlobalDMANode:
             self.connected_nodes = connected_nodes
             self.bind_fifo = None
 
-        def bind_to_fifo(self, fifo: DMAFIFO):
+        def bind_to_fifo(self, fifo: FIFO):
             assert (
                 self.bind_fifo is None
             ), f"Port {self.id} already bound to {self.bind_fifo}"
@@ -166,17 +166,17 @@ class GlobalDMANode:
         def __repr__(self):
             return self.__str__()
 
-    def __init__(self, tile_name: str, send_port_num: int, recv_port_num: int):
-        self.tile_name = tile_name
+    def __init__(self, name: str, send_port_num: int, recv_port_num: int):
+        self.name = name
         self.max_send = send_port_num
         self.max_recv = recv_port_num
-        self.send_ports: list[GlobalDMANode.Port] = []
-        self.recv_ports: list[GlobalDMANode.Port] = []
+        self.send_ports: list[SwitchNode.Port] = []
+        self.recv_ports: list[SwitchNode.Port] = []
         # connect send ports to recv ports
-        self.intra_connect: list[GlobalDMANode.IntraConnect] = []
+        self.intra_connect: list[SwitchNode.IntraConnect] = []
 
     def print(self):
-        print(f"\n<<<<< DMA Tile {self.tile_name} >>>>>")
+        print(f"\n<<<<< Switch {self.name} >>>>>")
         print(f"send ports: {self.send_ports}")
         print(f"recv ports: {self.recv_ports}")
         print(f"intra connect: {self.intra_connect}")
