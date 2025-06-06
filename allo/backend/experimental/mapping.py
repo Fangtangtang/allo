@@ -4,8 +4,9 @@
 import re
 from dataclasses import dataclass
 from collections import defaultdict
+import allo._mlir._mlir_libs._mlir as allo_ir
 from ..._mlir.dialects import func as func_d, allo as allo_d
-from .utils import Argument, parse_kernel_name, Stream, StreamType
+from .utils import Argument, parse_kernel_name, Stream, StreamType, get_df_kernels
 from ...memory import DTensor, Size4D, Offset4D
 
 
@@ -14,17 +15,15 @@ from ...memory import DTensor, Size4D, Offset4D
 # ############################################################
 @dataclass
 class GlobalDTensorTile:
-    func_param_idx: int  # parameter idx
     dtensor_id: int
     tensor_tile_label: str
 
     def __hash__(self):
-        return hash((self.func_param_idx, self.dtensor_id, self.tensor_tile_label))
+        return hash((self.dtensor_id, self.tensor_tile_label))
 
     def __eq__(self, other):
         return (
-            self.func_param_idx == other.func_param_idx
-            and self.dtensor_id == other.dtensor_id
+            self.dtensor_id == other.dtensor_id
             and self.tensor_tile_label == other.tensor_tile_label
         )
 
@@ -183,48 +182,6 @@ class SwitchNode:
 
 
 # ############################################################
-# Virtual Mapping Base Elements
-# ############################################################
-class VirtualNode:
-    def __init__(self, func: func_d.FuncOp):
-        self.func_name: str = func.attributes["sym_name"].value
-        self.func: func_d.FuncOp = func
-        # global <-> PE
-        self.global_inputs: list[GlobalDTensorTile] = []
-        self.global_outputs: list[GlobalDTensorTile] = []
-        # inter-PE: input/output node name -> (stream type, stream name)
-        self.input_streams: dict[str, tuple[StreamType, str]] = {}
-        self.output_streams: dict[str, tuple[StreamType, str]] = {}
-        self.op_tag: str = re.sub(
-            r"func\.func\s+@[\w\d_]+(\s*\()", r"func.func\1", str(self.func.operation)
-        )
-
-    def add_global_input(self, func_param_idx: int, dtensor: DTensor, indexes):
-        self.global_inputs.append(
-            GlobalDTensorTile(
-                func_param_idx,
-                dtensor.global_id,
-                dtensor.PE_tile_id_to_tensor_tile_id(indexes),
-            )
-        )
-
-    def add_global_output(self, func_param_idx: int, dtensor: DTensor, indexes):
-        self.global_outputs.append(
-            GlobalDTensorTile(
-                func_param_idx,
-                dtensor.global_id,
-                dtensor.PE_tile_id_to_tensor_tile_id(indexes),
-            )
-        )
-
-    def add_input(self, name: str, input_type: StreamType, src: str):
-        self.input_streams[src] = (input_type, name)
-
-    def add_output(self, name: str, output_type: StreamType, dst: str):
-        self.output_streams[dst] = (output_type, name)
-
-
-# ############################################################
 # Collocated Node
 # ------------------------------------------------------------
 # A collocated node is a set of virtual nodes that is mapped to the same physical PE.
@@ -244,7 +201,6 @@ class CollocatedBaseNode:
         self.global_inputs: list[dict[int, list[GlobalDTensorTile]]] = []
         self.global_outputs: list[dict[int, list[GlobalDTensorTile]]] = []
         # input/output node id -> edge stream type
-        # fixme: may conflict when having multiple input/output corresponding to the same node
         self.input_streams: dict[int, list[tuple[StreamType, str]]] = defaultdict(list)
         self.output_streams: dict[int, list[tuple[StreamType, str]]] = defaultdict(list)
 
@@ -271,198 +227,200 @@ class CollocatedInitialNode(CollocatedBaseNode):
     Virtual node wrapper
     """
 
-    def __init__(self, v_node: VirtualNode):
-        super().__init__(v_node.func_name)
-        self.v_node = v_node
+    def __init__(self, func: func_d.FuncOp, global_inputs, global_outputs):
+        super().__init__(func.attributes["sym_name"].value)
         self.execution_queue.append({self})
-        self.global_inputs.append({self.id: v_node.global_inputs})
-        self.global_outputs.append({self.id: v_node.global_outputs})
-
-
-class CollocatedNode(CollocatedBaseNode):
-    # TODO: to be implemented
-    def __init__(self):
-        raise NotImplementedError("CollocatedNode is not fully implemented")
-        super().__init__(f"collocated_{len(CollocatedBaseNode.node_list)}")
-
-    @staticmethod
-    def bundle(nodes: list[CollocatedBaseNode]) -> "CollocatedNode":
-        bundle_node = CollocatedNode()
-        node_set = set(nodes)
-        bundle_node.execution_queue.append(node_set)
-        bundle_node.input_streams = nodes[0].input_streams
-        bundle_node.output_streams = nodes[0].output_streams
-        return bundle_node
-
-    @staticmethod
-    def chain(
-        producer: CollocatedBaseNode, consumer: CollocatedBaseNode
-    ) -> "CollocatedNode":
-        chain_node = CollocatedNode()
-        chain_node.execution_queue.append({producer, consumer})
-        # fixme: may conflict when producer and consumer have the same input/output
-        chain_node.input_streams = producer.input_streams | consumer.input_streams
-        chain_node.input_streams.pop(producer.id)
-        chain_node.output_streams = producer.output_streams | consumer.output_streams
-        chain_node.output_streams.pop(consumer.id)
-        return chain_node
+        self.global_inputs.append({self.id: global_inputs})
+        self.global_outputs.append({self.id: global_outputs})
 
 
 # ############################################################
 # Computation Mapping Graph
 # ############################################################
+class Operation:
+    def __init__(self, op_tag: str) -> None:
+        self.repeat: int = 1
+        self.op_tag: str = op_tag
+        self.global_inputs: list[list[GlobalDTensorTile]] = []
+        self.global_outputs: list[list[GlobalDTensorTile]] = []
+        self.input_streams: list[Stream] = []
+        self.output_streams: list[Stream] = []
+
+
+# ------------------------------------------------------------
+class NodeBase:
+    node_list: list["NodeBase"] = []
+
+    def __init__(self, name: str = None, func: func_d.FuncOp = None):
+        self.id = len(NodeBase.node_list)
+        NodeBase.node_list.append(self)
+        self.name = name if name is not None else f"function_{self.id}"
+        self.func: func_d.FuncOp = func
+        self.operations: list[Operation] = []
+
+
+class InitialNode(NodeBase):
+    def __init__(self, func: func_d.FuncOp):
+        super().__init__(func.attributes["sym_name"].value, func)
+
+
+class CollocatedNode(NodeBase):
+    def __init__(self):
+        super().__init__()
+
+
+# ------------------------------------------------------------
 class ComputationGraph:
     def __init__(
         self,
-        df_kernels: list[func_d.FuncOp],
+        allo_module: allo_ir.ir.Module,
         stream_map: dict[str, Stream],
         core_func_args: dict[str, dict[int, tuple[Argument, bool]]],
     ):
-        self.nodes: dict[str, VirtualNode] = {}
+        self.allo_module = allo_module
+        self.collocated_nodes: dict[str, CollocatedBaseNode] = {}
         self.edges: dict[str, Stream] = dict(stream_map)
+        df_kernels = get_df_kernels(allo_module)
         # construct nodes
         for func in df_kernels:
             func_name = func.attributes["sym_name"].value
             _, indexes = parse_kernel_name(func_name)
-            self.nodes[func_name] = VirtualNode(func)
             params = core_func_args[func_name]
-            for idx, (argument, is_input) in params.items():
+            global_inputs: list[GlobalDTensorTile] = []
+            global_outputs: list[GlobalDTensorTile] = []
+            for argument, is_input in params.values():
                 if argument.dtensor is None:
                     continue
                 if is_input:
-                    self.nodes[func_name].add_global_input(
-                        idx, argument.dtensor, indexes
+                    global_inputs.append(
+                        GlobalDTensorTile(
+                            argument.dtensor.global_id,
+                            argument.dtensor.PE_tile_id_to_tensor_tile_id(indexes),
+                        )
                     )
                 else:
-                    self.nodes[func_name].add_global_output(
-                        idx, argument.dtensor, indexes
+                    global_outputs.append(
+                        GlobalDTensorTile(
+                            argument.dtensor.global_id,
+                            argument.dtensor.PE_tile_id_to_tensor_tile_id(indexes),
+                        )
                     )
+            initial_node = CollocatedInitialNode(func, global_inputs, global_outputs)
+            self.collocated_nodes[func_name] = initial_node
         # collect nodes' inputs/outputs
         for edge in self.edges.values():
             assert edge.src is not None and edge.dst is not None
-            self.nodes[edge.src].add_output(edge.name, edge.type, edge.dst)
-            self.nodes[edge.dst].add_input(edge.name, edge.type, edge.src)
-
-        self.collocated_nodes: dict[str, CollocatedBaseNode] = {}
-        self.initialize_collocated_nodes()
+            self.collocated_nodes[edge.dst].add_input(
+                self.collocated_nodes[edge.src].id, edge.type, edge.name
+            )
+            self.collocated_nodes[edge.src].add_output(
+                self.collocated_nodes[edge.dst].id, edge.type, edge.name
+            )
 
     # ------------------------------------------------------------
     # Check
     # ------------------------------------------------------------
-    def virtual_node_isomorphism_check(
-        self, node1: VirtualNode, node2: VirtualNode
-    ) -> bool:
-        if node1.op_tag != node2.op_tag:
-            return False
-        if len(node1.input_streams) != len(node2.input_streams) or len(
-            node1.output_streams
-        ) != len(node2.output_streams):
-            return False
-        for src_mame, (input_type, _) in node1.input_streams.items():
-            if src_mame not in node2.input_streams:
-                return False
-            if node2.input_streams[src_mame][0] != input_type:
-                return False
-        for dst_name, (output_type, _) in node1.output_streams.items():
-            if dst_name not in node2.output_streams:
-                return False
-            if node2.output_streams[dst_name][0] != output_type:
-                return False
-        return True
+    # class Checker:
+    # TODO
 
-        # TODO:
-        # Implement a stronger isomorphism check by:
-        # - Comparing function signatures (argument/result types)
-        # - Comparing computation logic on inputs and outputs
-        # This would allow structural isomorphism with renamed variables/blocks.
+    # def virtual_node_isomorphism_check(
+    #     self, node1: VirtualNode, node2: VirtualNode
+    # ) -> bool:
+    #     if node1.op_tag != node2.op_tag:
+    #         return False
+    #     if len(node1.input_streams) != len(node2.input_streams) or len(
+    #         node1.output_streams
+    #     ) != len(node2.output_streams):
+    #         return False
+    #     for src_mame, (input_type, _) in node1.input_streams.items():
+    #         if src_mame not in node2.input_streams:
+    #             return False
+    #         if node2.input_streams[src_mame][0] != input_type:
+    #             return False
+    #     for dst_name, (output_type, _) in node1.output_streams.items():
+    #         if dst_name not in node2.output_streams:
+    #             return False
+    #         if node2.output_streams[dst_name][0] != output_type:
+    #             return False
+    #     return True
 
-    def collocated_node_isomorphism_check(
-        self, node1: CollocatedBaseNode, node2: CollocatedBaseNode
-    ) -> bool:
-        if len(node1.execution_queue) != len(node2.execution_queue):
-            return False
-        for op1, op2 in zip(node1.execution_queue, node2.execution_queue):
-            op1_sample = next(iter(op1))
-            op2_sample = next(iter(op2))
-            if isinstance(op1_sample, CollocatedInitialNode):
-                op1_sample, op2_sample = op2_sample, op1_sample
-            # check op1_sample and op2_sample
-            if isinstance(op1_sample, CollocatedInitialNode):
-                # both are initial nodes
-                if not isinstance(op2_sample, CollocatedInitialNode):
-                    return False
-            elif isinstance(op2_sample, CollocatedInitialNode):
-                # op1 is collocated node, op2 is initial node
-                if len(op1_sample.execution_queue) != 1:
-                    return False
-                if not self.collocated_node_isomorphism_check(
-                    next(iter(op1_sample.execution_queue[0])), op2_sample
-                ):
-                    return False
-            else:
-                if not self.collocated_node_isomorphism_check(op1_sample, op2_sample):
-                    return False
-        return True
+    # TODO:
+    # Implement a stronger isomorphism check by:
+    # - Comparing function signatures (argument/result types)
+    # - Comparing computation logic on inputs and outputs
+    # This would allow structural isomorphism with renamed variables/blocks.
+
+    # def collocated_node_isomorphism_check(
+    #     self, node1: CollocatedBaseNode, node2: CollocatedBaseNode
+    # ) -> bool:
+    #     if len(node1.execution_queue) != len(node2.execution_queue):
+    #         return False
+    #     for op1, op2 in zip(node1.execution_queue, node2.execution_queue):
+    #         op1_sample = next(iter(op1))
+    #         op2_sample = next(iter(op2))
+    #         if isinstance(op1_sample, CollocatedInitialNode):
+    #             op1_sample, op2_sample = op2_sample, op1_sample
+    #         # check op1_sample and op2_sample
+    #         if isinstance(op1_sample, CollocatedInitialNode):
+    #             # both are initial nodes
+    #             if not isinstance(op2_sample, CollocatedInitialNode):
+    #                 return False
+    #         elif isinstance(op2_sample, CollocatedInitialNode):
+    #             # op1 is collocated node, op2 is initial node
+    #             if len(op1_sample.execution_queue) != 1:
+    #                 return False
+    #             if not self.collocated_node_isomorphism_check(
+    #                 next(iter(op1_sample.execution_queue[0])), op2_sample
+    #             ):
+    #                 return False
+    #         else:
+    #             if not self.collocated_node_isomorphism_check(op1_sample, op2_sample):
+    #                 return False
+    #     return True
 
     # ------------------------------------------------------------
     # Transformation Primitives
     # ------------------------------------------------------------
-    def initialize_collocated_nodes(self):
-        # InitialNode share the same name with the virtual node
-        # build initial nodes
-        for node in self.nodes.values():
-            initial_node = CollocatedInitialNode(node)
-            self.collocated_nodes[node.func_name] = initial_node
-        # connect initial nodes
-        for node in self.nodes.values():
-            # stream
-            for src_name, (input_type, input_stream_name) in node.input_streams.items():
-                self.collocated_nodes[node.func_name].add_input(
-                    self.collocated_nodes[src_name].id, input_type, input_stream_name
-                )
-            for dst_name, (
-                output_type,
-                output_stream_name,
-            ) in node.output_streams.items():
-                self.collocated_nodes[node.func_name].add_output(
-                    self.collocated_nodes[dst_name].id, output_type, output_stream_name
-                )
 
-    def bundle(self, nodes: list[CollocatedBaseNode]) -> CollocatedNode:
-        """
-        Merges multiple isomorphic nodes—those with the same input/output pattern
-        and computation logic—into a single node.
-        The internal computation remains unchanged.
-        The merged node executes multiple times to receive inputs and send outputs accordingly.
-        """
+    # def bundle(self, nodes: list[CollocatedBaseNode]) -> CollocatedNode:
+    #     """
+    #     Merges multiple isomorphic nodes—those with the same input/output pattern
+    #     and computation logic—into a single node.
+    #     The internal computation remains unchanged.
+    #     The merged node executes multiple times to receive inputs and send outputs accordingly.
+    #     """
 
-        # validity check
-        sample_node: CollocatedBaseNode = nodes[0]
-        for node in nodes[1:]:
-            if not self.collocated_node_isomorphism_check(sample_node, node):
-                raise ValueError("Nodes are not isomorphic")
-        # bundle to get a new collocated node
-        bundle_node = CollocatedNode.bundle(nodes)
-        return bundle_node
+    #     # validity check
+    #     sample_node: CollocatedBaseNode = nodes[0]
+    #     for node in nodes[1:]:
+    #         if not self.collocated_node_isomorphism_check(sample_node, node):
+    #             raise ValueError("Nodes are not isomorphic")
+    #     # bundle to get a new collocated node
+    #     bundle_node = CollocatedNode.bundle(nodes)
+    #     return bundle_node
 
-    def chain(
-        self, node1: CollocatedBaseNode, node2: CollocatedBaseNode
-    ) -> CollocatedNode:
-        """
-        Operates on two nodes—typically in a producer-consumer relationship—into a single node.
-        The resulting node must still satisfy the constraint of having no more than two global inputs
-        and two global outputs (or use ports that can be shared by compatible data types).
-        The computations from both nodes are concatenated in a specific order that respects any dependency between them.
-        """
-        # fixme: currently, we only support chain nodes with direct dependencies
-        if node1.id in node2.input_streams:
-            producer, consumer = node1, node2
-        elif node2.id in node1.input_streams:
-            producer, consumer = node2, node1
-        else:
-            raise ValueError("Nodes are not directly connected")
-        chain_node = CollocatedNode.chain(producer, consumer)
-        return chain_node
+    # def chain(
+    #     self, node1: CollocatedBaseNode, node2: CollocatedBaseNode
+    # ) -> CollocatedNode:
+    #     """
+    #     Operates on two nodes—typically in a producer-consumer relationship—into a single node.
+    #     The resulting node must still satisfy the constraint of having no more than two global inputs
+    #     and two global outputs (or use ports that can be shared by compatible data types).
+    #     The computations from both nodes are concatenated in a specific order that respects any dependency between them.
+    #     """
+    #     # fixme: currently, we only support chain nodes with direct dependencies
+    #     if node1.id in node2.input_streams:
+    #         producer, consumer = node1, node2
+    #     elif node2.id in node1.input_streams:
+    #         producer, consumer = node2, node1
+    #     else:
+    #         raise ValueError("Nodes are not directly connected")
+    #     chain_node = CollocatedNode.chain(producer, consumer)
+    #     return chain_node
+
+    def refactor_code(self):
+        # TODO: to be implemented
+        pass
 
     # ------------------------------------------------------------
     # Graph Information
@@ -470,7 +428,8 @@ class ComputationGraph:
     def get_node_global_io(
         self,
     ) -> tuple[
-        dict[str, list[list[GlobalDTensorTile]]], dict[str, list[list[GlobalDTensorTile]]]
+        dict[str, list[list[GlobalDTensorTile]]],
+        dict[str, list[list[GlobalDTensorTile]]],
     ]:
         # TODO
         global_in: dict[str, list[list[GlobalDTensorTile]]] = {}
@@ -523,25 +482,17 @@ class ComputationGraph:
         print("\n<<<<< Computation Graph >>>>>")
 
         print("\n<<<<< Nodes >>>>>")
-        for node in self.nodes.values():
-            print(
-                f"{node.func_name}: input streams: {node.input_streams}, output streams: {node.output_streams}, "
-                f"\tglobal inputs: {', '.join([str(tile) for tile in node.global_inputs])}, "
-                f"\tglobal outputs: {', '.join([str(tile) for tile in node.global_outputs])}"
-            )
+        # TODO
         print("\n<<<<< Edges >>>>>")
-        for edge in self.edges.values():
-            print(
-                f"{self.nodes[edge.src].func_name} -> {self.nodes[edge.dst].func_name}: {edge.name} ({edge.type})"
-            )
+        # TODO
         print("<<<<< Computation Graph >>>>>\n")
 
-    def print_isomorphic(self):
-        checked_nodes = set()
-        for node1 in self.nodes.values():
-            checked_nodes.add(node1)
-            for node2 in self.nodes.values():
-                if node2 in checked_nodes:
-                    continue
-                if self.virtual_node_isomorphism_check(node1, node2):
-                    print(f"{node1.func_name} is isomorphic to {node2.func_name}")
+    # def print_isomorphic(self):
+    #     checked_nodes = set()
+    #     for node1 in self.nodes.values():
+    #         checked_nodes.add(node1)
+    #         for node2 in self.nodes.values():
+    #             if node2 in checked_nodes:
+    #                 continue
+    #             if self.virtual_node_isomorphism_check(node1, node2):
+    #                 print(f"{node1.func_name} is isomorphic to {node2.func_name}")

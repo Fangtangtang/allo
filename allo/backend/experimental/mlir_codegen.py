@@ -238,8 +238,8 @@ class CodeGenerator:
         self.used_mem_tiles: list[SwitchNode] = None
         self.used_shim_tiles: list[SwitchNode] = None
         self.global_io_dma: dict[str, list[CodeGenerator.GlobalIODMA]] = None
-        self.function_port_map: dict[str, dict[DTensor, SwitchNode.Port]] = (
-            defaultdict(lambda: defaultdict(SwitchNode.Port))
+        self.function_port_map: dict[str, dict[DTensor, SwitchNode.Port]] = defaultdict(
+            lambda: defaultdict(SwitchNode.Port)
         )
         self.fifo_manager: FIFOManager = FIFOManager()
         # ------------------------------------------------------------
@@ -662,7 +662,9 @@ class CodeGenerator:
             return None, -1
 
         def map_dtensor_to_physical_tiles(
-            dtensor: DTensor, ordered_tile_group: OrderedDTensorTileGroup, is_input: bool
+            dtensor: DTensor,
+            ordered_tile_group: OrderedDTensorTileGroup,
+            is_input: bool,
         ):
             def partition(size: Size4D) -> Size4D:
                 """

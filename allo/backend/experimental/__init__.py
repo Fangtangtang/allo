@@ -119,9 +119,8 @@ class AIE_MLIRModule:
             and self.global_outputs is not None
         ), "Analysis of kernel parameters should be done before initializing virtual graph"
 
-        df_kernels = get_df_kernels(self.allo_module)
         self.virtual_computation_graph: ComputationGraph = ComputationGraph(
-            df_kernels,
+            self.allo_module,
             self.streams,
             self.core_func_args,
         )
