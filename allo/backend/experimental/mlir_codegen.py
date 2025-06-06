@@ -939,11 +939,11 @@ class CodeGenerator:
                 def __repr__(self):
                     return self.__str__()
 
-            connection_info = self.virtual_computation_graph.get_connection()
+            connection_info = self.virtual_computation_graph.get_connections()
             connection_info.sort(key=lambda x: x[0], reverse=True)
             grouped_nodes: dict[str, NodeDeque] = {
                 name: NodeDeque(name)
-                for name in self.virtual_computation_graph.collocated_nodes.keys()
+                for name in self.virtual_computation_graph.nodes.keys()
             }
             for connection in connection_info:
                 grouped_a, grouped_b = (
