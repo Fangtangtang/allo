@@ -28,7 +28,7 @@ from .utils import (
     read_tensor_from_file,
     codegen_host,
 )
-from .mapping import ComputationGraph, OrderedDMATileGroup
+from .mapping import ComputationGraph, OrderedDTensorTileGroup
 
 
 class AIE_MLIRModule:
@@ -129,8 +129,8 @@ class AIE_MLIRModule:
             self.virtual_computation_graph.print_graph()
 
     def analyze_global_io(self) -> tuple[
-        dict[int, OrderedDMATileGroup],
-        dict[int, OrderedDMATileGroup],
+        dict[int, OrderedDTensorTileGroup],
+        dict[int, OrderedDTensorTileGroup],
     ]:
         # global inputs/outputs
         global_in, global_out = self.virtual_computation_graph.get_node_global_io()
@@ -153,31 +153,31 @@ class AIE_MLIRModule:
 
         if os.getenv("VERBOSE") == "1":
             for func_name, global_io in global_in.items():
-                print(func_name, ", ".join([str(dma_tile) for dma_tile in global_io]))
+                print(func_name, ", ".join([str(tile) for tile in global_io]))
             print()
             for func_name, global_io in global_out.items():
-                print(func_name, ", ".join([str(dma_tile) for dma_tile in global_io]))
+                print(func_name, ", ".join([str(tile) for tile in global_io]))
             print(node_order_tag)
 
-        global_in_tile_to_func: dict[int, OrderedDMATileGroup] = {
-            i: OrderedDMATileGroup() for i in self.global_inputs.keys()
+        global_in_tile_to_func: dict[int, OrderedDTensorTileGroup] = {
+            i: OrderedDTensorTileGroup() for i in self.global_inputs.keys()
         }
-        global_out_tile_to_func: dict[int, OrderedDMATileGroup] = {
-            i: OrderedDMATileGroup() for i in self.global_outputs.keys()
+        global_out_tile_to_func: dict[int, OrderedDTensorTileGroup] = {
+            i: OrderedDTensorTileGroup() for i in self.global_outputs.keys()
         }
         for func_name, io_info in global_in.items():
             outer_tag = node_order_tag[func_name]
-            for i, dma_tile in enumerate(io_info):
+            for i, tiles in enumerate(io_info):
                 inner_tag = f"{outer_tag}-{i}"
-                for tile_ in dma_tile:
+                for tile_ in tiles:
                     global_in_tile_to_func[tile_.dtensor_id].add_tile(
                         tile_, inner_tag, func_name
                     )
         for func_name, io_info in global_out.items():
             outer_tag = node_order_tag[func_name]
-            for i, dma_tile in enumerate(io_info):
+            for i, tiles in enumerate(io_info):
                 inner_tag = f"{outer_tag}-{i}"
-                for tile_ in dma_tile:
+                for tile_ in tiles:
                     global_out_tile_to_func[tile_.dtensor_id].add_tile(
                         tile_, inner_tag, func_name
                     )

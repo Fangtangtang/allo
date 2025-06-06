@@ -13,7 +13,7 @@ from ...memory import DTensor, Size4D, Offset4D
 # Memory
 # ############################################################
 @dataclass
-class GlobalDMATile:
+class GlobalDTensorTile:
     func_param_idx: int  # parameter idx
     dtensor_id: int
     tensor_tile_label: str
@@ -35,42 +35,42 @@ class GlobalDMATile:
         return f"{self.dtensor_id} ({self.tensor_tile_label})"
 
 
-class DMATileGroup:
+class DTensorTileGroup:
     """
-    DMA tiles -> PEs (functions) using the same DMA tile.
+    DTensor tiles -> PEs (functions) using the same DTensor tile.
     """
 
     def __init__(self, order_tag: str):
         self.order_tag = order_tag
-        self.dma_tile_to_pes: dict[GlobalDMATile, list[str]] = {}
+        self.dtensor_tile_to_pes: dict[GlobalDTensorTile, list[str]] = {}
 
-    def add_tile(self, tile: GlobalDMATile, pe: str):
-        if tile not in self.dma_tile_to_pes:
-            self.dma_tile_to_pes[tile] = []
-        self.dma_tile_to_pes[tile].append(pe)
+    def add_tile(self, tile: GlobalDTensorTile, pe: str):
+        if tile not in self.dtensor_tile_to_pes:
+            self.dtensor_tile_to_pes[tile] = []
+        self.dtensor_tile_to_pes[tile].append(pe)
 
     def print(self):
-        for tile, pes in self.dma_tile_to_pes.items():
+        for tile, pes in self.dtensor_tile_to_pes.items():
             print(f"{tile}: {pes}")
 
 
-class OrderedDMATileGroup:
+class OrderedDTensorTileGroup:
     """
-    order_tag -> DMATileGroup
+    order_tag -> DTensorTileGroup
 
     `order_tag` is useful to determine the correct (deadlock-free) order of tile transfer.
     """
 
     def __init__(self):
-        self.dma_tile_groups: dict[str, DMATileGroup] = {}
+        self.dtensor_tile_groups: dict[str, DTensorTileGroup] = {}
 
-    def add_tile(self, tile: GlobalDMATile, order_tag: str, pe: str):
-        if order_tag not in self.dma_tile_groups:
-            self.dma_tile_groups[order_tag] = DMATileGroup(order_tag)
-        self.dma_tile_groups[order_tag].add_tile(tile, pe)
+    def add_tile(self, tile: GlobalDTensorTile, order_tag: str, pe: str):
+        if order_tag not in self.dtensor_tile_groups:
+            self.dtensor_tile_groups[order_tag] = DTensorTileGroup(order_tag)
+        self.dtensor_tile_groups[order_tag].add_tile(tile, pe)
 
     def print(self):
-        for order_tag, tiles in self.dma_tile_groups.items():
+        for order_tag, tiles in self.dtensor_tile_groups.items():
             print(f"<<<<< {order_tag} >>>>>")
             tiles.print()
 
@@ -123,10 +123,10 @@ class FIFOManager:
             return fifo
 
     def print(self):
-        print("\n***** DMA FIFOs *****")
+        print("\n***** FIFOs *****")
         for key, fifo in self.fifo_map.items():
             print(f"{key}: {fifo}")
-        print("***** DMA FIFOs *****\n")
+        print("***** FIFOs *****\n")
 
 
 class SwitchNode:
@@ -190,8 +190,8 @@ class VirtualNode:
         self.func_name: str = func.attributes["sym_name"].value
         self.func: func_d.FuncOp = func
         # global <-> PE
-        self.global_inputs: list[GlobalDMATile] = []
-        self.global_outputs: list[GlobalDMATile] = []
+        self.global_inputs: list[GlobalDTensorTile] = []
+        self.global_outputs: list[GlobalDTensorTile] = []
         # inter-PE: input/output node name -> (stream type, stream name)
         self.input_streams: dict[str, tuple[StreamType, str]] = {}
         self.output_streams: dict[str, tuple[StreamType, str]] = {}
@@ -201,7 +201,7 @@ class VirtualNode:
 
     def add_global_input(self, func_param_idx: int, dtensor: DTensor, indexes):
         self.global_inputs.append(
-            GlobalDMATile(
+            GlobalDTensorTile(
                 func_param_idx,
                 dtensor.global_id,
                 dtensor.PE_tile_id_to_tensor_tile_id(indexes),
@@ -210,7 +210,7 @@ class VirtualNode:
 
     def add_global_output(self, func_param_idx: int, dtensor: DTensor, indexes):
         self.global_outputs.append(
-            GlobalDMATile(
+            GlobalDTensorTile(
                 func_param_idx,
                 dtensor.global_id,
                 dtensor.PE_tile_id_to_tensor_tile_id(indexes),
@@ -240,9 +240,9 @@ class CollocatedBaseNode:
         self.execution_queue: list[set["CollocatedBaseNode"]] = []
         # TODO: global io for collocated nodes
         # global <-> PE: a list corresponding to the execution queue,
-        #               each element is a dict mapping CollocatedBaseNode id to a list of GlobalDMATile
-        self.global_inputs: list[dict[int, list[GlobalDMATile]]] = []
-        self.global_outputs: list[dict[int, list[GlobalDMATile]]] = []
+        #               each element is a dict mapping CollocatedBaseNode id to a list of GlobalDTensorTile
+        self.global_inputs: list[dict[int, list[GlobalDTensorTile]]] = []
+        self.global_outputs: list[dict[int, list[GlobalDTensorTile]]] = []
         # input/output node id -> edge stream type
         # fixme: may conflict when having multiple input/output corresponding to the same node
         self.input_streams: dict[int, list[tuple[StreamType, str]]] = defaultdict(list)
@@ -470,11 +470,11 @@ class ComputationGraph:
     def get_node_global_io(
         self,
     ) -> tuple[
-        dict[str, list[list[GlobalDMATile]]], dict[str, list[list[GlobalDMATile]]]
+        dict[str, list[list[GlobalDTensorTile]]], dict[str, list[list[GlobalDTensorTile]]]
     ]:
         # TODO
-        global_in: dict[str, list[list[GlobalDMATile]]] = {}
-        global_out: dict[str, list[list[GlobalDMATile]]] = {}
+        global_in: dict[str, list[list[GlobalDTensorTile]]] = {}
+        global_out: dict[str, list[list[GlobalDTensorTile]]] = {}
         for name, node in self.collocated_nodes.items():
             global_in[name] = list()
             global_out[name] = list()
@@ -526,8 +526,8 @@ class ComputationGraph:
         for node in self.nodes.values():
             print(
                 f"{node.func_name}: input streams: {node.input_streams}, output streams: {node.output_streams}, "
-                f"\tglobal inputs: {', '.join([str(dma_tile) for dma_tile in node.global_inputs])}, "
-                f"\tglobal outputs: {', '.join([str(dma_tile) for dma_tile in node.global_outputs])}"
+                f"\tglobal inputs: {', '.join([str(tile) for tile in node.global_inputs])}, "
+                f"\tglobal outputs: {', '.join([str(tile) for tile in node.global_outputs])}"
             )
         print("\n<<<<< Edges >>>>>")
         for edge in self.edges.values():

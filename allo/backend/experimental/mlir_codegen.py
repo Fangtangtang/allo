@@ -33,8 +33,8 @@ from .utils import get_element_type, device_config_map, Argument, Stream, Config
 from ..aie import map_kernels_to_device_mesh
 from .mapping import (
     SwitchNode,
-    OrderedDMATileGroup,
-    DMATileGroup,
+    OrderedDTensorTileGroup,
+    DTensorTileGroup,
     ComputationGraph,
     FIFOManager,
 )
@@ -483,8 +483,8 @@ class CodeGenerator:
 
     def map_global_io_to_physical_tiles(
         self,
-        global_in_tile_to_func: dict[int, OrderedDMATileGroup],
-        global_out_tile_to_func: dict[int, OrderedDMATileGroup],
+        global_in_tile_to_func: dict[int, OrderedDTensorTileGroup],
+        global_out_tile_to_func: dict[int, OrderedDTensorTileGroup],
     ) -> tuple[
         list[SwitchNode],
         list[SwitchNode],
@@ -662,7 +662,7 @@ class CodeGenerator:
             return None, -1
 
         def map_dtensor_to_physical_tiles(
-            dtensor: DTensor, ordered_tile_group: OrderedDMATileGroup, is_input: bool
+            dtensor: DTensor, ordered_tile_group: OrderedDTensorTileGroup, is_input: bool
         ):
             def partition(size: Size4D) -> Size4D:
                 """
@@ -691,7 +691,7 @@ class CodeGenerator:
             # Tags sorted in lexicographic order are used to preserve the data transfer sequence.
             # tiles in DMATileGroup with the same tage can be sent in parallel.
             sorted_tags = sorted(
-                list(ordered_tile_group.dma_tile_groups.keys()),
+                list(ordered_tile_group.dtensor_tile_groups.keys()),
                 key=CodeGenerator.parse_tag,
             )
             idx = 0
@@ -703,10 +703,10 @@ class CodeGenerator:
                 while len(
                     offset_map
                 ) < Config.IO_TILE_LOSE_FACTOR and idx + update < len(sorted_tags):
-                    dma_tile_group = ordered_tile_group.dma_tile_groups[
+                    dma_tile_group = ordered_tile_group.dtensor_tile_groups[
                         sorted_tags[idx + update]
                     ]
-                    for dma_tile in dma_tile_group.dma_tile_to_pes.keys():
+                    for dma_tile in dma_tile_group.dtensor_tile_to_pes.keys():
                         if (
                             dtensor.offset_map[dma_tile.tensor_tile_label]
                             not in offset_map
@@ -716,7 +716,7 @@ class CodeGenerator:
                             ] = []
                         offset_map[
                             dtensor.offset_map[dma_tile.tensor_tile_label]
-                        ].extend(dma_tile_group.dma_tile_to_pes[dma_tile])
+                        ].extend(dma_tile_group.dtensor_tile_to_pes[dma_tile])
                     update += 1
                 coalesced_access, coalesce_info = coalesce_memory_access(
                     list(offset_map.keys())
@@ -1009,8 +1009,8 @@ class CodeGenerator:
         core_funcs: list[allo_func_d.FuncOp],
         external_funcs: list[allo_func_d.FuncOp],
         use_external_kernels: dict[str, bool],
-        global_in_tile_to_func: dict[int, OrderedDMATileGroup],
-        global_out_tile_to_func: dict[int, OrderedDMATileGroup],
+        global_in_tile_to_func: dict[int, OrderedDTensorTileGroup],
+        global_out_tile_to_func: dict[int, OrderedDTensorTileGroup],
     ) -> aie_ir.Module:
         # mapping to physical/logical
         # TODO: co-designed mapping to different types of tiles
