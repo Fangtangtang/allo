@@ -79,14 +79,14 @@ class DMAFIFO:
     def __init__(
         self,
         name: str,
-        src: list[str],
+        src: str,
         dst: list[str],
         data_shape: list[int],
         dtype: str,
         depth: int = 2,
     ):
         self.name = name
-        self.src = sorted(src)
+        self.src = src
         self.dst = sorted(dst)
         self.data_shape = data_shape
         self.dtype = dtype
@@ -104,10 +104,10 @@ class DMAFIFOManager:
         self.fifo_map: dict[tuple, DMAFIFO] = {}
 
     def get_or_create_fifo(
-        self, src: list[str], dst: list[str], data_shape: list[str], dtype: str
+        self, src: str, dst: list[str], data_shape: list[str], dtype: str
     ) -> DMAFIFO:
-        src, dst = sorted(src), sorted(dst)
-        key = (tuple(src), tuple(dst), tuple(data_shape), dtype)
+        dst = sorted(dst)
+        key = (src, tuple(dst), tuple(data_shape), dtype)
 
         if key in self.fifo_map:
             return self.fifo_map[key]

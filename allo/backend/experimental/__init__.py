@@ -480,43 +480,6 @@ class AIE_MLIRModule:
         self.post_codegen_build(injected_kernels, include_src)
         return self
 
-    def post_codegen_build(self, injected_kernels, include_src):
-        with open(
-            os.path.join(self.project_dir, "top.mlir"), "w", encoding="utf-8"
-        ) as f:
-            f.write(str(self.aie_module))
-        if len(injected_kernels) > 0:
-            kernel_code = codegen_external_kernels(injected_kernels, include_src)
-            with open(
-                os.path.join(self.project_dir, "external.cc"), "w", encoding="utf-8"
-            ) as f:
-                f.write(kernel_code)
-            cmd = f"cd {self.project_dir} && $PEANO_INSTALL_DIR/bin/clang++ -O2 -v -std=c++20 --target=aie2-none-unknown-elf -Wno-parentheses -Wno-attributes -Wno-macro-redefined -DNDEBUG -I $MLIR_AIE_INSTALL_DIR/include -I $MLIR_AIE_EXTERNAL_KERNEL_DIR/aie2 -c external.cc -o external.o"
-            with subprocess.Popen(cmd, shell=True) as process:
-                process.wait()
-            if process.returncode != 0:
-                raise RuntimeError("Failed to compile external kernels.")
-        # build mlir-aie
-        cmd = f"cd {self.project_dir} && aiecc.py --alloc-scheme=basic-sequential --aie-generate-xclbin --no-compile-host --xclbin-name=build/final.xclbin --no-xchesscc --no-xbridge --peano ${{PEANO_INSTALL_DIR}} --aie-generate-npu-insts --npu-insts-name=insts.txt top.mlir"
-        with subprocess.Popen(cmd, shell=True) as process:
-            process.wait()
-        if process.returncode != 0:
-            raise RuntimeError("Failed to compile the MLIR-AIE code")
-        # generate host code
-        path = os.path.dirname(__file__)
-        path = os.path.join(path, "../../harness/aie")
-        os.system(f"cp -r {path}/* {self.project_dir}")
-        host_code = codegen_host(self.global_inputs, self.global_outputs)
-        with open(
-            os.path.join(self.project_dir, "test.cpp"), "w", encoding="utf-8"
-        ) as f:
-            f.write(host_code)
-        cmd = f"cd {self.project_dir}/build && cmake .. -DTARGET_NAME=top -DMLIR_AIE_DIR=$RUNTIME_LIB_DIR/.. && cmake --build . --config Release"
-        with subprocess.Popen(cmd, shell=True) as process:
-            process.wait()
-        if process.returncode != 0:
-            raise RuntimeError("Failed to build AIE project.")
-
     def help(self):
         # print the parameter list of the module
         print("Parameter reference:", self.module_parameter_list)

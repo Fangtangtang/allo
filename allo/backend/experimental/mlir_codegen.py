@@ -864,18 +864,24 @@ class CodeGenerator:
     def bind_port_to_fifo(self):
         for dma_nodes in zip(self.used_shim_tiles, self.used_mem_tiles):
             for dma_node in dma_nodes:
-                # fixme: fifo with only one src
                 for send_port in dma_node.send_ports:
                     dma_fifo = self.fifo_manager.get_or_create_fifo(
-                        src=[dma_node.tile_name],
+                        src=dma_node.tile_name,
                         dst=send_port.connected_nodes,
                         data_shape=send_port.data_shape,
                         dtype=send_port.dtype,
                     )
                     send_port.bind_to_fifo(dma_fifo)
                 for recv_port in dma_node.recv_ports:
+                    assert (
+                        len(recv_port.connected_nodes) <= 1
+                    ), "fifo should be single-source"
                     dma_fifo = self.fifo_manager.get_or_create_fifo(
-                        src=recv_port.connected_nodes,
+                        src=(
+                            recv_port.connected_nodes[0]
+                            if len(recv_port.connected_nodes) == 1
+                            else None
+                        ),
                         dst=[dma_node.tile_name],
                         data_shape=recv_port.data_shape,
                         dtype=recv_port.dtype,
@@ -1079,12 +1085,12 @@ class CodeGenerator:
                     )
                 # - io fifos: shim <-> mem <-> compute
                 for dma_fifo in self.fifo_manager.fifo_map.values():
-                    if len(dma_fifo.src) == 0 or len(dma_fifo.dst) == 0:
+                    if dma_fifo.src is None or len(dma_fifo.dst) == 0:
                         # from/to global
                         continue
                     self.fifo_map[dma_fifo.name] = aie_d.object_fifo(
                         dma_fifo.name,
-                        self.tile_map[dma_fifo.src[0]],
+                        self.tile_map[dma_fifo.src],
                         [self.tile_map[node] for node in dma_fifo.dst],
                         depth=dma_fifo.depth,
                         datatype=aie_ir.MemRefType.get(

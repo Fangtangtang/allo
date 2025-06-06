@@ -97,8 +97,154 @@ class Layout:
         return f"Layout({result})"
 
 
+class DTensor:
+    """
+    Distributed tensor.
+    """
+
+    def __init__(self, rank, mapping, shape, dtype, layout, name=None):
+        self.rank = rank
+        self.mapping = mapping  # mesh dims
+        self.shape = shape  # tensor shape
+        self.dtype = dtype
+        self.layout: Layout = layout
+        self.name = name
+        if layout is not None and mapping is not None:
+            # tensor tile ID -> PE tile IDs
+            self.global_placement: dict[str, tuple] = layout.get_placement(mapping)
+        self.access_pattern_set = False
+        self.global_id = None
+        self.type_as_param: list = None
+
+    def get_local_shape(self):
+        """
+        Get the local shape of the tensor.
+        """
+        if self.layout is None:
+            return self.shape
+        local_shape = []
+        for i, s in enumerate(self.shape):
+            shard, dim = self.layout.placement[i]
+            if shard == "R":
+                local_shape.append(s)
+            else:
+                # count from right to left
+                local_shape.append(s // self.mapping[-dim - 1])
+        return tuple(local_shape)
+
+    def set_global_id(self, global_id: int):
+        self.global_id = global_id
+
+    def set_access_pattern(self):
+        """
+        Specify how to access the dtensor (local tensor) from the global tensor
+            (tensor has at most 4 dimensions: DMA support 4-dimension address generation)
+        Set offset map for each tensor tile.
+
+        Returns:
+            - device_dims (list): Indexes of tensor dimensions sharded across devices.
+            - size (list): 4D tensor dimensions used for access.
+            - stride (list): Stride along each dimension in the global tensor.
+        """
+        if self.access_pattern_set:
+            return
+        self.access_pattern_set = True
+        # tensor tile ID -> address offset
+        self.offset_map: dict[str, Offset4D] = {}
+        partition_str = "".join([p[0] for p in self.layout.placement])
+        partition_dim = [p[1] for p in self.layout.placement]
+        if len(self.shape) == 1:
+            if partition_str == "S":
+                dim = partition_dim[0]
+                for i, key in enumerate(sorted(list(self.global_placement.keys()))):
+                    self.offset_map[key] = Offset4D(0, 0, i, 0)
+                shard_size = self.shape[0] // self.mapping[-dim - 1]
+                device_dims = [2]  # partition idx = 2
+                size = [1, 1, self.mapping[-dim - 1], shard_size]
+                stride = [0, 0, shard_size, 1]
+            elif partition_str == "R":
+                for key in self.global_placement.keys():
+                    self.offset_map[key] = Offset4D(0, 0, 0, 0)
+                device_dims = []  # no partition
+                size = [1, 1, 1, self.shape[0]]
+                stride = [0, 0, 0, 1]
+            else:
+                raise ValueError("Unsupported access pattern for 1D tensor.")
+        elif len(self.shape) == 2:
+            tensor_m, tensor_n = self.shape  # [tensor_m x tensor_n]
+            if partition_str == "SS":
+                device_a, device_b = (
+                    self.mapping[-partition_dim[0] - 1],
+                    self.mapping[-partition_dim[1] - 1],
+                )
+                for i, key in enumerate(sorted(list(self.global_placement.keys()))):
+                    self.offset_map[key] = Offset4D(i // device_b, i % device_b, 0, 0)
+                device_dims = [0, 1]
+                size = [device_a, device_b, tensor_m // device_a, tensor_n // device_b]
+                stride = [
+                    (tensor_m // device_a) * tensor_n,
+                    tensor_n // device_b,
+                    tensor_n,
+                    1,
+                ]
+            elif partition_str == "SR":  # TODO: something is wrong here
+                device_a = self.mapping[-partition_dim[0] - 1]
+                for i, key in enumerate(sorted(list(self.global_placement.keys()))):
+                    self.offset_map[key] = Offset4D(i // device_a, i % device_a, 0, 0)
+                # First dim sharded across all devices, second replicated
+                device_dims = [1]
+                size = [1, device_a, tensor_m // device_a, tensor_n]
+                stride = [0, (tensor_m // device_a) * tensor_n, tensor_n, 1]
+            elif partition_str == "RS":
+                device_b = self.mapping[-partition_dim[1] - 1]
+                for i, key in enumerate(sorted(list(self.global_placement.keys()))):
+                    self.offset_map[key] = Offset4D(i // device_b, i % device_b, 0, 0)
+                # First dim replicated, second sharded across second dim of mesh
+                device_dims = [1]
+                size = [1, device_b, tensor_m, tensor_n // device_b]
+                stride = [0, tensor_n // device_b, tensor_n, 1]
+            elif partition_str == "RR":
+                for key in self.global_placement.keys():
+                    self.offset_map[key] = Offset4D(0, 0, 0, 0)
+                # Both dimensions replicated
+                device_dims = []
+                size = [1, 1, tensor_m, tensor_n]
+                stride = [0, 0, tensor_n, 1]
+            else:
+                raise ValueError("Unsupported access pattern for 2D tensor.")
+        else:
+            raise ValueError("Unsupported access pattern.")
+        self.shared_dims, self.size, self.stride = device_dims, size, stride
+
+    def PE_tile_id_to_tensor_tile_id(self, pe_tile_id: tuple[int, ...]) -> str:
+        for tensor_tile_id, pe_tile_ids in self.global_placement.items():
+            if pe_tile_id in pe_tile_ids:
+                return tensor_tile_id
+        raise ValueError(
+            f"PE tile ID {pe_tile_id} not found in {self.global_placement}"
+        )
+
+    def __str__(self):
+        return f"DTensor(name={self.name}, shape={self.shape}, dtype={self.dtype}, layout={self.layout}, mapping={self.mapping}, rank={self.rank}, local_shape={self.get_local_shape()})"
+
+    def __repr__(self):
+        return f"{self.name}"
+
+
+# ############################################################
+# 4D Addressing
+# ############################################################
 @dataclass(frozen=True)
 class Offset4D:
+    """
+    4D offset.
+    indexed from left to right.
+        offset_a: offset along mesh_dim[0]
+        offset_b: offset along mesh_dim[1]
+        offset_c: offset along mesh_dim[2]
+        offset_d: offset along mesh_dim[3]
+    """
+
     offset_a: int
     offset_b: int
     offset_c: int
@@ -158,6 +304,15 @@ class Offset4D:
 
 
 class Size4D:
+    """
+    4D size.
+    indexed from left to right.
+        size_a: size along mesh_dim[0]
+        size_b: size along mesh_dim[1]
+        size_c: size along mesh_dim[2]
+        size_d: size along mesh_dim[3]
+    """
+
     def __init__(self, size_a: int, size_b: int, size_c: int, size_d: int):
         self.size_a = size_a
         self.size_b = size_b
@@ -296,137 +451,3 @@ def coalesce_memory_access(
             coalesce_info.pop(offset)
         coalesce_dim -= 1
     return access, coalesce_info
-
-
-class DTensor:
-    """
-    Distributed tensor.
-    """
-
-    def __init__(self, rank, mapping, shape, dtype, layout, name=None):
-        self.rank = rank
-        self.mapping = mapping  # mesh dims
-        self.shape = shape  # tensor shape
-        self.dtype = dtype
-        self.layout: Layout = layout
-        self.name = name
-        if layout is not None and mapping is not None:
-            # tensor tile ID -> PE tile IDs
-            self.global_placement: dict[str, tuple] = layout.get_placement(mapping)
-        self.access_pattern_set = False
-        self.global_id = None
-        self.type_as_param: list = None
-
-    def get_local_shape(self):
-        """
-        Get the local shape of the tensor.
-        """
-        if self.layout is None:
-            return self.shape
-        local_shape = []
-        for i, s in enumerate(self.shape):
-            shard, dim = self.layout.placement[i]
-            if shard == "R":
-                local_shape.append(s)
-            else:
-                # count from right to left
-                local_shape.append(s // self.mapping[-dim - 1])
-        return tuple(local_shape)
-
-    def set_global_id(self, global_id: int):
-        self.global_id = global_id
-
-    def set_access_pattern(self):
-        """
-        Specify how to access the dtensor (local tensor) from the global tensor
-            (tensor has at most 4 dimensions: DMA support 4-dimension address generation)
-        Set offset map for each tensor tile.
-
-        Returns:
-            - device_dims (list): Indexes of tensor dimensions sharded across devices.
-            - size (list): 4D tensor dimensions used for access.
-            - stride (list): Stride along each dimension in the global tensor.
-        """
-        if self.access_pattern_set:
-            return
-        self.access_pattern_set = True
-        # tensor tile ID -> address offset
-        self.offset_map: dict[str, Offset4D] = {}
-        partition_str = "".join([p[0] for p in self.layout.placement])
-        partition_dim = [p[1] for p in self.layout.placement]
-        if len(self.shape) == 1:
-            if partition_str == "S":
-                dim = partition_dim[0]
-                for i, key in enumerate(sorted(list(self.global_placement.keys()))):
-                    self.offset_map[key] = Offset4D(0, 0, i, 0)
-                shard_size = self.shape[0] // self.mapping[-dim - 1]
-                device_dims = [2]  # partition idx = 2
-                size = [1, 1, self.mapping[-dim - 1], shard_size]
-                stride = [0, 0, shard_size, 1]
-            elif partition_str == "R":
-                for key in self.global_placement.keys():
-                    self.offset_map[key] = Offset4D(0, 0, 0, 0)
-                device_dims = []  # no partition
-                size = [1, 1, 1, self.shape[0]]
-                stride = [0, 0, 0, 1]
-            else:
-                raise ValueError("Unsupported access pattern for 1D tensor.")
-        elif len(self.shape) == 2:
-            tensor_m, tensor_n = self.shape  # [tensor_m x tensor_n]
-            if partition_str == "SS":
-                device_a, device_b = (
-                    self.mapping[-partition_dim[0] - 1],
-                    self.mapping[-partition_dim[1] - 1],
-                )
-                for i, key in enumerate(sorted(list(self.global_placement.keys()))):
-                    self.offset_map[key] = Offset4D(i // device_b, i % device_b, 0, 0)
-                device_dims = [0, 1]
-                size = [device_a, device_b, tensor_m // device_a, tensor_n // device_b]
-                stride = [
-                    (tensor_m // device_a) * tensor_n,
-                    tensor_n // device_b,
-                    tensor_n,
-                    1,
-                ]
-            elif partition_str == "SR":  # TODO: something is wrong here
-                device_a = self.mapping[-partition_dim[0] - 1]
-                for i, key in enumerate(sorted(list(self.global_placement.keys()))):
-                    self.offset_map[key] = Offset4D(i // device_a, i % device_a, 0, 0)
-                # First dim sharded across all devices, second replicated
-                device_dims = [1]
-                size = [1, device_a, tensor_m // device_a, tensor_n]
-                stride = [0, (tensor_m // device_a) * tensor_n, tensor_n, 1]
-            elif partition_str == "RS":
-                device_b = self.mapping[-partition_dim[1] - 1]
-                for i, key in enumerate(sorted(list(self.global_placement.keys()))):
-                    self.offset_map[key] = Offset4D(i // device_b, i % device_b, 0, 0)
-                # First dim replicated, second sharded across second dim of mesh
-                device_dims = [1]
-                size = [1, device_b, tensor_m, tensor_n // device_b]
-                stride = [0, tensor_n // device_b, tensor_n, 1]
-            elif partition_str == "RR":
-                for key in self.global_placement.keys():
-                    self.offset_map[key] = Offset4D(0, 0, 0, 0)
-                # Both dimensions replicated
-                device_dims = []
-                size = [1, 1, tensor_m, tensor_n]
-                stride = [0, 0, tensor_n, 1]
-            else:
-                raise ValueError("Unsupported access pattern for 2D tensor.")
-        else:
-            raise ValueError("Unsupported access pattern.")
-        self.shared_dims, self.size, self.stride = device_dims, size, stride
-
-    def PE_tile_id_to_tensor_tile_id(self, pe_tile_id: tuple[int, ...]) -> str:
-        for tensor_tile_id, pe_tile_ids in self.global_placement.items():
-            if pe_tile_id in pe_tile_ids:
-                return tensor_tile_id
-        raise ValueError(
-            f"PE tile ID {pe_tile_id} not found in {self.global_placement}"
-        )
-
-    def __str__(self):
-        return f"DTensor(name={self.name}, shape={self.shape}, dtype={self.dtype}, layout={self.layout}, mapping={self.mapping}, rank={self.rank}, local_shape={self.get_local_shape()})"
-
-    def __repr__(self):
-        return f"{self.name}"
