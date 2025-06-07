@@ -3,7 +3,7 @@
 
 import re
 from dataclasses import dataclass
-from collections import defaultdict
+from collections import defaultdict, Counter
 import allo._mlir._mlir_libs._mlir as allo_ir
 from ..._mlir.dialects import func as func_d, allo as allo_d
 from .utils import Argument, parse_kernel_name, Stream, StreamType, get_df_kernels
@@ -184,8 +184,6 @@ class SwitchNode:
 # ############################################################
 # Computation Mapping Graph
 # ############################################################
-
-
 class OperationTagger:
     def __init__(self) -> None:
         self.tag_map: dict[str, str] = {}
@@ -201,8 +199,8 @@ class OperationTagger:
 
 
 class Operation:
-    def __init__(self, op_tag: str) -> None:
-        self.repeat: int = 1
+    def __init__(self, op_tag: str, repeat: int = 1) -> None:
+        self.repeat: int = repeat
         self.op_tag: str = op_tag
         self.global_inputs: list[list[GlobalDTensorTile]] = []
         self.global_outputs: list[list[GlobalDTensorTile]] = []
@@ -233,7 +231,6 @@ class Operation:
 
 # ------------------------------------------------------------
 class NodeBase:
-    tagger = OperationTagger()
     node_list: list["NodeBase"] = []
 
     def __init__(self, name: str = None, func: func_d.FuncOp = None):
@@ -243,6 +240,26 @@ class NodeBase:
         self.func: func_d.FuncOp = func
         self.operations: list[Operation] = []
 
+    def is_isomorphic_to(self, other: "NodeBase")->bool:
+        # TODO: check in a more robust way
+        if self is other:
+            return True
+        if len(self.operations)!=len(other.operations):
+            return False
+        for op1, op2 in zip(self.operations, other.operations):
+            if op1.op_tag != op2.op_tag:
+                return False
+            in1 = Counter((s.src, s.type_str) for s in op1.input_streams)
+            in2 = Counter((s.src, s.type_str) for s in op2.input_streams)
+            if in1 != in2:
+                return False
+
+            out1 = Counter((s.src, s.type_str) for s in op1.output_streams)
+            out2 = Counter((s.src, s.type_str) for s in op2.output_streams)
+            if out1 != out2:
+                return False
+        return True
+    
     def get_global_io(
         self,
     ) -> tuple[list[list[GlobalDTensorTile]], list[list[GlobalDTensorTile]]]:
@@ -271,6 +288,9 @@ class NodeBase:
             f"\n<<<<< NodeBase(id={self.id}, name='{self.name}') >>>>>\n"
             f"  Operations:\n    {op_strs if op_strs else '(none)'}"
         )
+    
+    def __repr__(self) -> str:
+        return self.__str__()
 
 
 class InitialNode(NodeBase):
@@ -280,8 +300,8 @@ class InitialNode(NodeBase):
 
 
 class CollocatedNode(NodeBase):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, name: str = None, func: func_d.FuncOp = None):
+        super().__init__(name=name, func=func)
 
 
 # ------------------------------------------------------------
@@ -295,6 +315,8 @@ class ComputationGraph:
         self.allo_module = allo_module
         self.nodes: dict[str, NodeBase] = {}
         self.edges: dict[str, Stream] = dict(stream_map)
+        self.tagger = OperationTagger()
+
         df_kernels = get_df_kernels(allo_module)
         # construct nodes
         for func in df_kernels:
@@ -302,7 +324,7 @@ class ComputationGraph:
             tag_key = re.sub(
                 r"func\.func\s+@[\w\d_]+(\s*\()", r"func.func\1", str(func.operation)
             )
-            operation = Operation(NodeBase.tagger.get_tag(tag_key))
+            operation = Operation(self.tagger.get_tag(tag_key))
             _, indexes = parse_kernel_name(func_name)
             params = core_func_args[func_name]
             global_inputs: list[GlobalDTensorTile] = []
@@ -334,17 +356,48 @@ class ComputationGraph:
             self.nodes[func_name] = node
 
     # ------------------------------------------------------------
-    # Check
-    # ------------------------------------------------------------
-    # TODO
-
-    # ------------------------------------------------------------
     # Transformation Primitives
     # ------------------------------------------------------------
 
-    # TODO: def bundle(self)
+    def bundle(self, node_name_list:list[str]):
+        assert len(node_name_list)>=2, "bundle at least two nodes"
+        node_list:list[NodeBase] = []
+        for name in node_name_list:
+            assert name in self.nodes, f"Node({name}) not found"
+            node_list.append(self.nodes[name])
+        sample_node: NodeBase = node_list[0]
+        for node in node_list:
+            if not sample_node.is_isomorphic_to(node):
+                raise ValueError(f"Expect to bundle isomorphic nodes, Node({node.name}) is not isomorphic to Node({sample_node.name})")
+        bundled_node = CollocatedNode(name=sample_node.name, func=sample_node.func)
+        for operation in sample_node.operations:
+            new_operation = Operation(operation.op_tag, 0)
+            new_operation.input_streams = list(operation.input_streams)
+            new_operation.output_streams = list(operation.output_streams)
+            bundled_node.operations.append(new_operation)
+        for node in node_list:
+            for idx, operation in enumerate(node.operations):
+                bundled_node.operations[idx].repeat+=operation.repeat
+                bundled_node.operations[idx].global_inputs.extend(operation.global_inputs)
+                bundled_node.operations[idx].global_outputs.extend(operation.global_outputs)
+        # update stream 
+        for name, stream in self.edges.items():
+            if stream.src in node_name_list:
+                stream.src = bundled_node.name
+            if stream.dst in node_name_list:
+                stream.dst = bundled_node.name
+            # TODO: if stream.src == stream.dst, remove stream
+        # update nodes
+        for name in node_name_list:
+            self.nodes.pop(name)
+        self.nodes[bundled_node.name] = bundled_node
+        # TODO: core_func_args?        
 
-    # TODO: def chain(self)
+
+    def chain(self, node_name_a: str, node_name_b: str):
+        node_a, node_b = self.nodes(node_name_a), self.nodes(node_name_b)
+        assert node_a is not None and node_b is not None, "node not found"
+        # TODO: chain
    
     def refactor_code(self):
         # TODO: to be implemented
