@@ -314,7 +314,8 @@ class ComputationGraph:
     ):
         self.allo_module = allo_module
         self.nodes: dict[str, NodeBase] = {}
-        self.edges: dict[str, Stream] = dict(stream_map)
+        self.edges: dict[str, Stream] = stream_map
+        self.func_args = core_func_args
         self.tagger = OperationTagger()
 
         df_kernels = get_df_kernels(allo_module)
@@ -386,11 +387,15 @@ class ComputationGraph:
                 stream.src = bundled_node.name
             if stream.dst in node_name_list:
                 stream.dst = bundled_node.name
-            # TODO: if stream.src == stream.dst, remove stream
-        # update nodes
+        # update nodes and remove bundled function 
         for name in node_name_list:
-            self.nodes.pop(name)
+            removed = self.nodes.pop(name)
+            if not name == bundled_node.name:
+                removed.func.erase()
+                self.func_args.pop(name)
         self.nodes[bundled_node.name] = bundled_node
+        print(bundled_node)
+        print(self.allo_module)
         # TODO: core_func_args?        
 
 

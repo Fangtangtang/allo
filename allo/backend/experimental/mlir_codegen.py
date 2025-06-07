@@ -518,8 +518,8 @@ class CodeGenerator:
             """
             send_need = len(connected_nodes) if is_input else 1
             recv_need = 1 if is_input else sum(len(group) for group in connected_nodes)
-            send_size: list[int] = tile_shape if is_input else coalesced_size.to_list()
-            recv_size: list[int] = coalesced_size.to_list() if is_input else tile_shape
+            send_shape: list[int] = tile_shape if is_input else coalesced_size.to_list()
+            recv_shape: list[int] = coalesced_size.to_list() if is_input else tile_shape
             tile_total_size = tile_size.get_total_size()
             if os.getenv("VERBOSE") == "1":
                 print(f"send_need: {send_need}, recv_need: {recv_need}")
@@ -551,7 +551,7 @@ class CodeGenerator:
                 for i in range(send_need):
                     port = SwitchNode.Port(
                         id=len(assigned_mem_tile.send_ports),
-                        data_shape=send_size,
+                        data_shape=send_shape,
                         dtype=dtype,
                         connected_nodes=connected_nodes[i] if is_input else [],
                     )
@@ -561,7 +561,7 @@ class CodeGenerator:
                     for i in range(recv_need):
                         port = SwitchNode.Port(
                             id=len(assigned_mem_tile.recv_ports),
-                            data_shape=recv_size,
+                            data_shape=recv_shape,
                             dtype=dtype,
                             connected_nodes=[],
                         )
@@ -572,7 +572,7 @@ class CodeGenerator:
                         for node in group:
                             port = SwitchNode.Port(
                                 id=len(assigned_mem_tile.recv_ports),
-                                data_shape=recv_size,
+                                data_shape=recv_shape,
                                 dtype=dtype,
                                 connected_nodes=[node],
                             )
@@ -666,6 +666,11 @@ class CodeGenerator:
             ordered_tile_group: OrderedDTensorTileGroup,
             is_input: bool,
         ):
+            print("@@@@@@@@@@@@@")
+            for tag, group in ordered_tile_group.dtensor_tile_groups.items():
+                print(tag)
+                print(group.dtensor_tile_to_pes)
+            print("@@@@@@@@@@@@@")
             def partition(size: Size4D) -> Size4D:
                 """
                 Partition the dma task into multiple sub-tasks.
@@ -720,9 +725,7 @@ class CodeGenerator:
                             dtensor.offset_map[dma_tile.tensor_tile_label]
                         ].extend(dma_tile_group.dtensor_tile_to_pes[dma_tile])
                     update += 1
-                coalesced_access, coalesce_info = coalesce_memory_access(
-                    list(offset_map.keys())
-                )
+                coalesced_access, coalesce_info, connected_node_info = coalesce_memory_access(offset_map)
                 if os.getenv("VERBOSE") == "1":
                     print()
                     print(offset_map)
@@ -730,9 +733,8 @@ class CodeGenerator:
                     print("=== coalesce_info ===", coalesce_info)
                 offset_id = 0
                 for offset, size in coalesced_access.items():
-                    connected_nodes: list[list[str]] = []
-                    for node in coalesce_info[offset]:
-                        connected_nodes.append(offset_map[node])
+                    # fixme: send to the same dst for multiple times
+                    connected_nodes: list[list[str]] = connected_node_info[offset]
                     while size.get_total_size() != 0:
                         coalesced_size = Size4D.coalesce(size, tile_size)
                         assigned_mem_tile, port_id, ports_to_compute = assign_mem_tile(

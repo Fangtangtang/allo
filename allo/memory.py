@@ -414,16 +414,20 @@ class Size4D:
 
 
 def coalesce_memory_access(
-    offsets: list[Offset4D],
+    offset_map: dict[Offset4D, list[str]] 
 ) -> tuple[dict[Offset4D, Size4D], dict[Offset4D, list[Offset4D]]]:
     """
     Coalesce memory tileaccess.
         The default way is sending each tiling separately.
         But we can try to coalesce some.
     """
+    offsets = list(offset_map.keys())
     access: dict[Offset4D, Size4D] = {offset: Size4D(1, 1, 1, 1) for offset in offsets}
     coalesce_info: dict[Offset4D, list[Offset4D]] = {
         offset: [offset] for offset in offsets
+    }
+    connected_nodes: dict[Offset4D, list[list[str]]] = {
+        offset: [offset_map[offset]] for offset in offsets
     }
     coalesce_dim = 3
     while coalesce_dim >= 0:
@@ -444,10 +448,13 @@ def coalesce_memory_access(
                     base_size.inc_on_dim(coalesce_dim)
                     coalesed.add(offset)
                     coalesce_info[base_offset].extend(coalesce_info[inc_offset])
+                    connected_nodes[base_offset].extend(connected_nodes[inc_offset])
                 else:
                     base_offset, inc_offset, base_size = offset, offset, access[offset]
         for offset in coalesed:
             access.pop(offset)
             coalesce_info.pop(offset)
+            connected_nodes.pop(offset)
         coalesce_dim -= 1
-    return access, coalesce_info
+    # TODO: ensure that connected_nodes are all different
+    return access, coalesce_info, connected_nodes
