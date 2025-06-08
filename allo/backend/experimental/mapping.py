@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from collections import defaultdict, Counter
 import allo._mlir._mlir_libs._mlir as allo_ir
+from ..._mlir.ir import InsertionPoint
 from ..._mlir.dialects import func as func_d, allo as allo_d
 from .utils import Argument, parse_kernel_name, Stream, StreamType, get_df_kernels
 from ...memory import DTensor, Size4D, Offset4D
@@ -316,7 +317,9 @@ class ComputationGraph:
         self.nodes: dict[str, NodeBase] = {}
         self.edges: dict[str, Stream] = stream_map
         self.func_args = core_func_args
+
         self.tagger = OperationTagger()
+        self.dependencies: dict[str, set[str]] = {}
 
         df_kernels = get_df_kernels(allo_module)
         # construct nodes
@@ -355,12 +358,19 @@ class ComputationGraph:
             operation.global_outputs.append(global_outputs)
             node = InitialNode(func, operation)
             self.nodes[func_name] = node
+            self.dependencies[func_name] = set()
+        # initiate dependencies
+        for stream in self.edges.values():
+            self.dependencies[stream.dst].add(stream.src)
 
     # ------------------------------------------------------------
     # Transformation Primitives
     # ------------------------------------------------------------
 
     def bundle(self, node_name_list: list[str]):
+        """
+        [A] [B] [C] [D]  => [A] x 4
+        """
         assert len(node_name_list) >= 2, "bundle at least two nodes"
         node_list: list[NodeBase] = []
         for name in node_name_list:
@@ -390,28 +400,45 @@ class ComputationGraph:
         # update stream
         for name, stream in self.edges.items():
             if stream.src in node_name_list:
+                self.dependencies[stream.dst].pop(stream.src)
                 stream.src = bundled_node.name
+                self.dependencies[stream.dst].add(bundled_node.name)
             if stream.dst in node_name_list:
                 stream.dst = bundled_node.name
+                self.dependencies[bundled_node.name].add(stream.src)
         # update nodes and remove bundled function
         for name in node_name_list:
             removed = self.nodes.pop(name)
             if not name == bundled_node.name:
                 removed.func.erase()
                 self.func_args.pop(name)
+                self.dependencies.pop(name)
         self.nodes[bundled_node.name] = bundled_node
-        print(bundled_node)
-        print(self.allo_module)
-        # TODO: core_func_args?
 
     def chain(self, node_name_a: str, node_name_b: str):
+        """
+        [A] [B] => [[A]-[B]]
+        """
         node_a, node_b = self.nodes(node_name_a), self.nodes(node_name_b)
         assert node_a is not None and node_b is not None, "node not found"
+        if node_name_b in self.dependencies[node_name_a]:
+            raise ValueError(f"Cannot chain Node({node_name_a}) and Node({node_name_b})")
+        chained_node = CollocatedNode()
+        # refactor function
+        function_a: func_d.FuncOp = node_a.func
+        function_b: func_d.FuncOp = node_b.func
+        # - function parameters
+        param_a, param_b = self.func_args[node_name_a], self.func_args[node_name_b]
+        
+        with function_a.context, allo_ir.ir.Location.unknown():
+            pass
+            # new_function = func_d.FuncOp(
+            #         chained_node.name,
+            #         func_type,# TODO
+            #         ip=InsertionPoint(function_a),
+            # )
+            # entry_block = new_function.add_entry_block()
         # TODO: chain
-
-    def refactor_code(self):
-        # TODO: to be implemented
-        pass
 
     # ------------------------------------------------------------
     # Graph Information
