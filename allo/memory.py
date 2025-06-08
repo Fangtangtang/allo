@@ -322,6 +322,23 @@ class Size4D:
     def copy(self) -> "Size4D":
         return Size4D(self.size_a, self.size_b, self.size_c, self.size_d)
 
+    def get_k_slice(self, k: int) -> "Size4D":
+        """
+        get a slice of size k
+        """
+        size_list = [self.size_a, self.size_b, self.size_c, self.size_d]
+        dim = 3
+        while dim >= 0 and k >= size_list[dim]:
+            assert k % size_list[dim] == 0, "Invalid slice size"
+            k //= size_list[dim]
+            dim -= 1
+        size_list[dim] = k
+        dim -= 1
+        while dim >= 0:
+            size_list[dim] = 1
+            dim -= 1
+        return Size4D.from_list(size_list)
+
     @classmethod
     def from_list(cls, size_list: list[int]) -> "Size4D":
         if len(size_list) > 4:
@@ -351,6 +368,23 @@ class Size4D:
                     raise ValueError("Cannot subtract")
                 sub = True
                 list_a[i] = list_a[i] - list_b[i]
+        if not sub:
+            return Size4D.from_list([0, 0, 0, 0])
+        return Size4D.from_list(list_a)
+
+    @staticmethod
+    def divide(a: "Size4D", b: "Size4D") -> "Size4D":
+        list_a, list_b = a.to_list(), b.to_list()
+        for i in range(4):
+            assert list_a[i] % list_b[i] == 0, "invalid division"
+            list_a[i] //= list_b[i]
+        return Size4D.from_list(list_a)
+
+    @staticmethod
+    def multiply(a: "Size4D", b: "Size4D") -> "Size4D":
+        list_a, list_b = a.to_list(), b.to_list()
+        for i in range(4):
+            list_a[i] *= list_b[i]
         return Size4D.from_list(list_a)
 
     def get_dim_size(self, dim: int) -> int:
@@ -413,9 +447,7 @@ class Size4D:
         return self.__str__()
 
 
-def coalesce_memory_access(
-    offset_map: dict[Offset4D, list[str]] 
-) -> tuple[dict[Offset4D, Size4D], dict[Offset4D, list[Offset4D]]]:
+def coalesce_memory_access(offset_map: dict[Offset4D, list[str]]):
     """
     Coalesce memory tileaccess.
         The default way is sending each tiling separately.
@@ -456,5 +488,73 @@ def coalesce_memory_access(
             coalesce_info.pop(offset)
             connected_nodes.pop(offset)
         coalesce_dim -= 1
+    return format_memory_access(access, coalesce_info, connected_nodes)
     # TODO: ensure that connected_nodes are all different
     return access, coalesce_info, connected_nodes
+
+
+@dataclass(frozen=True)
+class MemoryAccess:
+    # off-chip pattern
+    starting_offset: Offset4D
+    total_size: Size4D
+    # on-chip pattern
+    transfer_size: Size4D
+    offset_info: list[Offset4D]
+    connected_nodes: list[list[str]]
+
+
+def format_memory_access(
+    coalesced_access: dict[Offset4D, Size4D],
+    coalesce_info: dict[Offset4D, list[Offset4D]],
+    connected_nodes_info: dict[Offset4D, list[list[str]]],
+):
+    def fold(lst: list[list[str]]) -> list[tuple[list[list[str]], int]]:
+        sub_strings: list[list[str]] = []
+        length = len(lst)
+        left = 0
+        while left < length:
+            inc = 1
+            while inc + left < length and not lst[inc + left] in lst[left : inc + left]:
+                inc += 1
+            sub_strings.append(lst[left : inc + left])
+            left += inc
+        folded: list[tuple[list[list[str]], int]] = []
+        length = len(sub_strings)
+        left = 0
+        while left < length:
+            inc = 1
+            while inc + left < length and sub_strings[left] == sub_strings[left + inc]:
+                inc += 1
+            folded.append((sub_strings[left], inc))
+            left += inc
+        return folded
+
+    formated_access: dict[Offset4D, MemoryAccess] = {}
+    for starting_offset, total_size in coalesced_access.items():
+        connected_nodes: list[list[str]] = connected_nodes_info[starting_offset]
+        coalesced_offsets: list[Offset4D] = coalesce_info[starting_offset]
+        folded_connected_nodes = fold(connected_nodes)
+        idx = 0
+        print(connected_nodes)
+        print(folded_connected_nodes)
+        for connected_node_list, repeat in folded_connected_nodes:
+            single_on_chip_transfer_size = len(connected_node_list)
+            total_slice_size = total_size.get_k_slice(
+                single_on_chip_transfer_size * repeat
+            )
+            mem_access = MemoryAccess(
+                starting_offset=coalesced_offsets[idx],
+                total_size=total_slice_size,
+                transfer_size=total_size.get_k_slice(single_on_chip_transfer_size),
+                offset_info=coalesced_offsets[
+                    idx : idx + repeat * single_on_chip_transfer_size
+                ],
+                connected_nodes=connected_node_list,
+            )
+            total_size = Size4D.subtract(total_size, total_slice_size)
+            idx += single_on_chip_transfer_size * repeat
+            formated_access[mem_access.starting_offset] = mem_access
+            print(mem_access.total_size, mem_access.transfer_size)
+
+    return formated_access

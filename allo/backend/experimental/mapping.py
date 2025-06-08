@@ -240,11 +240,11 @@ class NodeBase:
         self.func: func_d.FuncOp = func
         self.operations: list[Operation] = []
 
-    def is_isomorphic_to(self, other: "NodeBase")->bool:
+    def is_isomorphic_to(self, other: "NodeBase") -> bool:
         # TODO: check in a more robust way
         if self is other:
             return True
-        if len(self.operations)!=len(other.operations):
+        if len(self.operations) != len(other.operations):
             return False
         for op1, op2 in zip(self.operations, other.operations):
             if op1.op_tag != op2.op_tag:
@@ -259,7 +259,7 @@ class NodeBase:
             if out1 != out2:
                 return False
         return True
-    
+
     def get_global_io(
         self,
     ) -> tuple[list[list[GlobalDTensorTile]], list[list[GlobalDTensorTile]]]:
@@ -288,7 +288,7 @@ class NodeBase:
             f"\n<<<<< NodeBase(id={self.id}, name='{self.name}') >>>>>\n"
             f"  Operations:\n    {op_strs if op_strs else '(none)'}"
         )
-    
+
     def __repr__(self) -> str:
         return self.__str__()
 
@@ -360,16 +360,18 @@ class ComputationGraph:
     # Transformation Primitives
     # ------------------------------------------------------------
 
-    def bundle(self, node_name_list:list[str]):
-        assert len(node_name_list)>=2, "bundle at least two nodes"
-        node_list:list[NodeBase] = []
+    def bundle(self, node_name_list: list[str]):
+        assert len(node_name_list) >= 2, "bundle at least two nodes"
+        node_list: list[NodeBase] = []
         for name in node_name_list:
             assert name in self.nodes, f"Node({name}) not found"
             node_list.append(self.nodes[name])
         sample_node: NodeBase = node_list[0]
         for node in node_list:
             if not sample_node.is_isomorphic_to(node):
-                raise ValueError(f"Expect to bundle isomorphic nodes, Node({node.name}) is not isomorphic to Node({sample_node.name})")
+                raise ValueError(
+                    f"Expect to bundle isomorphic nodes, Node({node.name}) is not isomorphic to Node({sample_node.name})"
+                )
         bundled_node = CollocatedNode(name=sample_node.name, func=sample_node.func)
         for operation in sample_node.operations:
             new_operation = Operation(operation.op_tag, 0)
@@ -378,16 +380,20 @@ class ComputationGraph:
             bundled_node.operations.append(new_operation)
         for node in node_list:
             for idx, operation in enumerate(node.operations):
-                bundled_node.operations[idx].repeat+=operation.repeat
-                bundled_node.operations[idx].global_inputs.extend(operation.global_inputs)
-                bundled_node.operations[idx].global_outputs.extend(operation.global_outputs)
-        # update stream 
+                bundled_node.operations[idx].repeat += operation.repeat
+                bundled_node.operations[idx].global_inputs.extend(
+                    operation.global_inputs
+                )
+                bundled_node.operations[idx].global_outputs.extend(
+                    operation.global_outputs
+                )
+        # update stream
         for name, stream in self.edges.items():
             if stream.src in node_name_list:
                 stream.src = bundled_node.name
             if stream.dst in node_name_list:
                 stream.dst = bundled_node.name
-        # update nodes and remove bundled function 
+        # update nodes and remove bundled function
         for name in node_name_list:
             removed = self.nodes.pop(name)
             if not name == bundled_node.name:
@@ -396,14 +402,13 @@ class ComputationGraph:
         self.nodes[bundled_node.name] = bundled_node
         print(bundled_node)
         print(self.allo_module)
-        # TODO: core_func_args?        
-
+        # TODO: core_func_args?
 
     def chain(self, node_name_a: str, node_name_b: str):
         node_a, node_b = self.nodes(node_name_a), self.nodes(node_name_b)
         assert node_a is not None and node_b is not None, "node not found"
         # TODO: chain
-   
+
     def refactor_code(self):
         # TODO: to be implemented
         pass

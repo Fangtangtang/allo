@@ -23,10 +23,10 @@ def _test_vector_scalar_add():
 
     A = np.random.randint(0, 100, M).astype(np.int32)
     mod = df.build(top, target="aie-mlir")
-    # B = np.zeros(M).astype(np.int32)
-    # mod(A, B)
-    # np.testing.assert_allclose(B, A + 1)
-    # print("PASSED!")
+    B = np.zeros(M).astype(np.int32)
+    mod(A, B)
+    np.testing.assert_allclose(B, A + 1)
+    print("PASSED!")
    
 LyW1 = Layout("RS0")
 LyW2 = Layout("S0R")

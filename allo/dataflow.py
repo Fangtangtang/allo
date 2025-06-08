@@ -348,7 +348,7 @@ def build(
         )
         # aie_mod.build()
         aie_mod.build_experimental(
-            enable_virtual_mapping=False
+            enable_virtual_mapping=True
         )
         return aie_mod
 

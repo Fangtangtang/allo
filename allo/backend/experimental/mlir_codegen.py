@@ -666,11 +666,6 @@ class CodeGenerator:
             ordered_tile_group: OrderedDTensorTileGroup,
             is_input: bool,
         ):
-            print("@@@@@@@@@@@@@")
-            for tag, group in ordered_tile_group.dtensor_tile_groups.items():
-                print(tag)
-                print(group.dtensor_tile_to_pes)
-            print("@@@@@@@@@@@@@")
             def partition(size: Size4D) -> Size4D:
                 """
                 Partition the dma task into multiple sub-tasks.
@@ -725,16 +720,19 @@ class CodeGenerator:
                             dtensor.offset_map[dma_tile.tensor_tile_label]
                         ].extend(dma_tile_group.dtensor_tile_to_pes[dma_tile])
                     update += 1
-                coalesced_access, coalesce_info, connected_node_info = coalesce_memory_access(offset_map)
+                # coalesced_access, coalesce_info, connected_node_info = coalesce_memory_access(offset_map)
+                coalesced_access = coalesce_memory_access(offset_map)
                 if os.getenv("VERBOSE") == "1":
                     print()
                     print(offset_map)
                     print("access:", coalesced_access)
-                    print("=== coalesce_info ===", coalesce_info)
                 offset_id = 0
-                for offset, size in coalesced_access.items():
-                    # fixme: send to the same dst for multiple times
-                    connected_nodes: list[list[str]] = connected_node_info[offset]
+                for offset, mem_access in coalesced_access.items():
+                    connected_nodes: list[list[str]] = mem_access.connected_nodes
+                    size = mem_access.transfer_size
+                    multiplier: Size4D = Size4D.divide(
+                        mem_access.total_size, mem_access.transfer_size
+                    )
                     while size.get_total_size() != 0:
                         coalesced_size = Size4D.coalesce(size, tile_size)
                         assigned_mem_tile, port_id, ports_to_compute = assign_mem_tile(
@@ -769,8 +767,10 @@ class CodeGenerator:
                                         if is_input
                                         else assigned_shim_tile.recv_ports[shim_port_id]
                                     ),
-                                    offset=coalesce_info[offset][offset_id].to_list(),
-                                    size=coalesced_size.to_list(),
+                                    offset=mem_access.offset_info[offset_id].to_list(),
+                                    size=Size4D.coalesce(
+                                        Size4D.multiply(multiplier, size), tile_size
+                                    ).to_list(),
                                     stride=dtensor.stride,
                                     is_input=is_input,
                                 )
@@ -822,10 +822,15 @@ class CodeGenerator:
                                                 shim_port_id
                                             ]
                                         ),
-                                        offset=coalesce_info[offset][
+                                        offset=mem_access.offset_info[
                                             offset_id
                                         ].to_list(),
-                                        size=coalesced_size.to_list(),
+                                        size=Size4D.coalesce(
+                                            Size4D.multiply(
+                                                multiplier, partitioned_size
+                                            ),
+                                            tile_size,
+                                        ).to_list(),
                                         stride=dtensor.stride,
                                         is_input=is_input,
                                     )
