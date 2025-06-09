@@ -15,6 +15,7 @@ import aie.dialects.aiex as aiex_d
 import aie.dialects.arith as aie_arith_d
 import aie.dialects.func as aie_func_d
 import aie.dialects.scf as aie_scf_d
+import aie.dialects._memref_ops_gen as aie_memref_d
 
 import aie.ir as aie_ir
 
@@ -230,6 +231,10 @@ class CodeGenerator:
         self.fifo_map: dict[str, aie_d.object_fifo] = {}
         # function name (with id) -> a map from DTensor to fifo name
         self.compute_core_io: dict[str : dict[DTensor, str]] = {}
+        # function name (with id) -> a map from DTensor to (fifo name, transfer idx, total tensfer number)
+        self.compute_core_io_experimental: dict[
+            str : dict[DTensor, tuple[str, int]]
+        ] = {}
         self.external_functions: str = ""
 
         # ------------------------------------------------------------
@@ -339,6 +344,7 @@ class CodeGenerator:
         func_core: aie_d.Core,
         original_func: allo_func_d.FuncOp,
         func_args: dict[int, tuple[Argument, bool]],
+        is_experimental: bool = False,
     ):
         """
         Generate the computation logic for the fake 'while(1)' loop body for an AIE compute core, transforming high-level Allo ops
@@ -375,20 +381,69 @@ class CodeGenerator:
             loop = aie_scf_d.ForOp(lower_bound=c0, upper_bound=cmax, step=c1)
             with aie_ir.InsertionPoint(loop.body):
                 # insert operations to get 'function parameter', acquire and subview
+                # fixme: arguments may reuse fifo (ordering and copy-release-acquire)
+                # fixme: what about the output??
+                compute_core_io = (
+                    self.compute_core_io_experimental
+                    if is_experimental
+                    else self.compute_core_io
+                )
                 io_map = (
-                    self.compute_core_io[parsed_function.name.value]
-                    if parsed_function.name.value in self.compute_core_io
+                    compute_core_io[parsed_function.name.value]
+                    if parsed_function.name.value in compute_core_io
                     else {}
                 )
+                argument_info: dict[str, list[tuple]] = defaultdict(list)
+                if is_experimental:
+                    for i, argument in enumerate(parsed_function.arguments):
+                        if not i in func_args:
+                            continue
+                        arg_info: tuple[Argument, bool] = func_args[i]
+                        if arg_info[0].dtensor is not None:
+                            fifo_name, transfer_idx = io_map[arg_info[0].dtensor]
+                            argument_info[fifo_name].append(
+                                (transfer_idx, argument, arg_info[1])
+                            )
+                    for key in argument_info:
+                        argument_sharing_fifo = argument_info[key]
+                        assert len(argument_sharing_fifo) >= 1
+                        argument_info[key].sort(key=lambda x: x[0])
+                        idx = 0
+                        while idx < len(argument_sharing_fifo) - 2:
+                            argument = argument_sharing_fifo[idx][1]
+                            acquired = self.fifo_map[key].acquire(
+                                1 if argument_sharing_fifo[idx][2] else 0, 1
+                            )
+                            assert argument_sharing_fifo[idx][
+                                2
+                            ], "At most one global output is supported"
+                            alloc_op = aie_memref_d.AllocOp(
+                                acquired.type,
+                                [],
+                                [],
+                            )
+                            aie_memref_d.CopyOp(
+                                acquired,
+                                alloc_op.memref,
+                            )
+                            argument.replace_all_uses_with(alloc_op.memref)
+                            idx += 1
+                        argument = argument_sharing_fifo[idx][1]
+                        acquired = self.fifo_map[key].acquire(
+                            1 if argument_sharing_fifo[idx][2] else 0, 1
+                        )
+                        argument.replace_all_uses_with(acquired)
+
                 for i, argument in enumerate(parsed_function.arguments):
                     if not i in func_args:
                         continue
                     arg_info: tuple[Argument, bool] = func_args[i]
                     if arg_info[0].dtensor is not None:
-                        acquired = self.fifo_map[io_map[arg_info[0].dtensor]].acquire(
-                            1 if arg_info[1] else 0, 1
-                        )
-                        argument.replace_all_uses_with(acquired)
+                        if not is_experimental:
+                            acquired = self.fifo_map[
+                                io_map[arg_info[0].dtensor]
+                            ].acquire(1 if arg_info[1] else 0, 1)
+                            argument.replace_all_uses_with(acquired)
                     else:
                         stream: Stream = arg_info[0].stream
                         fifo = self.fifo_map[stream.name]
@@ -455,14 +510,20 @@ class CodeGenerator:
                     alloc_op.erase()
 
                 # release
+                if is_experimental:
+                    for key in argument_info:
+                        self.fifo_map[key].release(
+                            1 if argument_info[key][0][2] else 0, 1
+                        )
                 for i, _ in enumerate(parsed_function.arguments):
                     if not i in func_args:
                         continue
                     arg_info: tuple[Argument, bool] = func_args[i]
                     if not arg_info[0].dtensor is None:
-                        self.fifo_map[io_map[arg_info[0].dtensor]].release(
-                            1 if arg_info[1] else 0, 1
-                        )
+                        if not is_experimental:
+                            self.fifo_map[io_map[arg_info[0].dtensor]].release(
+                                1 if arg_info[1] else 0, 1
+                            )
 
                 aie_scf_d.YieldOp([])
             aie_d.EndOp()
@@ -477,9 +538,14 @@ class CodeGenerator:
         is_input: bool
 
     @staticmethod
-    def parse_tag(tag: str) -> tuple[int, int]:
+    def parse_tag2(tag: str) -> tuple[int, int]:
         outer_tag, inner_tag = tag.split("-")
         return int(outer_tag), int(inner_tag)
+
+    @staticmethod
+    def parse_tag3(tag: str) -> tuple[int, int, int]:
+        outer_tag, inner_tag, ext_tag = tag.split("-")
+        return int(outer_tag), int(inner_tag), int(ext_tag)
 
     def map_global_io_to_physical_tiles(
         self,
@@ -694,7 +760,7 @@ class CodeGenerator:
             # tiles in DMATileGroup with the same tage can be sent in parallel.
             sorted_tags = sorted(
                 list(ordered_tile_group.dtensor_tile_groups.keys()),
-                key=CodeGenerator.parse_tag,
+                key=CodeGenerator.parse_tag2,
             )
             idx = 0
             while idx < len(sorted_tags):
@@ -744,14 +810,21 @@ class CodeGenerator:
                             tile_shape=dtensor.type_as_param,
                         )
                         if assigned_mem_tile is not None:
+                            port_to_shim = (
+                                assigned_mem_tile.recv_ports[port_id]
+                                if is_input
+                                else assigned_mem_tile.send_ports[port_id]
+                            )
+                            extened_tag = f"{tag}-{len(port_to_shim.queue)}"
+                            port_to_shim.queue.append(dtensor)
                             for port in ports_to_compute:
-                                register_function_param_port(
-                                    (
-                                        assigned_mem_tile.send_ports[port]
-                                        if is_input
-                                        else assigned_mem_tile.recv_ports[port]
-                                    ),
+                                port_to_compute = (
+                                    assigned_mem_tile.send_ports[port]
+                                    if is_input
+                                    else assigned_mem_tile.recv_ports[port]
                                 )
+                                port_to_compute.queue.append(dtensor)
+                                register_function_param_port(port_to_compute)
                             assigned_shim_tile, shim_port_id = assign_shim_tile(
                                 assigned_mem_tile,
                                 port_id,
@@ -759,14 +832,16 @@ class CodeGenerator:
                             )
                             if assigned_shim_tile is None:
                                 raise ValueError("Fail to assign shim tile")
-                            self.global_io_dma[tag].append(
+                            port = (
+                                assigned_shim_tile.send_ports[shim_port_id]
+                                if is_input
+                                else assigned_shim_tile.recv_ports[shim_port_id]
+                            )
+                            port.queue.append(dtensor)
+                            self.global_io_dma[extened_tag].append(
                                 CodeGenerator.GlobalIODMA(
                                     dtensor=dtensor,
-                                    port=(
-                                        assigned_shim_tile.send_ports[shim_port_id]
-                                        if is_input
-                                        else assigned_shim_tile.recv_ports[shim_port_id]
-                                    ),
+                                    port=port,
                                     offset=mem_access.offset_info[offset_id].to_list(),
                                     size=Size4D.coalesce(
                                         Size4D.multiply(multiplier, size), tile_size
@@ -797,14 +872,21 @@ class CodeGenerator:
                                 )
                             )
                             if assigned_mem_tile is not None:
+                                port_to_shim = (
+                                    assigned_mem_tile.recv_ports[port_id]
+                                    if is_input
+                                    else assigned_mem_tile.send_ports[port_id]
+                                )
+                                extened_tag = f"{tag}-{len(port_to_shim.queue)}"
+                                port_to_shim.queue.append(dtensor)
                                 for port in ports_to_compute:
-                                    register_function_param_port(
-                                        (
-                                            assigned_mem_tile.send_ports[port]
-                                            if is_input
-                                            else assigned_mem_tile.recv_ports[port]
-                                        ),
+                                    port_to_compute = (
+                                        assigned_mem_tile.send_ports[port]
+                                        if is_input
+                                        else assigned_mem_tile.recv_ports[port]
                                     )
+                                    port_to_compute.queue.append(dtensor)
+                                    register_function_param_port(port_to_compute)
                                 assigned_shim_tile, shim_port_id = assign_shim_tile(
                                     assigned_mem_tile,
                                     port_id,
@@ -812,16 +894,16 @@ class CodeGenerator:
                                 )
                                 if assigned_shim_tile is None:
                                     raise ValueError("Fail to assign shim tile")
-                                self.global_io_dma[tag].append(
+                                port = (
+                                    assigned_shim_tile.send_ports[shim_port_id]
+                                    if is_input
+                                    else assigned_shim_tile.recv_ports[shim_port_id]
+                                )
+                                port.queue.append(dtensor)
+                                self.global_io_dma[extened_tag].append(
                                     CodeGenerator.GlobalIODMA(
                                         dtensor=dtensor,
-                                        port=(
-                                            assigned_shim_tile.send_ports[shim_port_id]
-                                            if is_input
-                                            else assigned_shim_tile.recv_ports[
-                                                shim_port_id
-                                            ]
-                                        ),
+                                        port=port,
                                         offset=mem_access.offset_info[
                                             offset_id
                                         ].to_list(),
@@ -900,9 +982,14 @@ class CodeGenerator:
             self.fifo_manager.print()
         # bind function ports to fifos
         for func_name, port_map in self.function_port_map.items():
-            self.compute_core_io[func_name] = {}
+            self.compute_core_io_experimental[func_name] = {}
             for dtensor, port in port_map.items():
-                self.compute_core_io[func_name][dtensor] = port.bind_fifo.name
+                indices = [i for i, x in enumerate(port.queue) if x == dtensor]
+                assert len(indices) == 1
+                self.compute_core_io_experimental[func_name][dtensor] = (
+                    port.bind_fifo.name,
+                    indices[0],
+                )
 
     def map_core_func_to_physical_tiles(self) -> dict[str, tuple[int, int]]:
         """
@@ -1141,7 +1228,7 @@ class CodeGenerator:
                     if self.global_ip is None:
                         self.global_ip = aie_ir.InsertionPoint(func_core)
                     self.build_core_function(
-                        func_core, func, self.core_func_args[func_name]
+                        func_core, func, self.core_func_args[func_name], True
                     )
 
                 # runtime sequence
@@ -1162,7 +1249,7 @@ class CodeGenerator:
                 runtime_seq_entry_block = runtime_seq.body.blocks.append(*runtime_args)
                 with aie_ir.InsertionPoint(runtime_seq_entry_block):
                     sorted_tags = sorted(
-                        list(self.global_io_dma.keys()), key=CodeGenerator.parse_tag
+                        list(self.global_io_dma.keys()), key=CodeGenerator.parse_tag3
                     )
                     launched_dma = []
                     # use sorted tags to determine the data transfer sequence

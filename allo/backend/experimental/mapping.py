@@ -139,6 +139,7 @@ class SwitchNode:
             self.dtype = dtype
             self.connected_nodes = connected_nodes
             self.bind_fifo = None
+            self.queue: list = []
 
         def bind_to_fifo(self, fifo: FIFO):
             assert (
@@ -422,14 +423,16 @@ class ComputationGraph:
         node_a, node_b = self.nodes(node_name_a), self.nodes(node_name_b)
         assert node_a is not None and node_b is not None, "node not found"
         if node_name_b in self.dependencies[node_name_a]:
-            raise ValueError(f"Cannot chain Node({node_name_a}) and Node({node_name_b})")
+            raise ValueError(
+                f"Cannot chain Node({node_name_a}) and Node({node_name_b})"
+            )
         chained_node = CollocatedNode()
         # refactor function
         function_a: func_d.FuncOp = node_a.func
         function_b: func_d.FuncOp = node_b.func
         # - function parameters
         param_a, param_b = self.func_args[node_name_a], self.func_args[node_name_b]
-        
+
         with function_a.context, allo_ir.ir.Location.unknown():
             pass
             # new_function = func_d.FuncOp(

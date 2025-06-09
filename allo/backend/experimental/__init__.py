@@ -7,6 +7,7 @@ import subprocess
 import shutil
 
 import aie.ir as aie_ir
+import aie.passmanager as aie_pass_manager
 
 import allo._mlir._mlir_libs._mlir as allo_ir
 from ..._mlir.dialects import func as allo_func_d
@@ -307,6 +308,15 @@ class AIE_MLIRModule:
             global_in_tile_to_func,
             global_out_tile_to_func,
         )
+
+        # TODO: opt passes on aie-mlir
+        # passes = [
+        #     "func.func(affine-loop-unroll), canonicalize",
+        # ]
+        # pipeline = f'builtin.module({",".join(passes)})'
+        # with self.aie_module.context:
+        #     aie_pass_manager.PassManager.parse(pipeline).run(self.aie_module.operation)
+
         self.post_codegen_build(injected_kernels, include_src)
         return self
 
