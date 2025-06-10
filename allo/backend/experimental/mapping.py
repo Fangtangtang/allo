@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from collections import defaultdict, Counter
 import allo._mlir._mlir_libs._mlir as allo_ir
-from ..._mlir.ir import InsertionPoint, FunctionType
+from ..._mlir.ir import InsertionPoint, FunctionType, Value
 from ..._mlir.dialects import func as func_d, allo as allo_d
 from .utils import Argument, parse_kernel_name, Stream, StreamType, get_df_kernels
 from ...memory import DTensor, Size4D, Offset4D
@@ -277,8 +277,14 @@ class InitialNode(NodeBase):
 
 
 class CollocatedNode(NodeBase):
-    def __init__(self, tag: str, name: str = None, func: func_d.FuncOp = None):
-        super().__init__(name=name, func=func, tag=tag)
+    def __init__(
+        self,
+        tag: str,
+        name: str = None,
+        func: func_d.FuncOp = None,
+        repeat: int = 0,
+    ):
+        super().__init__(name=name, func=func, tag=tag, repeat=repeat)
 
 
 # ------------------------------------------------------------
@@ -388,36 +394,67 @@ class ComputationGraph:
         """
         [A] [B] => [[A]-[B]]
         """
+
+        @dataclass
+        class BufferizedStream:
+            arg_idx_a: int
+            arg_idx_b: int
+            arg_a: Value
+            arg_b: Value
+            stream_input: list[Value]
+            stream_output: list[Value]
+
         node_a, node_b = self.nodes[node_name_a], self.nodes[node_name_b]
+        param_a, param_b = self.func_args[node_name_a], self.func_args[node_name_b]
         assert node_a is not None and node_b is not None, "node not found"
         if node_name_b in self.dependencies[node_name_a]:
             raise ValueError(
                 f"Cannot chain Node({node_name_a}) and Node({node_name_b})"
             )
+        # TODO: repeat function
+        assert node_a.repeat == node_b.repeat == 1, "To be implemented"
         bundled_tag = (
             f"({node_a.op_tag})x{node_a.repeat}-({node_b.op_tag})x{node_b.repeat}"
         )
-        chained_node = CollocatedNode(bundled_tag)
-        bufferized_stream: list[Stream] = []
+        chained_node = CollocatedNode(bundled_tag, repeat=1)
+        chained_node.global_inputs.extend(node_a.global_inputs)
+        chained_node.global_inputs.extend(node_b.global_inputs)
+        chained_node.global_outputs.extend(node_a.global_outputs)
+        chained_node.global_outputs.extend(node_b.global_outputs)
+        bufferized_stream: dict[Stream, BufferizedStream] = {}
         node_a.output_streams = [
             stream for stream in node_a.output_streams if stream.dst != node_name_b
         ]
         kept_streams = []
-        removed_streams = []
         for stream in node_b.input_streams:
-            if stream.dst == node_name_a:
-                removed_streams.append(stream)
+            if stream.src == node_name_a:
+                idx_a, idx_b = -1, -1
+                for idx, arg_info in param_a.items():
+                    if arg_info[0].stream is not None and arg_info[0].stream == stream:
+                        idx_a = idx
+                        break
+                for idx, arg_info in param_b.items():
+                    if arg_info[0].stream is not None and arg_info[0].stream == stream:
+                        idx_b = idx
+                        break
+                assert idx_a >= 0 and idx_b >= 0
+                bufferized_stream[stream] = BufferizedStream(
+                    idx_a, idx_b, None, None, [], []
+                )
             else:
                 kept_streams.append(stream)
         node_b.input_streams = kept_streams
-        bufferized_stream.extend(removed_streams)
+        chained_node.input_streams.extend(node_a.input_streams)
+        chained_node.input_streams.extend(node_b.input_streams)
+        chained_node.output_streams.extend(node_a.output_streams)
+        chained_node.output_streams.extend(node_b.output_streams)
         # refactor function
         function_a: func_d.FuncOp = node_a.func
         function_b: func_d.FuncOp = node_b.func
         # - function parameters
-        param_a, param_b = self.func_args[node_name_a], self.func_args[node_name_b]
-        in_types_a = function_a.attributes["function_type"].value.inputs
-        in_types_b = function_b.attributes["function_type"].value.inputs
+        in_types_a: list = function_a.attributes["function_type"].value.inputs
+        arg_idx_offset = len(in_types_a)
+        in_types_b: list = function_b.attributes["function_type"].value.inputs
         out_types_a = function_a.attributes["function_type"].value.results
         out_types_b = function_b.attributes["function_type"].value.results
         with function_a.context, allo_ir.ir.Location.unknown():
@@ -434,8 +471,14 @@ class ComputationGraph:
                 function_a.arguments + function_b.arguments, new_function.arguments
             ):
                 old.replace_all_uses_with(new)
+            for bufferized_stream_info in bufferized_stream.values():
+                bufferized_stream_info.arg_a = new_function.arguments[
+                    bufferized_stream_info.arg_idx_a
+                ]
+                bufferized_stream_info.arg_b = new_function.arguments[
+                    bufferized_stream_info.arg_idx_b + arg_idx_offset
+                ]
             with InsertionPoint(entry_block):
-                # TODO: stream to buffer, repeat function
                 for func_block in function_a.body:
                     for op in func_block.operations:
                         if isinstance(op, func_d.ReturnOp):
@@ -451,9 +494,40 @@ class ComputationGraph:
                             old.replace_all_uses_with(new)
                 function_a.erase()
                 function_b.erase()
+            # bufferize streams
+            for bufferized_stream_info in bufferized_stream.values():
+                stream_puts = [
+                    use.owner
+                    for use in bufferized_stream_info.arg_a.uses
+                    if isinstance(use.owner, allo_d.StreamPutOp)
+                ]
+                stream_gets = [
+                    use.owner
+                    for use in bufferized_stream_info.arg_b.uses
+                    if isinstance(use.owner, allo_d.StreamGetOp)
+                ]
+                assert len(stream_puts) == len(stream_gets)
+                for i in range(len(stream_puts)):
+                    stream_put: allo_d.StreamPutOp = stream_puts[i]
+                    stream_get: allo_d.StreamGetOp = stream_gets[i]
+                    put_value = stream_put.operands[-1]
+                    get_result = stream_get.result
+                    get_result.replace_all_uses_with(put_value)
+                    stream_put.erase()
+                    stream_get.erase()
+                # update argument info
+                param_a.pop(bufferized_stream_info.arg_idx_a)
+                param_b.pop(bufferized_stream_info.arg_idx_b)
         chained_node.func = new_function
-
-        # TODO: chain
+        self.func_args.pop(node_name_a)
+        self.func_args.pop(node_name_b)
+        self.func_args[chained_node.name] = param_a
+        for key, value in param_b.items():
+            self.func_args[chained_node.name][arg_idx_offset + key] = value
+        dep = self.dependencies.pop(node_name_a)
+        dep.update(self.dependencies.pop(node_name_b))
+        dep.remove(node_name_a)
+        self.dependencies[chained_node.name] = dep
 
     # ------------------------------------------------------------
     # Graph Information
@@ -464,7 +538,6 @@ class ComputationGraph:
         dict[str, list[list[GlobalDTensorTile]]],
         dict[str, list[list[GlobalDTensorTile]]],
     ]:
-        # TODO
         global_in: dict[str, list[list[GlobalDTensorTile]]] = {}
         global_out: dict[str, list[list[GlobalDTensorTile]]] = {}
 
@@ -499,14 +572,3 @@ class ComputationGraph:
         for (name_1, name_2), count in connections.items():
             connection_info.append((count, name_1, name_2))
         return connection_info
-
-    # ------------------------------------------------------------
-    # Print Graph
-    # ------------------------------------------------------------
-    def print_graph(self):
-        print("\n<<<<< Computation Graph >>>>>")
-        print("\n<<<<< Nodes >>>>>")
-        # TODO
-        print("\n<<<<< Edges >>>>>")
-        # TODO
-        print("<<<<< Computation Graph >>>>>\n")

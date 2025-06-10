@@ -215,8 +215,8 @@ def _test_summa():
     mod = df.build(top, target="aie-mlir")
 
 if __name__ == "__main__":
-    _test_vector_scalar_add()
-    # test_producer_consumer()
+    # _test_vector_scalar_add()
+    test_producer_consumer()
     # _test_summa()
     # _test_summa_2x2()
     # _test_tensor_parallelism()
