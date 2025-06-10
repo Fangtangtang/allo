@@ -5,10 +5,7 @@ import re
 from dataclasses import dataclass
 from collections import defaultdict, Counter
 import allo._mlir._mlir_libs._mlir as allo_ir
-from ..._mlir.ir import (
-    InsertionPoint,
-    FunctionType
-)
+from ..._mlir.ir import InsertionPoint, FunctionType
 from ..._mlir.dialects import func as func_d, allo as allo_d
 from .utils import Argument, parse_kernel_name, Stream, StreamType, get_df_kernels
 from ...memory import DTensor, Size4D, Offset4D
@@ -203,14 +200,53 @@ class OperationTagger:
         return self.tag_map[key]
 
 
-class Operation:
-    def __init__(self, op_tag: str, repeat: int = 1) -> None:
+# ------------------------------------------------------------
+class NodeBase:
+    node_list: list["NodeBase"] = []
+
+    def __init__(
+        self,
+        name: str = None,
+        func: func_d.FuncOp = None,
+        tag: str = None,
+        repeat: int = 0,
+    ):
+        self.id = len(NodeBase.node_list)
+        NodeBase.node_list.append(self)
+        self.name = name if name is not None else f"function_{self.id}"
+        self.func: func_d.FuncOp = func
         self.repeat: int = repeat
-        self.op_tag: str = op_tag
+        self.op_tag: str = tag
         self.global_inputs: list[list[GlobalDTensorTile]] = []
         self.global_outputs: list[list[GlobalDTensorTile]] = []
         self.input_streams: list[Stream] = []
         self.output_streams: list[Stream] = []
+
+    def is_isomorphic_to(self, other: "NodeBase") -> bool:
+        # TODO: check in a more robust way
+        if self is other:
+            return True
+        if self.op_tag != other.op_tag:
+            return False
+        in1 = Counter((s.src, s.type_str) for s in self.input_streams)
+        in2 = Counter((s.src, s.type_str) for s in other.input_streams)
+        if in1 != in2:
+            return False
+        out1 = Counter((s.src, s.type_str) for s in self.output_streams)
+        out2 = Counter((s.src, s.type_str) for s in other.output_streams)
+        if out1 != out2:
+            return False
+        return True
+
+    def get_global_io(
+        self,
+    ) -> tuple[list[list[GlobalDTensorTile]], list[list[GlobalDTensorTile]]]:
+        op_global_inputs, op_global_outputs = [], []
+        for inputs in self.global_inputs:
+            op_global_inputs.extend(inputs)
+        for outputs in self.global_outputs:
+            op_global_outputs.extend(outputs)
+        return op_global_inputs, op_global_outputs
 
     def __str__(self) -> str:
         def fmt_nested_list(nested: list[list]) -> str:
@@ -223,6 +259,7 @@ class Operation:
             )
 
         return (
+            f"Node({self.id}) {self.name}"
             f"Operation(tag='{self.op_tag}', repeat={self.repeat})\n"
             f"\tGlobal Inputs: {fmt_nested_list(self.global_inputs)}\n"
             f"\tGlobal Outputs: {fmt_nested_list(self.global_outputs)}\n"
@@ -234,79 +271,14 @@ class Operation:
         return self.__str__()
 
 
-# ------------------------------------------------------------
-class NodeBase:
-    node_list: list["NodeBase"] = []
-
-    def __init__(self, name: str = None, func: func_d.FuncOp = None):
-        self.id = len(NodeBase.node_list)
-        NodeBase.node_list.append(self)
-        self.name = name if name is not None else f"function_{self.id}"
-        self.func: func_d.FuncOp = func
-        self.operations: list[Operation] = []
-
-    def is_isomorphic_to(self, other: "NodeBase") -> bool:
-        # TODO: check in a more robust way
-        if self is other:
-            return True
-        if len(self.operations) != len(other.operations):
-            return False
-        for op1, op2 in zip(self.operations, other.operations):
-            if op1.op_tag != op2.op_tag:
-                return False
-            in1 = Counter((s.src, s.type_str) for s in op1.input_streams)
-            in2 = Counter((s.src, s.type_str) for s in op2.input_streams)
-            if in1 != in2:
-                return False
-
-            out1 = Counter((s.src, s.type_str) for s in op1.output_streams)
-            out2 = Counter((s.src, s.type_str) for s in op2.output_streams)
-            if out1 != out2:
-                return False
-        return True
-
-    def get_global_io(
-        self,
-    ) -> tuple[list[list[GlobalDTensorTile]], list[list[GlobalDTensorTile]]]:
-        global_inputs: list[list[GlobalDTensorTile]] = []
-        global_outputs: list[list[GlobalDTensorTile]] = []
-        for operation in self.operations:
-            op_global_inputs, op_global_outputs = [], []
-            for inputs in operation.global_inputs:
-                op_global_inputs.extend(inputs)
-            for outputs in operation.global_outputs:
-                op_global_outputs.extend(outputs)
-            global_inputs.append(op_global_inputs)
-            global_outputs.append(op_global_outputs)
-        return global_inputs, global_outputs
-
-    def get_stream_io(self) -> tuple[list[Stream], list[Stream]]:
-        input_streams, output_streams = [], []
-        for operation in self.operations:
-            input_streams.extend(operation.input_streams)
-            output_streams.extend(operation.output_streams)
-        return input_streams, output_streams
-
-    def __str__(self) -> str:
-        op_strs = "\n    ".join(str(op) for op in self.operations)
-        return (
-            f"\n<<<<< NodeBase(id={self.id}, name='{self.name}') >>>>>\n"
-            f"  Operations:\n    {op_strs if op_strs else '(none)'}"
-        )
-
-    def __repr__(self) -> str:
-        return self.__str__()
-
-
 class InitialNode(NodeBase):
-    def __init__(self, func: func_d.FuncOp, operation: Operation):
-        super().__init__(func.attributes["sym_name"].value, func)
-        self.operations.append(operation)
+    def __init__(self, func: func_d.FuncOp, tag: str):
+        super().__init__(func.attributes["sym_name"].value, func, tag, 1)
 
 
 class CollocatedNode(NodeBase):
-    def __init__(self, name: str = None, func: func_d.FuncOp = None):
-        super().__init__(name=name, func=func)
+    def __init__(self, tag: str, name: str = None, func: func_d.FuncOp = None):
+        super().__init__(name=name, func=func, tag=tag)
 
 
 # ------------------------------------------------------------
@@ -332,7 +304,7 @@ class ComputationGraph:
             tag_key = re.sub(
                 r"func\.func\s+@[\w\d_]+(\s*\()", r"func.func\1", str(func.operation)
             )
-            operation = Operation(self.tagger.get_init_tag(tag_key))
+            node = InitialNode(func, self.tagger.get_init_tag(tag_key))
             _, indexes = parse_kernel_name(func_name)
             params = core_func_args[func_name]
             global_inputs: list[GlobalDTensorTile] = []
@@ -340,9 +312,9 @@ class ComputationGraph:
             for argument, is_input in params.values():
                 if argument.stream is not None:
                     if is_input:
-                        operation.input_streams.append(argument.stream)
+                        node.input_streams.append(argument.stream)
                     else:
-                        operation.output_streams.append(argument.stream)
+                        node.output_streams.append(argument.stream)
                 if argument.dtensor is not None:
                     if is_input:
                         global_inputs.append(
@@ -358,9 +330,8 @@ class ComputationGraph:
                                 argument.dtensor.PE_tile_id_to_tensor_tile_id(indexes),
                             )
                         )
-            operation.global_inputs.append(global_inputs)
-            operation.global_outputs.append(global_outputs)
-            node = InitialNode(func, operation)
+            node.global_inputs.append(global_inputs)
+            node.global_outputs.append(global_outputs)
             self.nodes[func_name] = node
             self.dependencies[func_name] = set()
         # initiate dependencies
@@ -386,21 +357,15 @@ class ComputationGraph:
                 raise ValueError(
                     f"Expect to bundle isomorphic nodes, Node({node.name}) is not isomorphic to Node({sample_node.name})"
                 )
-        bundled_node = CollocatedNode(name=sample_node.name, func=sample_node.func)
-        for operation in sample_node.operations:
-            new_operation = Operation(operation.op_tag, 0)
-            new_operation.input_streams = list(operation.input_streams)
-            new_operation.output_streams = list(operation.output_streams)
-            bundled_node.operations.append(new_operation)
+        bundled_node = CollocatedNode(
+            tag=sample_node.op_tag, name=sample_node.name, func=sample_node.func
+        )
+        bundled_node.input_streams = list(sample_node.input_streams)
+        bundled_node.output_streams = list(sample_node.output_streams)
         for node in node_list:
-            for idx, operation in enumerate(node.operations):
-                bundled_node.operations[idx].repeat += operation.repeat
-                bundled_node.operations[idx].global_inputs.extend(
-                    operation.global_inputs
-                )
-                bundled_node.operations[idx].global_outputs.extend(
-                    operation.global_outputs
-                )
+            bundled_node.repeat += node.repeat
+            bundled_node.global_inputs.extend(node.global_inputs)
+            bundled_node.global_outputs.extend(node.global_outputs)
         # update stream
         for name, stream in self.edges.items():
             if stream.src in node_name_list:
@@ -429,22 +394,23 @@ class ComputationGraph:
             raise ValueError(
                 f"Cannot chain Node({node_name_a}) and Node({node_name_b})"
             )
-        chained_node = CollocatedNode()
-        bufferized_stream:list[Stream] = []
-        for operation in node_a.operations:
-            operation.output_streams = [stream for stream in operation.output_streams if stream.dst != node_name_b]
-        for operation in node_b.operations:
-            kept_streams = []
-            removed_streams = []
-            for stream in operation.input_streams:
-                if stream.dst == node_name_a:
-                    removed_streams.append(stream)
-                else:
-                    kept_streams.append(stream)
-            operation.input_streams = kept_streams
-            bufferized_stream.extend(removed_streams)
-        chained_node.operations.extend(node_a.operations)
-        chained_node.operations.extend(node_b.operations)
+        bundled_tag = (
+            f"({node_a.op_tag})x{node_a.repeat}-({node_b.op_tag})x{node_b.repeat}"
+        )
+        chained_node = CollocatedNode(bundled_tag)
+        bufferized_stream: list[Stream] = []
+        node_a.output_streams = [
+            stream for stream in node_a.output_streams if stream.dst != node_name_b
+        ]
+        kept_streams = []
+        removed_streams = []
+        for stream in node_b.input_streams:
+            if stream.dst == node_name_a:
+                removed_streams.append(stream)
+            else:
+                kept_streams.append(stream)
+        node_b.input_streams = kept_streams
+        bufferized_stream.extend(removed_streams)
         # refactor function
         function_a: func_d.FuncOp = node_a.func
         function_b: func_d.FuncOp = node_b.func
@@ -455,14 +421,18 @@ class ComputationGraph:
         out_types_a = function_a.attributes["function_type"].value.results
         out_types_b = function_b.attributes["function_type"].value.results
         with function_a.context, allo_ir.ir.Location.unknown():
-            func_type = FunctionType.get(in_types_a+in_types_b, out_types_a+out_types_b)
+            func_type = FunctionType.get(
+                in_types_a + in_types_b, out_types_a + out_types_b
+            )
             new_function = func_d.FuncOp(
-                    chained_node.name,
-                    func_type,
-                    ip=InsertionPoint(function_a),
+                chained_node.name,
+                func_type,
+                ip=InsertionPoint(function_a),
             )
             entry_block = new_function.add_entry_block()
-            for old, new in zip(function_a.arguments + function_b.arguments, new_function.arguments):
+            for old, new in zip(
+                function_a.arguments + function_b.arguments, new_function.arguments
+            ):
                 old.replace_all_uses_with(new)
             with InsertionPoint(entry_block):
                 # TODO: stream to buffer, repeat function
@@ -478,9 +448,9 @@ class ComputationGraph:
                     for op in func_block.operations:
                         new_op = op.clone()
                         for old, new in zip(op.results, new_op.results):
-                            old.replace_all_uses_with(new)    
-                function_a.erase()     
-                function_b.erase()   
+                            old.replace_all_uses_with(new)
+                function_a.erase()
+                function_b.erase()
         chained_node.func = new_function
 
         # TODO: chain
@@ -502,9 +472,8 @@ class ComputationGraph:
             global_in[name] = list()
             global_out[name] = list()
             inputs, outputs = node.get_global_io()
-            assert len(inputs) == 1 and len(outputs) == 1, "To be implemented"
-            global_in[name].append(inputs[0])
-            global_out[name].append(outputs[0])
+            global_in[name].append(inputs)
+            global_out[name].append(outputs)
 
         return global_in, global_out
 
