@@ -5,7 +5,10 @@ import re
 from dataclasses import dataclass
 from collections import defaultdict, Counter
 import allo._mlir._mlir_libs._mlir as allo_ir
-from ..._mlir.ir import InsertionPoint
+from ..._mlir.ir import (
+    InsertionPoint,
+    FunctionType
+)
 from ..._mlir.dialects import func as func_d, allo as allo_d
 from .utils import Argument, parse_kernel_name, Stream, StreamType, get_df_kernels
 from ...memory import DTensor, Size4D, Offset4D
@@ -191,7 +194,7 @@ class OperationTagger:
         self.tag_map: dict[str, str] = {}
         self.counter = 0
 
-    def get_tag(self, key: str) -> str:
+    def get_init_tag(self, key: str) -> str:
         """Return existing tag or assign a new one if not present."""
         if key not in self.tag_map:
             tag = f"tag_{self.counter}"
@@ -329,7 +332,7 @@ class ComputationGraph:
             tag_key = re.sub(
                 r"func\.func\s+@[\w\d_]+(\s*\()", r"func.func\1", str(func.operation)
             )
-            operation = Operation(self.tagger.get_tag(tag_key))
+            operation = Operation(self.tagger.get_init_tag(tag_key))
             _, indexes = parse_kernel_name(func_name)
             params = core_func_args[func_name]
             global_inputs: list[GlobalDTensorTile] = []
@@ -420,27 +423,66 @@ class ComputationGraph:
         """
         [A] [B] => [[A]-[B]]
         """
-        node_a, node_b = self.nodes(node_name_a), self.nodes(node_name_b)
+        node_a, node_b = self.nodes[node_name_a], self.nodes[node_name_b]
         assert node_a is not None and node_b is not None, "node not found"
         if node_name_b in self.dependencies[node_name_a]:
             raise ValueError(
                 f"Cannot chain Node({node_name_a}) and Node({node_name_b})"
             )
         chained_node = CollocatedNode()
+        bufferized_stream:list[Stream] = []
+        for operation in node_a.operations:
+            operation.output_streams = [stream for stream in operation.output_streams if stream.dst != node_name_b]
+        for operation in node_b.operations:
+            kept_streams = []
+            removed_streams = []
+            for stream in operation.input_streams:
+                if stream.dst == node_name_a:
+                    removed_streams.append(stream)
+                else:
+                    kept_streams.append(stream)
+            operation.input_streams = kept_streams
+            bufferized_stream.extend(removed_streams)
+        chained_node.operations.extend(node_a.operations)
+        chained_node.operations.extend(node_b.operations)
         # refactor function
         function_a: func_d.FuncOp = node_a.func
         function_b: func_d.FuncOp = node_b.func
         # - function parameters
         param_a, param_b = self.func_args[node_name_a], self.func_args[node_name_b]
-
+        in_types_a = function_a.attributes["function_type"].value.inputs
+        in_types_b = function_b.attributes["function_type"].value.inputs
+        out_types_a = function_a.attributes["function_type"].value.results
+        out_types_b = function_b.attributes["function_type"].value.results
         with function_a.context, allo_ir.ir.Location.unknown():
-            pass
-            # new_function = func_d.FuncOp(
-            #         chained_node.name,
-            #         func_type,# TODO
-            #         ip=InsertionPoint(function_a),
-            # )
-            # entry_block = new_function.add_entry_block()
+            func_type = FunctionType.get(in_types_a+in_types_b, out_types_a+out_types_b)
+            new_function = func_d.FuncOp(
+                    chained_node.name,
+                    func_type,
+                    ip=InsertionPoint(function_a),
+            )
+            entry_block = new_function.add_entry_block()
+            for old, new in zip(function_a.arguments + function_b.arguments, new_function.arguments):
+                old.replace_all_uses_with(new)
+            with InsertionPoint(entry_block):
+                # TODO: stream to buffer, repeat function
+                for func_block in function_a.body:
+                    for op in func_block.operations:
+                        if isinstance(op, func_d.ReturnOp):
+                            assert len(op.operands_) == 0
+                            continue
+                        new_op = op.clone()
+                        for old, new in zip(op.results, new_op.results):
+                            old.replace_all_uses_with(new)
+                for func_block in function_b.body:
+                    for op in func_block.operations:
+                        new_op = op.clone()
+                        for old, new in zip(op.results, new_op.results):
+                            old.replace_all_uses_with(new)    
+                function_a.erase()     
+                function_b.erase()   
+        chained_node.func = new_function
+
         # TODO: chain
 
     # ------------------------------------------------------------
