@@ -41,23 +41,18 @@ def test_producer_consumer():
 
     @df.region()
     def top():
-        pipe = df.pipe(dtype=Ty, shape=(), depth=4)
+        pipe = df.pipe(dtype=Ty, shape=(M, N), depth=1)
 
         @df.kernel(mapping=[1])
         def producer(A: Ty[M, N]):
-            for i, j in allo.grid(M, N):
-                # load data
-                out: Ty = A[i, j]
-                # send data
-                pipe.put(out)
+            pipe.put(A)   
 
         @df.kernel(mapping=[1])
         def consumer(B: Ty[M, N]):
+            data = pipe.get()
             for i, j in allo.grid(M, N):
-                # receive data
-                data = pipe.get()
                 # computation
-                B[i, j] = data + 1
+                B[i, j] = data[i, j] + 1
     A = np.random.randint(0, 64, (M, K)).astype(np.int32)
     B = np.zeros((M, N), dtype=np.int32)
 

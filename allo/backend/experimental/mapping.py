@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from collections import defaultdict, Counter
 import allo._mlir._mlir_libs._mlir as allo_ir
-from ..._mlir.ir import InsertionPoint, FunctionType, Value
+from ..._mlir.ir import InsertionPoint, FunctionType, Value, UnitAttr
 from ..._mlir.dialects import func as func_d, allo as allo_d
 from .utils import Argument, parse_kernel_name, Stream, StreamType, get_df_kernels
 from ...memory import DTensor, Size4D, Offset4D
@@ -404,7 +404,7 @@ class ComputationGraph:
             stream_input: list[Value]
             stream_output: list[Value]
 
-        node_a, node_b = self.nodes[node_name_a], self.nodes[node_name_b]
+        node_a, node_b = self.nodes.pop(node_name_a), self.nodes.pop(node_name_b)
         param_a, param_b = self.func_args[node_name_a], self.func_args[node_name_b]
         assert node_a is not None and node_b is not None, "node not found"
         if node_name_b in self.dependencies[node_name_a]:
@@ -412,7 +412,9 @@ class ComputationGraph:
                 f"Cannot chain Node({node_name_a}) and Node({node_name_b})"
             )
         # TODO: repeat function
-        assert node_a.repeat == node_b.repeat == 1, "To be implemented"
+        assert (
+            node_a.repeat == node_b.repeat == 1
+        ), "Cannot chaining nodes with repeats currently"
         bundled_tag = (
             f"({node_a.op_tag})x{node_a.repeat}-({node_b.op_tag})x{node_b.repeat}"
         )
@@ -466,6 +468,7 @@ class ComputationGraph:
                 func_type,
                 ip=InsertionPoint(function_a),
             )
+            new_function.attributes["df.kernel"] = UnitAttr.get()
             entry_block = new_function.add_entry_block()
             for old, new in zip(
                 function_a.arguments + function_b.arguments, new_function.arguments
@@ -495,7 +498,7 @@ class ComputationGraph:
                 function_a.erase()
                 function_b.erase()
             # bufferize streams
-            for bufferized_stream_info in bufferized_stream.values():
+            for stream, bufferized_stream_info in bufferized_stream.items():
                 stream_puts = [
                     use.owner
                     for use in bufferized_stream_info.arg_a.uses
@@ -510,6 +513,12 @@ class ComputationGraph:
                 for i in range(len(stream_puts)):
                     stream_put: allo_d.StreamPutOp = stream_puts[i]
                     stream_get: allo_d.StreamGetOp = stream_gets[i]
+                    # TODO: support bufferize stream in branches or even loops
+                    assert isinstance(
+                        stream_put.parent.opview, func_d.FuncOp
+                    ) and isinstance(
+                        stream_get.parent.opview, func_d.FuncOp
+                    ), "Only support bufferize stream in the main body"
                     put_value = stream_put.operands[-1]
                     get_result = stream_get.result
                     get_result.replace_all_uses_with(put_value)
@@ -518,6 +527,7 @@ class ComputationGraph:
                 # update argument info
                 param_a.pop(bufferized_stream_info.arg_idx_a)
                 param_b.pop(bufferized_stream_info.arg_idx_b)
+                self.edges.pop(stream.name)
         chained_node.func = new_function
         self.func_args.pop(node_name_a)
         self.func_args.pop(node_name_b)
@@ -528,6 +538,7 @@ class ComputationGraph:
         dep.update(self.dependencies.pop(node_name_b))
         dep.remove(node_name_a)
         self.dependencies[chained_node.name] = dep
+        self.nodes[chained_node.name] = chained_node
 
     # ------------------------------------------------------------
     # Graph Information

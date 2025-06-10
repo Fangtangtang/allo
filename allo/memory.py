@@ -536,8 +536,6 @@ def format_memory_access(
         coalesced_offsets: list[Offset4D] = coalesce_info[starting_offset]
         folded_connected_nodes = fold(connected_nodes)
         idx = 0
-        print(connected_nodes)
-        print(folded_connected_nodes)
         for connected_node_list, repeat in folded_connected_nodes:
             single_on_chip_transfer_size = len(connected_node_list)
             total_slice_size = total_size.get_k_slice(
@@ -555,6 +553,5 @@ def format_memory_access(
             total_size = Size4D.subtract(total_size, total_slice_size)
             idx += single_on_chip_transfer_size * repeat
             formated_access[mem_access.starting_offset] = mem_access
-            print(mem_access.total_size, mem_access.transfer_size)
 
     return formated_access

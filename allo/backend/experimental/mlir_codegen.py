@@ -24,7 +24,7 @@ import aie.ir as aie_ir
 import allo._mlir._mlir_libs._mlir as allo_ir
 import allo._mlir.dialects._memref_ops_gen as allo_memref_d
 
-from ..._mlir.ir import InsertionPoint
+from ..._mlir.ir import InsertionPoint, MemRefType, IntegerType
 
 from ..utils import format_str
 from ..._mlir.dialects import func as allo_func_d
@@ -272,11 +272,23 @@ class CodeGenerator:
         # replace pipe with memref operations
         with original_func.context, allo_ir.ir.Location.unknown():
             func_inputs = original_func.type.inputs
-            for idx, arg_info in func_args.items():
-                if arg_info[0].stream is not None:
-                    func_inputs[idx] = arg_info[0].stream.allo_element_type
+            new_func_inputs = []
+            for idx in range(len(func_inputs)):
+                if idx in func_args and func_args[idx][0].stream is not None:
+                    new_func_inputs.append(func_args[idx][0].stream.allo_element_type)
+                    func_inputs[idx] = func_args[idx][0].stream.allo_element_type
+                elif idx in func_args and func_args[idx][0].dtensor is not None:
+                    new_func_inputs.append(func_inputs[idx])
+                else:
+                    # fixme: this is a fake placeholder, we'd better remove the useless argument, but doing so leads to crash
+                    #           "Cannot destroy a value that still has uses!"
+                    new_func_inputs.append(
+                        MemRefType.get([], IntegerType.get_signless(8))
+                    )
+
+            print(new_func_inputs)
             func_type = allo_func_d.FunctionType.get(
-                func_inputs,
+                new_func_inputs,
                 original_func.type.results,
             )
             new_function = allo_func_d.FuncOp(
@@ -287,6 +299,7 @@ class CodeGenerator:
             entry_block = new_function.add_entry_block()
             for old, new in zip(original_func.arguments, new_function.arguments):
                 old.replace_all_uses_with(new)
+
             with InsertionPoint(entry_block):
                 for func_block in original_func.body:
                     for op in func_block.operations:

@@ -270,8 +270,8 @@ class AIE_MLIRModule:
         if enable_virtual_mapping:
             self.virtual_computation_graph.chain("producer_0", "consumer_0")
             # self.virtual_computation_graph.bundle(["core_0", "core_1"])
-            # TODO: transformation on virtual map. may modify allo_module here
-            # TODO: update streams and core_func_args
+            # # TODO: transformation on virtual map. may modify allo_module here
+            # # TODO: update streams and core_func_args
             # import sys
             # sys.exit(0)
             pass
