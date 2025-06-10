@@ -352,7 +352,10 @@ def build(
                 enable_virtual_mapping=True, mapping_primitives=mapping_primitives
             )
         else:
-            aie_mod.build()
+            aie_mod.build_experimental(
+                enable_virtual_mapping=True, mapping_primitives=[]
+            )
+            # aie_mod.build()
         return aie_mod
 
     if target == "simulator":

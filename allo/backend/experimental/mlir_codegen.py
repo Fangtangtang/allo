@@ -799,7 +799,6 @@ class CodeGenerator:
                             dtensor.offset_map[dma_tile.tensor_tile_label]
                         ].extend(dma_tile_group.dtensor_tile_to_pes[dma_tile])
                     update += 1
-                # coalesced_access, coalesce_info, connected_node_info = coalesce_memory_access(offset_map)
                 coalesced_access = coalesce_memory_access(offset_map)
                 if os.getenv("VERBOSE") == "1":
                     print()
