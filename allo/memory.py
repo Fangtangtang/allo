@@ -489,8 +489,6 @@ def coalesce_memory_access(offset_map: dict[Offset4D, list[str]]):
             connected_nodes.pop(offset)
         coalesce_dim -= 1
     return format_memory_access(access, coalesce_info, connected_nodes)
-    # TODO: ensure that connected_nodes are all different
-    return access, coalesce_info, connected_nodes
 
 
 @dataclass(frozen=True)

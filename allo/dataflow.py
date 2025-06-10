@@ -312,6 +312,7 @@ def build(
     wrap_io=True,
     opt_default=True,
     enable_tensor=False,
+    mapping_primitives: list[tuple[str, list]] = None,
 ):
     if target == "aie":
         global_vars = get_global_vars(func)
@@ -346,10 +347,12 @@ def build(
             stream_info,
             stream_types_dict,
         )
-        # aie_mod.build()
-        aie_mod.build_experimental(
-            enable_virtual_mapping=True
-        )
+        if mapping_primitives is not None:
+            aie_mod.build_experimental(
+                enable_virtual_mapping=True, mapping_primitives=mapping_primitives
+            )
+        else:
+            aie_mod.build()
         return aie_mod
 
     if target == "simulator":

@@ -27,17 +27,16 @@ def _test_vector_scalar_add():
     mod(A, B)
     np.testing.assert_allclose(B, A + 1)
     print("PASSED!")
-   
+
+
 LyW1 = Layout("RS0")
 LyW2 = Layout("S0R")
 
 
-
 def test_producer_consumer():
-    
+
     Ty = int32
     M, N, K = 16, 16, 16
-
 
     @df.region()
     def top():
@@ -45,7 +44,7 @@ def test_producer_consumer():
 
         @df.kernel(mapping=[1])
         def producer(A: Ty[M, N]):
-            pipe.put(A)   
+            pipe.put(A)
 
         @df.kernel(mapping=[1])
         def consumer(B: Ty[M, N]):
@@ -53,6 +52,7 @@ def test_producer_consumer():
             for i, j in allo.grid(M, N):
                 # computation
                 B[i, j] = data[i, j] + 1
+
     A = np.random.randint(0, 64, (M, K)).astype(np.int32)
     B = np.zeros((M, N), dtype=np.int32)
 
@@ -89,7 +89,9 @@ def _test_tensor_parallelism():
             with allo.meta_for(P0) as i:
                 Z_out[:, :] += part_Z[i].get()
             Z[:, :] = Z_out
+
     mod = df.build(top, target="aie-mlir")
+
 
 LyA = Layout("S0R")
 LyB = Layout("RS1")
@@ -177,6 +179,7 @@ def _test_summa_2x2():
 
     mod = df.build(top, target="aie-mlir")
 
+
 def _test_summa():
     Ty = int32
     M, K, N = 32, 32, 32
@@ -209,9 +212,10 @@ def _test_summa():
 
     mod = df.build(top, target="aie-mlir")
 
+
 if __name__ == "__main__":
-    # _test_vector_scalar_add()
-    test_producer_consumer()
+    _test_vector_scalar_add()
+    # test_producer_consumer()
     # _test_summa()
     # _test_summa_2x2()
     # _test_tensor_parallelism()

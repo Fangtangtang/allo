@@ -259,6 +259,7 @@ class AIE_MLIRModule:
         self,
         device_type="npu1_4col",
         enable_virtual_mapping: bool = False,
+        mapping_primitives: list[tuple[str, list]] = [],
     ):
         build_dir = os.path.join(self.project_dir, "build")
         if os.path.exists(build_dir):
@@ -268,13 +269,15 @@ class AIE_MLIRModule:
         self.analyze_kernel_parameters()
         self._init_virtual_graph()
         if enable_virtual_mapping:
-            self.virtual_computation_graph.chain("producer_0", "consumer_0")
-            # self.virtual_computation_graph.bundle(["core_0", "core_1"])
-            # # TODO: transformation on virtual map. may modify allo_module here
-            # # TODO: update streams and core_func_args
-            # import sys
-            # sys.exit(0)
-            pass
+            for mapping in mapping_primitives:
+                primitive = mapping[0]
+                arg_list = mapping[1]
+                if primitive == "chain":
+                    assert len(arg_list) == 2
+                    self.virtual_computation_graph.chain(arg_list[0], arg_list[1])
+                if primitive == "bundle":
+                    self.virtual_computation_graph.bundle(arg_list)
+            
         global_in_tile_to_func, global_out_tile_to_func = self.analyze_global_io()
         # inject external kernels
         use_external_kernels, injected_kernels, include_src = inject_external_kernels(
