@@ -148,7 +148,7 @@ class SwitchNode:
             self.bind_fifo = fifo
 
         def __str__(self):
-            return f"Port(data_shape={self.data_shape}, dtype={self.dtype}, connected_nodes={self.connected_nodes})"
+            return f"Port(data_shape={self.data_shape}, dtype={self.dtype}, connected_nodes={self.connected_nodes}, queue={self.queue})"
 
         def __repr__(self):
             return self.__str__()
@@ -237,16 +237,6 @@ class NodeBase:
         if out1 != out2:
             return False
         return True
-
-    def get_global_io(
-        self,
-    ) -> tuple[list[list[GlobalDTensorTile]], list[list[GlobalDTensorTile]]]:
-        op_global_inputs, op_global_outputs = [], []
-        for inputs in self.global_inputs:
-            op_global_inputs.extend(inputs)
-        for outputs in self.global_outputs:
-            op_global_outputs.extend(outputs)
-        return op_global_inputs, op_global_outputs
 
     def __str__(self) -> str:
         def fmt_nested_list(nested: list[list]) -> str:
@@ -553,11 +543,8 @@ class ComputationGraph:
         global_out: dict[str, list[list[GlobalDTensorTile]]] = {}
 
         for name, node in self.nodes.items():
-            global_in[name] = list()
-            global_out[name] = list()
-            inputs, outputs = node.get_global_io()
-            global_in[name].append(inputs)
-            global_out[name].append(outputs)
+            global_in[name] = node.global_inputs
+            global_out[name] = node.global_outputs
 
         return global_in, global_out
 

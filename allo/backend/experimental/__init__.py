@@ -125,8 +125,6 @@ class AIE_MLIRModule:
             self.streams,
             self.core_func_args,
         )
-        if os.getenv("VERBOSE") == "1":
-            self.virtual_computation_graph.print_graph()
 
     def analyze_global_io(self) -> tuple[
         dict[int, OrderedDTensorTileGroup],
@@ -277,7 +275,7 @@ class AIE_MLIRModule:
                     self.virtual_computation_graph.chain(arg_list[0], arg_list[1])
                 if primitive == "bundle":
                     self.virtual_computation_graph.bundle(arg_list)
-            
+        print(self.virtual_computation_graph.func_args)
         global_in_tile_to_func, global_out_tile_to_func = self.analyze_global_io()
         # inject external kernels
         use_external_kernels, injected_kernels, include_src = inject_external_kernels(

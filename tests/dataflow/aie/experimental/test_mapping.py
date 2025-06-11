@@ -67,7 +67,7 @@ def _test_pingpong_gemm():
 
     Ty = int16
     M, N, K = 32, 32, 32
-    Pm, Pn, Pk = 2, 2, 2
+    Pm, Pn, Pk = 1, 1, 2
     Mt, Nt, Kt = M // Pm, N // Pn, K // Pk
 
     LyA = Layout("S1S2")
@@ -112,6 +112,6 @@ def _test_pingpong_gemm():
 
 
 if __name__ == "__main__":
-    # _test_vector_scalar_add()
+    _test_vector_scalar_add()
     # _test_producer_consumer()
-    _test_pingpong_gemm()
+    # _test_pingpong_gemm()

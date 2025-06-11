@@ -777,8 +777,8 @@ class CodeGenerator:
             )
             idx = 0
             while idx < len(sorted_tags):
-                update = 0
                 tag = sorted_tags[idx]
+                update = 0
                 offset_map: dict[Offset4D, list[str]] = {}
                 # fixme: this is an ugly and problematic hack. We need more elegant and robust way to handle this.
                 while len(
@@ -799,9 +799,10 @@ class CodeGenerator:
                             dtensor.offset_map[dma_tile.tensor_tile_label]
                         ].extend(dma_tile_group.dtensor_tile_to_pes[dma_tile])
                     update += 1
-                coalesced_access = coalesce_memory_access(offset_map)
+                coalesced_access, fallback_flag = coalesce_memory_access(offset_map)
                 if os.getenv("VERBOSE") == "1":
                     print()
+                    print("tag:", tag, "update:", update, fallback_flag)
                     print(offset_map)
                     print("access:", coalesced_access)
                 offset_id = 0
@@ -1132,7 +1133,8 @@ class CodeGenerator:
                 print(f"{func_name}:")
                 for dtensor, port in port_map.items():
                     print(f"  {dtensor}: {port}")
-
+        # import sys
+        # sys.exit(0)
         self.bind_port_to_fifo()
         core_function_mapping = self.map_core_func_to_physical_tiles()
         # fixme: maybe better to resolve this using IR constructor

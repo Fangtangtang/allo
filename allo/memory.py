@@ -529,12 +529,15 @@ def format_memory_access(
         return folded
 
     formated_access: dict[Offset4D, MemoryAccess] = {}
+    fallback_flag = False
     for starting_offset, total_size in coalesced_access.items():
         connected_nodes: list[list[str]] = connected_nodes_info[starting_offset]
         coalesced_offsets: list[Offset4D] = coalesce_info[starting_offset]
         folded_connected_nodes = fold(connected_nodes)
         idx = 0
         for connected_node_list, repeat in folded_connected_nodes:
+            if repeat > 1:
+                fallback_flag = True
             single_on_chip_transfer_size = len(connected_node_list)
             total_slice_size = total_size.get_k_slice(
                 single_on_chip_transfer_size * repeat
@@ -552,4 +555,4 @@ def format_memory_access(
             idx += single_on_chip_transfer_size * repeat
             formated_access[mem_access.starting_offset] = mem_access
 
-    return formated_access
+    return formated_access, fallback_flag
