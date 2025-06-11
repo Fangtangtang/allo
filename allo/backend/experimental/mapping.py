@@ -217,6 +217,8 @@ class NodeBase:
         self.func: func_d.FuncOp = func
         self.repeat: int = repeat
         self.op_tag: str = tag
+        # fixme: better solution for global IO, maybe function argument related
+        #  argument will be mapped to ports (fifos) and for bundled nodes, the io data should use exactly same ports
         self.global_inputs: list[list[GlobalDTensorTile]] = []
         self.global_outputs: list[list[GlobalDTensorTile]] = []
         self.input_streams: list[Stream] = []
@@ -341,6 +343,8 @@ class ComputationGraph:
     def bundle(self, node_name_list: list[str]):
         """
         [A] [B] [C] [D]  => [A] x 4
+        
+        TODO: bundled nodes can be safely reordered
         """
         assert len(node_name_list) >= 2, "bundle at least two nodes"
         node_list: list[NodeBase] = []
