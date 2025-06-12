@@ -562,6 +562,7 @@ class CodeGenerator:
 
     def map_global_io_to_physical_tiles(
         self,
+        global_io_ordering: dict[int,int],
         global_in_tile_to_func: dict[int, OrderedDTensorTileGroup],
         global_out_tile_to_func: dict[int, OrderedDTensorTileGroup],
     ) -> tuple[
@@ -787,7 +788,7 @@ class CodeGenerator:
                     dma_tile_group = ordered_tile_group.dtensor_tile_groups[
                         sorted_tags[idx + update]
                     ]
-                    for dma_tile in dma_tile_group.dtensor_tile_to_pes.keys():
+                    for dma_tile in dma_tile_group.dtensor_tile_to_pe_interfaces.keys():
                         if (
                             dtensor.offset_map[dma_tile.tensor_tile_label]
                             not in offset_map
@@ -795,12 +796,14 @@ class CodeGenerator:
                             offset_map[
                                 dtensor.offset_map[dma_tile.tensor_tile_label]
                             ] = []
-                        offset_map[
-                            dtensor.offset_map[dma_tile.tensor_tile_label]
-                        ].extend(dma_tile_group.dtensor_tile_to_pes[dma_tile])
+                        for pe_interface in dma_tile_group.dtensor_tile_to_pe_interfaces[dma_tile]:
+                            offset_map[
+                                dtensor.offset_map[dma_tile.tensor_tile_label]
+                            ].append(pe_interface.pe)
+
                     update += 1
                 coalesced_access, fallback_flag = coalesce_memory_access(offset_map)
-                
+
                 # ##########################################
                 # if fallback_flag and update > 1:
                 #     update = 1
@@ -957,19 +960,25 @@ class CodeGenerator:
                         connected_nodes = connected_nodes[inc:]
                         offset_id += inc
                 idx += update
-
-        for input_idx, ordered_tile_group in global_in_tile_to_func.items():
-            map_dtensor_to_physical_tiles(
-                self.global_inputs[input_idx],
-                ordered_tile_group,
-                is_input=True,
-            )
-        for output_idx, ordered_tile_group in global_out_tile_to_func.items():
-            map_dtensor_to_physical_tiles(
-                self.global_outputs[output_idx],
-                ordered_tile_group,
-                is_input=False,
-            )
+        
+        # fixme: what if the Tensor is send multiple times?
+        sorted_keys = sorted(global_io_ordering, key=lambda k: global_io_ordering[k])
+        for key in sorted_keys:
+            if key in global_in_tile_to_func:
+                map_dtensor_to_physical_tiles(
+                    self.global_inputs[key],
+                    global_in_tile_to_func[key],
+                    is_input=True,
+                )
+            elif key in global_out_tile_to_func:
+                map_dtensor_to_physical_tiles(
+                    self.global_outputs[key],
+                    global_out_tile_to_func[key],
+                    is_input=False,
+                )
+            else:
+                raise ValueError("Run into an unreachable point.")
+        
         if os.getenv("VERBOSE") == "1":
             print("\n\n########################################################")
             print("used_mem_tiles:")
@@ -1138,13 +1147,14 @@ class CodeGenerator:
         core_funcs: list[allo_func_d.FuncOp],
         external_funcs: list[allo_func_d.FuncOp],
         use_external_kernels: dict[str, bool],
+        global_io_ordering: dict[int, int],
         global_in_tile_to_func: dict[int, OrderedDTensorTileGroup],
         global_out_tile_to_func: dict[int, OrderedDTensorTileGroup],
     ) -> aie_ir.Module:
         # mapping to physical/logical
         # TODO: co-designed mapping to different types of tiles
         self.map_global_io_to_physical_tiles(
-            global_in_tile_to_func, global_out_tile_to_func
+            global_io_ordering, global_in_tile_to_func, global_out_tile_to_func
         )
 
         if os.getenv("VERBOSE") == "1":

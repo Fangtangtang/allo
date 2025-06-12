@@ -29,10 +29,22 @@ class GlobalDTensorTile:
         )
 
     def __str__(self):
-        return f"{self.dtensor_id} ({self.tensor_tile_label})"
+        return f"id[{self.dtensor_id}] ({self.tensor_tile_label})"
 
     def __repr__(self):
-        return f"{self.dtensor_id} ({self.tensor_tile_label})"
+        return self.__str__()
+
+
+@dataclass(frozen=True)
+class PEInterface:
+    pe: str
+    interface_idx: int
+
+    def __str__(self):
+        return f"{self.pe} ({self.interface_idx})"
+
+    def __repr__(self):
+        return self.__str__()
 
 
 class DTensorTileGroup:
@@ -42,15 +54,17 @@ class DTensorTileGroup:
 
     def __init__(self, order_tag: str):
         self.order_tag = order_tag
-        self.dtensor_tile_to_pes: dict[GlobalDTensorTile, list[str]] = {}
+        self.dtensor_tile_to_pe_interfaces: dict[
+            GlobalDTensorTile, list[PEInterface]
+        ] = defaultdict(list)
 
-    def add_tile(self, tile: GlobalDTensorTile, pe: str):
-        if tile not in self.dtensor_tile_to_pes:
-            self.dtensor_tile_to_pes[tile] = []
-        self.dtensor_tile_to_pes[tile].append(pe)
+    def add_tensor_tile(self, tile: GlobalDTensorTile, pe: str, interface_idx: int):
+        self.dtensor_tile_to_pe_interfaces[tile].append(
+            PEInterface(pe=pe, interface_idx=interface_idx)
+        )
 
     def print(self):
-        for tile, pes in self.dtensor_tile_to_pes.items():
+        for tile, pes in self.dtensor_tile_to_pe_interfaces.items():
             print(f"{tile}: {pes}")
 
 
@@ -63,11 +77,13 @@ class OrderedDTensorTileGroup:
 
     def __init__(self):
         self.dtensor_tile_groups: dict[str, DTensorTileGroup] = {}
-
-    def add_tile(self, tile: GlobalDTensorTile, order_tag: str, pe: str):
+ 
+    def add_tensor_tile(
+        self, tile: GlobalDTensorTile, order_tag: str, pe: str, interface_idx: int
+    ):
         if order_tag not in self.dtensor_tile_groups:
             self.dtensor_tile_groups[order_tag] = DTensorTileGroup(order_tag)
-        self.dtensor_tile_groups[order_tag].add_tile(tile, pe)
+        self.dtensor_tile_groups[order_tag].add_tensor_tile(tile, pe, interface_idx)
 
     def print(self):
         for order_tag, tiles in self.dtensor_tile_groups.items():
@@ -219,6 +235,12 @@ class NodeBase:
         self.op_tag: str = tag
         # fixme: better solution for global IO, maybe function argument related
         #  argument will be mapped to ports (fifos) and for bundled nodes, the io data should use exactly same ports
+        self.global_input_interfaces: dict[int, list[GlobalDTensorTile]] = defaultdict(
+            list
+        )
+        self.global_output_interfaces: dict[int, list[GlobalDTensorTile]] = defaultdict(
+            list
+        )
         self.global_inputs: list[list[GlobalDTensorTile]] = []
         self.global_outputs: list[list[GlobalDTensorTile]] = []
         self.input_streams: list[Stream] = []
@@ -241,14 +263,11 @@ class NodeBase:
         return True
 
     def __str__(self) -> str:
+        def fmt_list(lst: list) -> str:
+            return "[" + ", ".join(str(item) for item in lst) + "]"
+
         def fmt_nested_list(nested: list[list]) -> str:
-            return (
-                "["
-                + ", ".join(
-                    "[" + ", ".join(str(item) for item in sub) + "]" for sub in nested
-                )
-                + "]"
-            )
+            return "[" + ", ".join(fmt_list(sub) for sub in nested) + "]"
 
         return (
             f"Node({self.id}) {self.name}"
@@ -277,6 +296,16 @@ class CollocatedNode(NodeBase):
         repeat: int = 0,
     ):
         super().__init__(name=name, func=func, tag=tag, repeat=repeat)
+
+    def _init_for_bundle(self, sample_node: NodeBase):
+        self.input_streams = list(sample_node.input_streams)
+        self.output_streams = list(sample_node.output_streams)
+        self.global_input_interfaces = {
+            key: [] for key in sample_node.global_input_interfaces
+        }
+        self.global_output_interfaces = {
+            key: [] for key in sample_node.global_output_interfaces
+        }
 
 
 # ------------------------------------------------------------
@@ -307,7 +336,7 @@ class ComputationGraph:
             params = core_func_args[func_name]
             global_inputs: list[GlobalDTensorTile] = []
             global_outputs: list[GlobalDTensorTile] = []
-            for argument, is_input in params.values():
+            for idx, (argument, is_input) in params.items():
                 if argument.stream is not None:
                     if is_input:
                         node.input_streams.append(argument.stream)
@@ -315,19 +344,19 @@ class ComputationGraph:
                         node.output_streams.append(argument.stream)
                 if argument.dtensor is not None:
                     if is_input:
-                        global_inputs.append(
-                            GlobalDTensorTile(
-                                argument.dtensor.global_id,
-                                argument.dtensor.PE_tile_id_to_tensor_tile_id(indexes),
-                            )
+                        tensor_tile = GlobalDTensorTile(
+                            argument.dtensor.global_id,
+                            argument.dtensor.PE_tile_id_to_tensor_tile_id(indexes),
                         )
+                        node.global_input_interfaces[idx].append(tensor_tile)
+                        global_inputs.append(tensor_tile)
                     else:
-                        global_outputs.append(
-                            GlobalDTensorTile(
-                                argument.dtensor.global_id,
-                                argument.dtensor.PE_tile_id_to_tensor_tile_id(indexes),
-                            )
+                        tensor_tile = GlobalDTensorTile(
+                            argument.dtensor.global_id,
+                            argument.dtensor.PE_tile_id_to_tensor_tile_id(indexes),
                         )
+                        node.global_output_interfaces[idx].append(tensor_tile)
+                        global_outputs.append(tensor_tile)
             node.global_inputs.append(global_inputs)
             node.global_outputs.append(global_outputs)
             self.nodes[func_name] = node
@@ -343,7 +372,7 @@ class ComputationGraph:
     def bundle(self, node_name_list: list[str]):
         """
         [A] [B] [C] [D]  => [A] x 4
-        
+
         TODO: bundled nodes can be safely reordered
         """
         assert len(node_name_list) >= 2, "bundle at least two nodes"
@@ -360,12 +389,18 @@ class ComputationGraph:
         bundled_node = CollocatedNode(
             tag=sample_node.op_tag, name=sample_node.name, func=sample_node.func
         )
-        bundled_node.input_streams = list(sample_node.input_streams)
-        bundled_node.output_streams = list(sample_node.output_streams)
+        bundled_node._init_for_bundle(sample_node)
         for node in node_list:
             bundled_node.repeat += node.repeat
             bundled_node.global_inputs.extend(node.global_inputs)
             bundled_node.global_outputs.extend(node.global_outputs)
+            for key, value in node.global_input_interfaces.items():
+                assert key in bundled_node.global_input_interfaces
+                bundled_node.global_input_interfaces[key].extend(value)
+            for key, value in node.global_output_interfaces.items():
+                assert key in bundled_node.global_output_interfaces
+                bundled_node.global_output_interfaces[key].extend(value)
+
         # update stream
         for name, stream in self.edges.items():
             if stream.src in node_name_list:
@@ -453,6 +488,12 @@ class ComputationGraph:
         in_types_b: list = function_b.attributes["function_type"].value.inputs
         out_types_a = function_a.attributes["function_type"].value.results
         out_types_b = function_b.attributes["function_type"].value.results
+        chained_node.global_input_interfaces.update(node_a.global_input_interfaces)
+        for key, value in node_b.global_input_interfaces.items():
+            chained_node.global_input_interfaces[arg_idx_offset + key] = value
+        chained_node.global_output_interfaces.update(node_a.global_output_interfaces)
+        for key, value in node_b.global_output_interfaces.items():
+            chained_node.global_output_interfaces[arg_idx_offset + key] = value
         with function_a.context, allo_ir.ir.Location.unknown():
             func_type = FunctionType.get(
                 in_types_a + in_types_b, out_types_a + out_types_b
@@ -549,6 +590,21 @@ class ComputationGraph:
         for name, node in self.nodes.items():
             global_in[name] = node.global_inputs
             global_out[name] = node.global_outputs
+
+        return global_in, global_out
+
+    def get_node_global_tensor_io(
+        self,
+    ) -> tuple[
+        dict[str, dict[int, list[GlobalDTensorTile]]],
+        dict[str, dict[int, list[GlobalDTensorTile]]],
+    ]:
+        global_in: dict[str, dict[int, list[GlobalDTensorTile]]] = {}
+        global_out: dict[str, dict[int, list[GlobalDTensorTile]]] = {}
+
+        for name, node in self.nodes.items():
+            global_in[name] = node.global_input_interfaces
+            global_out[name] = node.global_output_interfaces
 
         return global_in, global_out
 

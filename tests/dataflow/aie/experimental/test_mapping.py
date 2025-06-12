@@ -31,7 +31,6 @@ def _test_vector_scalar_add():
 
 
 def _test_producer_consumer():
-
     Ty = int32
     M, N, K = 16, 16, 16
 

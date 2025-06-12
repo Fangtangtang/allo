@@ -20,8 +20,6 @@ from ._mlir.passmanager import PassManager as mlir_pass_manager
 from .customize import customize as _customize
 from .ir.utils import get_global_vars, get_all_df_kernels
 from .backend.aie import AIEModule
-
-
 from .backend.simulator import LLVMOMPModule
 from .ir.types import Stream
 from .passes import df_pipeline
