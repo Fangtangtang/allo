@@ -138,7 +138,6 @@ class AIE_MLIRModule:
             - global_out_tile_to_func: output dtensor id -> related tile group
         """
         # global inputs/outputs
-        global_in, global_out = self.virtual_computation_graph.get_node_global_io()
         global_in_tensors, global_out_tensors = (
             self.virtual_computation_graph.get_node_global_tensor_io()
         )
@@ -160,13 +159,6 @@ class AIE_MLIRModule:
             tag += 1
 
         if os.getenv("VERBOSE") == "1":
-            print("\n<<<<<<< global_in >>>>>>>>")
-            for func_name, global_io in global_in.items():
-                print(func_name, ", ".join([str(tile) for tile in global_io]))
-            print("\n<<<<<<< global_out >>>>>>>>")
-            for func_name, global_io in global_out.items():
-                print(func_name, ", ".join([str(tile) for tile in global_io]))
-            print()
             print("\n<<<<<<< global_in_tensors >>>>>>>>")
             for func_name, global_io in global_in_tensors.items():
                 print(func_name)
@@ -191,23 +183,31 @@ class AIE_MLIRModule:
         global_out_tile_to_func: dict[int, OrderedDTensorTileGroup] = {
             i: OrderedDTensorTileGroup() for i in self.global_outputs.keys()
         }
-        for func_name, io_info  in global_in_tensors.items():
+        for func_name, io_info in global_in_tensors.items():
             outer_tag = node_order_tag[func_name]
             for arg_idx, tiles in io_info.items():
                 for i, tile_ in enumerate(tiles):
                     global_in_tile_to_func[tile_.dtensor_id].add_tensor_tile(
                         tile_, f"{outer_tag}-{i}", func_name, arg_idx
                     )
-                    global_io_ordering[tile_.dtensor_id] = outer_tag if tile_.dtensor_id not in global_io_ordering else min(outer_tag, global_io_ordering[tile_.dtensor_id] )
- 
-        for func_name, io_info  in global_out_tensors.items():
+                    global_io_ordering[tile_.dtensor_id] = (
+                        outer_tag
+                        if tile_.dtensor_id not in global_io_ordering
+                        else min(outer_tag, global_io_ordering[tile_.dtensor_id])
+                    )
+
+        for func_name, io_info in global_out_tensors.items():
             outer_tag = node_order_tag[func_name]
             for arg_idx, tiles in io_info.items():
                 for i, tile_ in enumerate(tiles):
                     global_out_tile_to_func[tile_.dtensor_id].add_tensor_tile(
                         tile_, f"{outer_tag}-{i}", func_name, arg_idx
                     )
-                    global_io_ordering[tile_.dtensor_id] = outer_tag if tile_.dtensor_id not in global_io_ordering else min(outer_tag, global_io_ordering[tile_.dtensor_id] )
+                    global_io_ordering[tile_.dtensor_id] = (
+                        outer_tag
+                        if tile_.dtensor_id not in global_io_ordering
+                        else min(outer_tag, global_io_ordering[tile_.dtensor_id])
+                    )
 
         if os.getenv("VERBOSE") == "1":
             print("\n<<<<<<< global_in_tile_to_func >>>>>>>>")
@@ -307,7 +307,9 @@ class AIE_MLIRModule:
                 if primitive == "bundle":
                     self.virtual_computation_graph.bundle(arg_list)
         print(self.virtual_computation_graph.func_args)
-        global_io_ordering, global_in_tile_to_func, global_out_tile_to_func = self.analyze_global_io()
+        global_io_ordering, global_in_tile_to_func, global_out_tile_to_func = (
+            self.analyze_global_io()
+        )
         # inject external kernels
         use_external_kernels, injected_kernels, include_src = inject_external_kernels(
             self.allo_module, self.top_func_name

@@ -562,7 +562,7 @@ class CodeGenerator:
 
     def map_global_io_to_physical_tiles(
         self,
-        global_io_ordering: dict[int,int],
+        global_io_ordering: dict[int, int],
         global_in_tile_to_func: dict[int, OrderedDTensorTileGroup],
         global_out_tile_to_func: dict[int, OrderedDTensorTileGroup],
     ) -> tuple[
@@ -796,7 +796,10 @@ class CodeGenerator:
                             offset_map[
                                 dtensor.offset_map[dma_tile.tensor_tile_label]
                             ] = []
-                        for pe_interface in dma_tile_group.dtensor_tile_to_pe_interfaces[dma_tile]:
+                        for (
+                            pe_interface
+                        ) in dma_tile_group.dtensor_tile_to_pe_interfaces[dma_tile]:
+                            # fixme: the argument idx should guide the mapping
                             offset_map[
                                 dtensor.offset_map[dma_tile.tensor_tile_label]
                             ].append(pe_interface.pe)
@@ -960,7 +963,7 @@ class CodeGenerator:
                         connected_nodes = connected_nodes[inc:]
                         offset_id += inc
                 idx += update
-        
+
         # fixme: what if the Tensor is send multiple times?
         sorted_keys = sorted(global_io_ordering, key=lambda k: global_io_ordering[k])
         for key in sorted_keys:
@@ -978,7 +981,7 @@ class CodeGenerator:
                 )
             else:
                 raise ValueError("Run into an unreachable point.")
-        
+
         if os.getenv("VERBOSE") == "1":
             print("\n\n########################################################")
             print("used_mem_tiles:")

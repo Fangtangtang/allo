@@ -77,7 +77,7 @@ class OrderedDTensorTileGroup:
 
     def __init__(self):
         self.dtensor_tile_groups: dict[str, DTensorTileGroup] = {}
- 
+
     def add_tensor_tile(
         self, tile: GlobalDTensorTile, order_tag: str, pe: str, interface_idx: int
     ):
@@ -233,16 +233,12 @@ class NodeBase:
         self.func: func_d.FuncOp = func
         self.repeat: int = repeat
         self.op_tag: str = tag
-        # fixme: better solution for global IO, maybe function argument related
-        #  argument will be mapped to ports (fifos) and for bundled nodes, the io data should use exactly same ports
         self.global_input_interfaces: dict[int, list[GlobalDTensorTile]] = defaultdict(
             list
         )
         self.global_output_interfaces: dict[int, list[GlobalDTensorTile]] = defaultdict(
             list
         )
-        self.global_inputs: list[list[GlobalDTensorTile]] = []
-        self.global_outputs: list[list[GlobalDTensorTile]] = []
         self.input_streams: list[Stream] = []
         self.output_streams: list[Stream] = []
 
@@ -266,14 +262,13 @@ class NodeBase:
         def fmt_list(lst: list) -> str:
             return "[" + ", ".join(str(item) for item in lst) + "]"
 
-        def fmt_nested_list(nested: list[list]) -> str:
-            return "[" + ", ".join(fmt_list(sub) for sub in nested) + "]"
-
         return (
             f"Node({self.id}) {self.name}"
             f"Operation(tag='{self.op_tag}', repeat={self.repeat})\n"
-            f"\tGlobal Inputs: {fmt_nested_list(self.global_inputs)}\n"
-            f"\tGlobal Outputs: {fmt_nested_list(self.global_outputs)}\n"
+            f"\tGlobal Input Interfaces: "
+            f"{ {k: fmt_list(v) for k, v in self.global_input_interfaces.items()} }\n"
+            f"\tGlobal Output Interfaces: "
+            f"{ {k: fmt_list(v) for k, v in self.global_output_interfaces.items()} }\n"
             f"\tInput Streams: {[str(s) for s in self.input_streams]}\n"
             f"\tOutput Streams: {[str(s) for s in self.output_streams]}"
         )
@@ -334,8 +329,6 @@ class ComputationGraph:
             node = InitialNode(func, self.tagger.get_init_tag(tag_key))
             _, indexes = parse_kernel_name(func_name)
             params = core_func_args[func_name]
-            global_inputs: list[GlobalDTensorTile] = []
-            global_outputs: list[GlobalDTensorTile] = []
             for idx, (argument, is_input) in params.items():
                 if argument.stream is not None:
                     if is_input:
@@ -349,16 +342,12 @@ class ComputationGraph:
                             argument.dtensor.PE_tile_id_to_tensor_tile_id(indexes),
                         )
                         node.global_input_interfaces[idx].append(tensor_tile)
-                        global_inputs.append(tensor_tile)
                     else:
                         tensor_tile = GlobalDTensorTile(
                             argument.dtensor.global_id,
                             argument.dtensor.PE_tile_id_to_tensor_tile_id(indexes),
                         )
                         node.global_output_interfaces[idx].append(tensor_tile)
-                        global_outputs.append(tensor_tile)
-            node.global_inputs.append(global_inputs)
-            node.global_outputs.append(global_outputs)
             self.nodes[func_name] = node
             self.dependencies[func_name] = set()
         # initiate dependencies
@@ -392,8 +381,6 @@ class ComputationGraph:
         bundled_node._init_for_bundle(sample_node)
         for node in node_list:
             bundled_node.repeat += node.repeat
-            bundled_node.global_inputs.extend(node.global_inputs)
-            bundled_node.global_outputs.extend(node.global_outputs)
             for key, value in node.global_input_interfaces.items():
                 assert key in bundled_node.global_input_interfaces
                 bundled_node.global_input_interfaces[key].extend(value)
@@ -448,10 +435,6 @@ class ComputationGraph:
             f"({node_a.op_tag})x{node_a.repeat}-({node_b.op_tag})x{node_b.repeat}"
         )
         chained_node = CollocatedNode(bundled_tag, repeat=1)
-        chained_node.global_inputs.extend(node_a.global_inputs)
-        chained_node.global_inputs.extend(node_b.global_inputs)
-        chained_node.global_outputs.extend(node_a.global_outputs)
-        chained_node.global_outputs.extend(node_b.global_outputs)
         bufferized_stream: dict[Stream, BufferizedStream] = {}
         node_a.output_streams = [
             stream for stream in node_a.output_streams if stream.dst != node_name_b
@@ -578,21 +561,6 @@ class ComputationGraph:
     # ------------------------------------------------------------
     # Graph Information
     # ------------------------------------------------------------
-    def get_node_global_io(
-        self,
-    ) -> tuple[
-        dict[str, list[list[GlobalDTensorTile]]],
-        dict[str, list[list[GlobalDTensorTile]]],
-    ]:
-        global_in: dict[str, list[list[GlobalDTensorTile]]] = {}
-        global_out: dict[str, list[list[GlobalDTensorTile]]] = {}
-
-        for name, node in self.nodes.items():
-            global_in[name] = node.global_inputs
-            global_out[name] = node.global_outputs
-
-        return global_in, global_out
-
     def get_node_global_tensor_io(
         self,
     ) -> tuple[
