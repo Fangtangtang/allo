@@ -807,25 +807,6 @@ class CodeGenerator:
                     update += 1
                 coalesced_access, fallback_flag = coalesce_memory_access(offset_map)
 
-                # ##########################################
-                # if fallback_flag and update > 1:
-                #     update = 1
-                #     offset_map = {}
-                #     dma_tile_group = ordered_tile_group.dtensor_tile_groups[sorted_tags[idx]]
-                #     for dma_tile in dma_tile_group.dtensor_tile_to_pes.keys():
-                #         if (
-                #             dtensor.offset_map[dma_tile.tensor_tile_label]
-                #             not in offset_map
-                #         ):
-                #             offset_map[
-                #                 dtensor.offset_map[dma_tile.tensor_tile_label]
-                #             ] = []
-                #         offset_map[
-                #             dtensor.offset_map[dma_tile.tensor_tile_label]
-                #         ].extend(dma_tile_group.dtensor_tile_to_pes[dma_tile])
-                #         coalesced_access, fallback_flag = coalesce_memory_access(offset_map)
-                # ##########################################
-
                 if os.getenv("VERBOSE") == "1":
                     print()
                     print("tag:", tag, "update:", update, fallback_flag)
