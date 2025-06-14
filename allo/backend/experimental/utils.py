@@ -44,6 +44,7 @@ class Config:
     # fixme: some hyper-parameters, can be optimized
     IO_TILE_LOSE_FACTOR = 4
     COMPUTE_TILE_WITH_SHARED_MEMORY = 2
+    CODE_OFFSET = 100
 
 
 device_config_map = {

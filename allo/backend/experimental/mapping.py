@@ -7,7 +7,14 @@ from collections import defaultdict, Counter
 import allo._mlir._mlir_libs._mlir as allo_ir
 from ..._mlir.ir import InsertionPoint, FunctionType, Value, UnitAttr
 from ..._mlir.dialects import func as func_d, allo as allo_d
-from .utils import Argument, parse_kernel_name, Stream, StreamType, get_df_kernels
+from .utils import (
+    Argument,
+    parse_kernel_name,
+    Stream,
+    StreamType,
+    get_df_kernels,
+    Config,
+)
 from ...memory import DTensor, Size4D, Offset4D
 
 
@@ -223,6 +230,12 @@ class LiveDTensorTile:
         self.last_use = None
         self.is_input: bool = is_input
 
+    def __str__(self):
+        return f"{self.tile} [{self.first_use,self.last_use}] {self.is_input}"
+
+    def __repr__(self):
+        return self.__str__()
+
 
 # ------------------------------------------------------------
 class NodeBase:
@@ -242,7 +255,6 @@ class NodeBase:
         self.repeat: int = repeat
         self.op_tag: str = tag
         self.global_interfaces: dict[int, list[LiveDTensorTile]] = defaultdict(list)
-        self.global_tiles: dict[int, list[DTensorTile]] = defaultdict(list)
         self.input_streams: list[Stream] = []
         self.output_streams: list[Stream] = []
 
@@ -270,7 +282,7 @@ class NodeBase:
             f"Node({self.id}) {self.name}"
             f"Operation(tag='{self.op_tag}', repeat={self.repeat})\n"
             f"\tGlobal IO Tiles: "
-            f"{ {k: fmt_list(v) for k, v in self.global_tiles.items()} }\n"
+            f"{ {k: fmt_list(v) for k, v in self.global_interfaces.items()} }\n"
             f"\tInput Streams: {[str(s) for s in self.input_streams]}\n"
             f"\tOutput Streams: {[str(s) for s in self.output_streams]}"
         )
@@ -282,6 +294,16 @@ class NodeBase:
 class InitialNode(NodeBase):
     def __init__(self, func: func_d.FuncOp, tag: str):
         super().__init__(func.attributes["sym_name"].value, func, tag, 1)
+
+    def init_live_tile(self):
+        """
+        liveness analysis for global tiles used in the node
+        # TODO: real liveness analysis
+        """
+        for live_tile_list in self.global_interfaces.values():
+            for live_tile in live_tile_list:
+                live_tile.first_use = 0
+                live_tile.last_use = 9
 
 
 class CollocatedNode(NodeBase):
@@ -297,7 +319,7 @@ class CollocatedNode(NodeBase):
     def _init_for_bundle(self, sample_node: NodeBase):
         self.input_streams = list(sample_node.input_streams)
         self.output_streams = list(sample_node.output_streams)
-        self.global_tiles = {key: [] for key in sample_node.global_tiles}
+        self.global_interfaces = {key: [] for key in sample_node.global_interfaces}
 
 
 # ------------------------------------------------------------
@@ -337,7 +359,10 @@ class ComputationGraph:
                         argument.dtensor.global_id,
                         argument.dtensor.PE_tile_id_to_tensor_tile_id(indexes),
                     )
-                    node.global_tiles[idx].append(tensor_tile)
+                    node.global_interfaces[idx].append(
+                        LiveDTensorTile(tensor_tile, is_input)
+                    )
+            node.init_live_tile()
             self.nodes[func_name] = node
             self.dependencies[func_name] = set()
         # initiate dependencies
@@ -371,9 +396,9 @@ class ComputationGraph:
         bundled_node._init_for_bundle(sample_node)
         for node in node_list:
             bundled_node.repeat += node.repeat
-            for key, value in node.global_tiles.items():
-                assert key in bundled_node.global_tiles
-                bundled_node.global_tiles[key].extend(value)
+            for key, value in node.global_interfaces.items():
+                assert key in bundled_node.global_interfaces
+                bundled_node.global_interfaces[key].extend(value)
 
         # update stream
         for name, stream in self.edges.items():
@@ -458,9 +483,12 @@ class ComputationGraph:
         in_types_b: list = function_b.attributes["function_type"].value.inputs
         out_types_a = function_a.attributes["function_type"].value.results
         out_types_b = function_b.attributes["function_type"].value.results
-        chained_node.global_tiles.update(node_a.global_tiles)
-        for key, value in node_b.global_tiles.items():
-            chained_node.global_tiles[arg_idx_offset + key] = value
+        chained_node.global_interfaces.update(node_a.global_interfaces)
+        for key, value in node_b.global_interfaces.items():
+            for live_tile in value:
+                live_tile.first_use += Config.CODE_OFFSET
+                live_tile.last_use += Config.CODE_OFFSET
+            chained_node.global_interfaces[arg_idx_offset + key] = value
         with function_a.context, allo_ir.ir.Location.unknown():
             func_type = FunctionType.get(
                 in_types_a + in_types_b, out_types_a + out_types_b
@@ -549,10 +577,12 @@ class ComputationGraph:
         self,
     ) -> tuple[dict[str, dict[int, list[DTensorTile]]],]:
         global_tile_io: dict[str, dict[int, list[DTensorTile]]] = {}
-
         for name, node in self.nodes.items():
-            global_tile_io[name] = node.global_tiles
-
+            global_tiles: dict[int, list[DTensorTile]] = {}
+            for idx, live_tile_list in node.global_interfaces.items():
+                tile_list = [live_tile.tile for live_tile in live_tile_list]
+                global_tiles[idx] = tile_list
+            global_tile_io[name] = global_tiles
         return global_tile_io
 
     def get_node_dependencies(self) -> dict[str, set[str]]:
