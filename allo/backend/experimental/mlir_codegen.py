@@ -563,8 +563,7 @@ class CodeGenerator:
     def map_global_io_to_physical_tiles(
         self,
         global_io_ordering: dict[int, int],
-        global_in_tile_to_func: dict[int, OrderedDTensorTileGroup],
-        global_out_tile_to_func: dict[int, OrderedDTensorTileGroup],
+        global_tile_to_func: dict[int, OrderedDTensorTileGroup],
     ) -> tuple[
         list[SwitchNode],
         list[SwitchNode],
@@ -948,16 +947,16 @@ class CodeGenerator:
         # fixme: what if the Tensor is send multiple times?
         sorted_keys = sorted(global_io_ordering, key=lambda k: global_io_ordering[k])
         for key in sorted_keys:
-            if key in global_in_tile_to_func:
+            if key in self.global_inputs:
                 map_dtensor_to_physical_tiles(
                     self.global_inputs[key],
-                    global_in_tile_to_func[key],
+                    global_tile_to_func[key],
                     is_input=True,
                 )
-            elif key in global_out_tile_to_func:
+            elif key in self.global_outputs:
                 map_dtensor_to_physical_tiles(
                     self.global_outputs[key],
-                    global_out_tile_to_func[key],
+                    global_tile_to_func[key],
                     is_input=False,
                 )
             else:
@@ -1132,14 +1131,11 @@ class CodeGenerator:
         external_funcs: list[allo_func_d.FuncOp],
         use_external_kernels: dict[str, bool],
         global_io_ordering: dict[int, int],
-        global_in_tile_to_func: dict[int, OrderedDTensorTileGroup],
-        global_out_tile_to_func: dict[int, OrderedDTensorTileGroup],
+        global_tile_to_func: dict[int, OrderedDTensorTileGroup],
     ) -> aie_ir.Module:
         # mapping to physical/logical
         # TODO: co-designed mapping to different types of tiles
-        self.map_global_io_to_physical_tiles(
-            global_io_ordering, global_in_tile_to_func, global_out_tile_to_func
-        )
+        self.map_global_io_to_physical_tiles(global_io_ordering, global_tile_to_func)
 
         if os.getenv("VERBOSE") == "1":
             print("<<< function_port_map >>>")

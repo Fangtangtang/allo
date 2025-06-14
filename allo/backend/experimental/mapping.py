@@ -15,7 +15,7 @@ from ...memory import DTensor, Size4D, Offset4D
 # Memory
 # ############################################################
 @dataclass
-class GlobalDTensorTile:
+class DTensorTile:
     dtensor_id: int
     tensor_tile_label: str
 
@@ -54,11 +54,11 @@ class DTensorTileGroup:
 
     def __init__(self, order_tag: str):
         self.order_tag = order_tag
-        self.dtensor_tile_to_pe_interfaces: dict[
-            GlobalDTensorTile, list[PEInterface]
-        ] = defaultdict(list)
+        self.dtensor_tile_to_pe_interfaces: dict[DTensorTile, list[PEInterface]] = (
+            defaultdict(list)
+        )
 
-    def add_tensor_tile(self, tile: GlobalDTensorTile, pe: str, interface_idx: int):
+    def add_tensor_tile(self, tile: DTensorTile, pe: str, interface_idx: int):
         self.dtensor_tile_to_pe_interfaces[tile].append(
             PEInterface(pe=pe, interface_idx=interface_idx)
         )
@@ -79,7 +79,7 @@ class OrderedDTensorTileGroup:
         self.dtensor_tile_groups: dict[str, DTensorTileGroup] = {}
 
     def add_tensor_tile(
-        self, tile: GlobalDTensorTile, order_tag: str, pe: str, interface_idx: int
+        self, tile: DTensorTile, order_tag: str, pe: str, interface_idx: int
     ):
         if order_tag not in self.dtensor_tile_groups:
             self.dtensor_tile_groups[order_tag] = DTensorTileGroup(order_tag)
@@ -216,6 +216,14 @@ class OperationTagger:
         return self.tag_map[key]
 
 
+class LiveDTensorTile:
+    def __init__(self, tile: DTensorTile, is_input: bool):
+        self.tile = tile
+        self.first_use = None
+        self.last_use = None
+        self.is_input: bool = is_input
+
+
 # ------------------------------------------------------------
 class NodeBase:
     node_list: list["NodeBase"] = []
@@ -233,12 +241,8 @@ class NodeBase:
         self.func: func_d.FuncOp = func
         self.repeat: int = repeat
         self.op_tag: str = tag
-        self.global_input_interfaces: dict[int, list[GlobalDTensorTile]] = defaultdict(
-            list
-        )
-        self.global_output_interfaces: dict[int, list[GlobalDTensorTile]] = defaultdict(
-            list
-        )
+        self.global_interfaces: dict[int, list[LiveDTensorTile]] = defaultdict(list)
+        self.global_tiles: dict[int, list[DTensorTile]] = defaultdict(list)
         self.input_streams: list[Stream] = []
         self.output_streams: list[Stream] = []
 
@@ -265,10 +269,8 @@ class NodeBase:
         return (
             f"Node({self.id}) {self.name}"
             f"Operation(tag='{self.op_tag}', repeat={self.repeat})\n"
-            f"\tGlobal Input Interfaces: "
-            f"{ {k: fmt_list(v) for k, v in self.global_input_interfaces.items()} }\n"
-            f"\tGlobal Output Interfaces: "
-            f"{ {k: fmt_list(v) for k, v in self.global_output_interfaces.items()} }\n"
+            f"\tGlobal IO Tiles: "
+            f"{ {k: fmt_list(v) for k, v in self.global_tiles.items()} }\n"
             f"\tInput Streams: {[str(s) for s in self.input_streams]}\n"
             f"\tOutput Streams: {[str(s) for s in self.output_streams]}"
         )
@@ -295,12 +297,7 @@ class CollocatedNode(NodeBase):
     def _init_for_bundle(self, sample_node: NodeBase):
         self.input_streams = list(sample_node.input_streams)
         self.output_streams = list(sample_node.output_streams)
-        self.global_input_interfaces = {
-            key: [] for key in sample_node.global_input_interfaces
-        }
-        self.global_output_interfaces = {
-            key: [] for key in sample_node.global_output_interfaces
-        }
+        self.global_tiles = {key: [] for key in sample_node.global_tiles}
 
 
 # ------------------------------------------------------------
@@ -336,18 +333,11 @@ class ComputationGraph:
                     else:
                         node.output_streams.append(argument.stream)
                 if argument.dtensor is not None:
-                    if is_input:
-                        tensor_tile = GlobalDTensorTile(
-                            argument.dtensor.global_id,
-                            argument.dtensor.PE_tile_id_to_tensor_tile_id(indexes),
-                        )
-                        node.global_input_interfaces[idx].append(tensor_tile)
-                    else:
-                        tensor_tile = GlobalDTensorTile(
-                            argument.dtensor.global_id,
-                            argument.dtensor.PE_tile_id_to_tensor_tile_id(indexes),
-                        )
-                        node.global_output_interfaces[idx].append(tensor_tile)
+                    tensor_tile = DTensorTile(
+                        argument.dtensor.global_id,
+                        argument.dtensor.PE_tile_id_to_tensor_tile_id(indexes),
+                    )
+                    node.global_tiles[idx].append(tensor_tile)
             self.nodes[func_name] = node
             self.dependencies[func_name] = set()
         # initiate dependencies
@@ -381,12 +371,9 @@ class ComputationGraph:
         bundled_node._init_for_bundle(sample_node)
         for node in node_list:
             bundled_node.repeat += node.repeat
-            for key, value in node.global_input_interfaces.items():
-                assert key in bundled_node.global_input_interfaces
-                bundled_node.global_input_interfaces[key].extend(value)
-            for key, value in node.global_output_interfaces.items():
-                assert key in bundled_node.global_output_interfaces
-                bundled_node.global_output_interfaces[key].extend(value)
+            for key, value in node.global_tiles.items():
+                assert key in bundled_node.global_tiles
+                bundled_node.global_tiles[key].extend(value)
 
         # update stream
         for name, stream in self.edges.items():
@@ -471,12 +458,9 @@ class ComputationGraph:
         in_types_b: list = function_b.attributes["function_type"].value.inputs
         out_types_a = function_a.attributes["function_type"].value.results
         out_types_b = function_b.attributes["function_type"].value.results
-        chained_node.global_input_interfaces.update(node_a.global_input_interfaces)
-        for key, value in node_b.global_input_interfaces.items():
-            chained_node.global_input_interfaces[arg_idx_offset + key] = value
-        chained_node.global_output_interfaces.update(node_a.global_output_interfaces)
-        for key, value in node_b.global_output_interfaces.items():
-            chained_node.global_output_interfaces[arg_idx_offset + key] = value
+        chained_node.global_tiles.update(node_a.global_tiles)
+        for key, value in node_b.global_tiles.items():
+            chained_node.global_tiles[arg_idx_offset + key] = value
         with function_a.context, allo_ir.ir.Location.unknown():
             func_type = FunctionType.get(
                 in_types_a + in_types_b, out_types_a + out_types_b
@@ -561,20 +545,15 @@ class ComputationGraph:
     # ------------------------------------------------------------
     # Graph Information
     # ------------------------------------------------------------
-    def get_node_global_tensor_io(
+    def get_node_global_io(
         self,
-    ) -> tuple[
-        dict[str, dict[int, list[GlobalDTensorTile]]],
-        dict[str, dict[int, list[GlobalDTensorTile]]],
-    ]:
-        global_in: dict[str, dict[int, list[GlobalDTensorTile]]] = {}
-        global_out: dict[str, dict[int, list[GlobalDTensorTile]]] = {}
+    ) -> tuple[dict[str, dict[int, list[DTensorTile]]],]:
+        global_tile_io: dict[str, dict[int, list[DTensorTile]]] = {}
 
         for name, node in self.nodes.items():
-            global_in[name] = node.global_input_interfaces
-            global_out[name] = node.global_output_interfaces
+            global_tile_io[name] = node.global_tiles
 
-        return global_in, global_out
+        return global_tile_io
 
     def get_node_dependencies(self) -> dict[str, set[str]]:
         dependencies: dict[str, set[str]] = {key: set() for key in self.nodes.keys()}
