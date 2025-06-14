@@ -224,8 +224,11 @@ class OperationTagger:
 
 
 class LiveDTensorTile:
-    def __init__(self, tile: DTensorTile, is_input: bool):
+    def __init__(self, tile: DTensorTile, token: str, is_input: bool):
         self.tile = tile
+        self.token: str = (
+            token  # LiveDTensorTiles with the same token should be processed in one 'run'
+        )
         self.first_use = None
         self.last_use = None
         self.is_input: bool = is_input
@@ -254,6 +257,7 @@ class NodeBase:
         self.func: func_d.FuncOp = func
         self.repeat: int = repeat
         self.op_tag: str = tag
+        # arg_idx -> tiling using arg as interface
         self.global_interfaces: dict[int, list[LiveDTensorTile]] = defaultdict(list)
         self.input_streams: list[Stream] = []
         self.output_streams: list[Stream] = []
@@ -360,7 +364,7 @@ class ComputationGraph:
                         argument.dtensor.PE_tile_id_to_tensor_tile_id(indexes),
                     )
                     node.global_interfaces[idx].append(
-                        LiveDTensorTile(tensor_tile, is_input)
+                        LiveDTensorTile(tensor_tile, func_name, is_input)
                     )
             node.init_live_tile()
             self.nodes[func_name] = node
@@ -489,6 +493,10 @@ class ComputationGraph:
                 live_tile.first_use += Config.CODE_OFFSET
                 live_tile.last_use += Config.CODE_OFFSET
             chained_node.global_interfaces[arg_idx_offset + key] = value
+        new_token = node_a.name + "-" + node_b.name
+        for live_tile_list in chained_node.global_interfaces.values():
+            for live_tile in live_tile_list:
+                live_tile.token = new_token
         with function_a.context, allo_ir.ir.Location.unknown():
             func_type = FunctionType.get(
                 in_types_a + in_types_b, out_types_a + out_types_b
@@ -573,9 +581,7 @@ class ComputationGraph:
     # ------------------------------------------------------------
     # Graph Information
     # ------------------------------------------------------------
-    def get_node_global_io(
-        self,
-    ) -> tuple[dict[str, dict[int, list[DTensorTile]]],]:
+    def get_node_global_io(self) -> dict[str, dict[int, list[DTensorTile]]]:
         global_tile_io: dict[str, dict[int, list[DTensorTile]]] = {}
         for name, node in self.nodes.items():
             global_tiles: dict[int, list[DTensorTile]] = {}

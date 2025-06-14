@@ -541,6 +541,76 @@ class CodeGenerator:
                 aie_scf_d.YieldOp([])
             aie_d.EndOp()
 
+    # ------------------------------------------------------------
+    # Data Transfer
+    # ------------------------------------------------------------
+
+    def analyze_global_io(self) -> tuple[
+        dict[int, int],
+        dict[int, OrderedDTensorTileGroup],
+    ]:
+        """
+        return:
+            - global_io_ordering: dtensor id -> ordering tag
+            - global_tile_to_func: dtensor id -> related tile group
+        """
+        # global inputs/outputs
+        global_tensors = self.virtual_computation_graph.get_node_global_io()
+        # manage the order to avoid deadlocks
+        dependencies = self.virtual_computation_graph.get_node_dependencies()
+        node_order_tag: dict[str, int] = {}
+        tag = 0
+        while len(dependencies.items()) > 0:
+            tagged_nodes = []
+            for node, deps in dependencies.items():
+                if len(deps) == 0:
+                    node_order_tag[node] = tag
+                    tagged_nodes.append(node)
+            for node in tagged_nodes:
+                del dependencies[node]
+                for _, deps in dependencies.items():
+                    if node in deps:
+                        deps.remove(node)
+            tag += 1
+
+        if os.getenv("VERBOSE") == "1":
+            print("\n<<<<<<< global_tensors >>>>>>>>")
+            for func_name, global_io in global_tensors.items():
+                print(func_name)
+                for key, value in global_io.items():
+                    print(
+                        "\t", key, ": [", ", ".join([str(tile) for tile in value]), "]"
+                    )
+            print()
+            print(node_order_tag)
+
+        global_io_ordering: dict[int, int] = {}
+        all_keys = self.global_inputs.keys() | self.global_outputs.keys()
+        global_tile_to_func: dict[int, OrderedDTensorTileGroup] = {
+            i: OrderedDTensorTileGroup() for i in all_keys
+        }
+        for func_name, io_info in global_tensors.items():
+            outer_tag = node_order_tag[func_name]
+            for arg_idx, tiles in io_info.items():
+                for i, tile_ in enumerate(tiles):
+                    global_tile_to_func[tile_.dtensor_id].add_tensor_tile(
+                        tile_, f"{outer_tag}-{i}", func_name, arg_idx
+                    )
+                    global_io_ordering[tile_.dtensor_id] = (
+                        outer_tag
+                        if tile_.dtensor_id not in global_io_ordering
+                        else min(outer_tag, global_io_ordering[tile_.dtensor_id])
+                    )
+
+        if os.getenv("VERBOSE") == "1":
+            print("\n<<<<<<< global_tile_to_func >>>>>>>>")
+            for i in global_tile_to_func.keys():
+                global_tile_to_func[i].print()
+            print("\n<<<<<<< global_io_ordering >>>>>>>>")
+            print(global_io_ordering)
+
+        return global_io_ordering, global_tile_to_func
+
     @dataclass(frozen=True)
     class GlobalIODMA:
         dtensor: DTensor
@@ -562,8 +632,6 @@ class CodeGenerator:
 
     def map_global_io_to_physical_tiles(
         self,
-        global_io_ordering: dict[int, int],
-        global_tile_to_func: dict[int, OrderedDTensorTileGroup],
     ) -> tuple[
         list[SwitchNode],
         list[SwitchNode],
@@ -944,6 +1012,7 @@ class CodeGenerator:
                         offset_id += inc
                 idx += update
 
+        global_io_ordering, global_tile_to_func = self.analyze_global_io()
         # fixme: what if the Tensor is send multiple times?
         sorted_keys = sorted(global_io_ordering, key=lambda k: global_io_ordering[k])
         for key in sorted_keys:
@@ -1130,12 +1199,10 @@ class CodeGenerator:
         core_funcs: list[allo_func_d.FuncOp],
         external_funcs: list[allo_func_d.FuncOp],
         use_external_kernels: dict[str, bool],
-        global_io_ordering: dict[int, int],
-        global_tile_to_func: dict[int, OrderedDTensorTileGroup],
     ) -> aie_ir.Module:
         # mapping to physical/logical
         # TODO: co-designed mapping to different types of tiles
-        self.map_global_io_to_physical_tiles(global_io_ordering, global_tile_to_func)
+        self.map_global_io_to_physical_tiles()
 
         if os.getenv("VERBOSE") == "1":
             print("<<< function_port_map >>>")
@@ -1143,8 +1210,6 @@ class CodeGenerator:
                 print(f"{func_name}:")
                 for dtensor, port in port_map.items():
                     print(f"  {dtensor}: {port}")
-        # import sys
-        # sys.exit(0)
         self.bind_port_to_fifo()
         core_function_mapping = self.map_core_func_to_physical_tiles()
         # fixme: maybe better to resolve this using IR constructor
