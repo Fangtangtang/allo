@@ -449,7 +449,7 @@ class Size4D:
 
 def coalesce_memory_access(offset_map: dict[Offset4D, list[str]]):
     """
-    Coalesce memory tileaccess.
+    Coalesce memory tile access.
         The default way is sending each tiling separately.
         But we can try to coalesce some.
     """

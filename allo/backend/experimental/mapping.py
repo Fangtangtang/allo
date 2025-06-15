@@ -47,6 +47,12 @@ class PEInterface:
     pe: str
     interface_idx: int
 
+    def __hash__(self):
+        return hash((self.pe, self.interface_idx))
+
+    def __eq__(self, other):
+        return self.pe == other.pe and self.interface_idx == other.interface_idx
+
     def __str__(self):
         return f"{self.pe} ({self.interface_idx})"
 
@@ -232,6 +238,16 @@ class LiveDTensorTile:
         self.first_use = None
         self.last_use = None
         self.is_input: bool = is_input
+
+    def __hash__(self):
+        return hash((self.tile, self.first_use, self.last_use))
+
+    def __eq__(self, other):
+        return (
+            self.tile == other.tile
+            and self.first_use == other.first_use
+            and self.last_use == other.last_use
+        )
 
     def __str__(self):
         return f"{self.tile} [{self.first_use,self.last_use}] {self.is_input}"
@@ -582,6 +598,12 @@ class ComputationGraph:
     # ------------------------------------------------------------
     # Graph Information
     # ------------------------------------------------------------
+    def get_global_io(self) -> dict[str, dict[int, list[LiveDTensorTile]]]:
+        global_tile_io: dict[str, dict[int, list[LiveDTensorTile]]] = {}
+        for name, node in self.nodes.items():
+            global_tile_io[name] = node.global_interfaces
+        return global_tile_io
+
     def get_node_global_io(self) -> dict[str, dict[int, list[DTensorTile]]]:
         global_tile_io: dict[str, dict[int, list[DTensorTile]]] = {}
         for name, node in self.nodes.items():

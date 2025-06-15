@@ -4,7 +4,7 @@
 
 import re
 import os
-from collections import defaultdict
+from collections import defaultdict, Counter
 from dataclasses import dataclass
 import numpy as np
 
@@ -37,6 +37,7 @@ from .mapping import (
     OrderedDTensorTileGroup,
     PEInterface,
     DTensorTile,
+    LiveDTensorTile,
     DTensorTileGroup,
     ComputationGraph,
     FIFOManager,
@@ -1050,7 +1051,7 @@ class CodeGenerator:
 
     def map_data_transfer(self):
         dependencies = self.virtual_computation_graph.get_node_dependencies()
-        ordered_nodes: list[str] = [] # topological order
+        ordered_nodes: list[str] = []  # topological order
         node_order_tag: dict[str, int] = {}
         tag = 0
         while len(dependencies.items()) > 0:
@@ -1066,9 +1067,9 @@ class CodeGenerator:
                     if node in deps:
                         deps.remove(node)
             tag += 1
-    
+
         # func name -> (arg idx -> dtensor tiles using that arg)
-        global_tensors = self.virtual_computation_graph.get_node_global_io()
+        global_tensors = self.virtual_computation_graph.get_global_io()
         all_keys = self.global_inputs.keys() | self.global_outputs.keys()
         global_tile_to_func: dict[int, DTensorTileGroup] = {
             i: DTensorTileGroup("") for i in all_keys
@@ -1076,27 +1077,69 @@ class CodeGenerator:
         for func_name, io_info in global_tensors.items():
             for arg_idx, tiles in io_info.items():
                 for tile_ in tiles:
-                    global_tile_to_func[tile_.dtensor_id].add_tensor_tile(
-                        tile_, func_name, arg_idx
+                    global_tile_to_func[tile_.tile.dtensor_id].add_tensor_tile(
+                        tile_.tile, func_name, arg_idx
                     )
 
-        mapped_interface:dict[str,set[int]] = {}
+        class MulticastInterface:
+            def __init__(self, interface: PEInterface):
+                self.sample_interface: PEInterface = interface
+                self.interface_list: set[PEInterface] = {interface}
+
+            def _equal_data_transfer(self, other: "MulticastInterface"):
+                sample = Counter(
+                    global_tensors[self.sample_interface.pe][
+                        self.sample_interface.interface_idx
+                    ]
+                )
+                return sample == Counter(
+                    global_tensors[other.sample_interface.pe][
+                        other.sample_interface.interface_idx
+                    ]
+                )
+
+        mapped_interface: dict[str, set[int]] = {}
         for idx, dtensor_tile_group in global_tile_to_func.items():
-            unresolved_tile: dict[DTensorTile, list[PEInterface]] = {}
-            for dtensor_tile, interface_list in dtensor_tile_group.dtensor_tile_to_pe_interfaces.items():
-                unresolved_list: list[PEInterface] = [
-                    interface for interface in interface_list
-                    if interface.interface_idx not in mapped_interface[interface.pe]
+            unresolved_tile: dict[DTensorTile, list[MulticastInterface]] = {}
+            for (
+                dtensor_tile,
+                interface_list,
+            ) in dtensor_tile_group.dtensor_tile_to_pe_interfaces.items():
+                unresolved: set[PEInterface] = set()
+                for interface in interface_list:
+                    if interface.interface_idx not in mapped_interface[interface.pe]:
+                        unresolved.add(interface)
+                multicast_list: list[MulticastInterface] = [
+                    MulticastInterface(interface) for interface in unresolved
                 ]
-                if len(unresolved_list) > 0:
-                    unresolved_tile[dtensor_tile] = unresolved_list
-            dtensor = self.global_inputs[idx] if idx in self.global_inputs else self.global_outputs[idx]
-            offset_map: dict[Offset4D, list[PEInterface]] = defaultdict(list)
-            for dtensor_tile, interface_list in unresolved_tile.items():
-                offset_map[dtensor.offset_map[dtensor_tile.tensor_tile_label]].extend(interface_list)
-            # TODO: check other tiles using same interface to determine whether it is valid to coalesce
-            coalesced_access, fallback_flag = coalesce_memory_access(offset_map)
-            
+                changed = True
+                while changed:
+                    changed = False
+                    new_list = []
+                    used = [False] * len(multicast_list)
+                    for i in range(len(multicast_list)):
+                        if used[i]:
+                            continue
+                        current = multicast_list[i]
+                        for j in range(i + 1, len(multicast_list)):
+                            if used[j]:
+                                continue
+                            if current._equal_data_transfer(multicast_list[j]):
+                                current.interface_list.update(
+                                    multicast_list[j].interface_list
+                                )
+                                used[j] = True
+                                changed = True
+                        new_list.append(current)
+                    multicast_list = new_list
+                if len(multicast_list) > 0:
+                    unresolved_tile[dtensor_tile] = multicast_list
+            dtensor = (
+                self.global_inputs[idx]
+                if idx in self.global_inputs
+                else self.global_outputs[idx]
+            )
+            # TODO
 
     def bind_port_to_fifo(self):
         for dma_nodes in zip(self.used_shim_tiles, self.used_mem_tiles):
@@ -1136,7 +1179,7 @@ class CodeGenerator:
                     port.bind_fifo.name,
                     indices[0],
                 )
-    
+
     # ------------------------------------------------------------
     # Compute Tile
     # ------------------------------------------------------------
