@@ -44,6 +44,7 @@ from .mapping import (
     PEInterface,
     DTensorTile,
     LiveDTensorTile,
+    LiveDTensorTileGroup,
     DTensorTileGroup,
     ComputationGraph,
     FIFOManager,
@@ -1080,10 +1081,13 @@ class CodeGenerator:
             tag += 1
 
         # func name -> (arg idx -> dtensor tiles using that arg)
-        global_tensors = self.virtual_computation_graph.get_global_io()
-        all_keys = self.global_inputs.keys() | self.global_outputs.keys()
+        global_tensors: dict[str, LiveDTensorTileGroup] = (
+            self.virtual_computation_graph.get_global_io()
+        )
+        global_dtensor: dict[int, DTensor] = dict(self.global_inputs)
+        global_dtensor.update(self.global_outputs)
         global_tile_to_func: dict[int, DTensorTileGroup] = {
-            i: DTensorTileGroup("") for i in all_keys
+            i: DTensorTileGroup("") for i in global_dtensor.keys()
         }
         for func_name, io_info in global_tensors.items():
             for arg_idx, tiles in io_info.items():
@@ -1101,25 +1105,80 @@ class CodeGenerator:
                 self.sample_interface: PEInterface = interface
                 self.interface_list: set[PEInterface] = {interface}
 
-            def _equal_data_transfer(self, other: "MulticastInterface"):
-                sample = Counter(
-                    global_tensors[self.sample_interface.pe][
-                        self.sample_interface.interface_idx
-                    ]
-                )
-                return sample == Counter(
-                    global_tensors[other.sample_interface.pe][
-                        other.sample_interface.interface_idx
-                    ]
-                )
+            def _equal_data_transfer(self, other: "MulticastInterface") -> bool:
+                sample_global_tensors: LiveDTensorTileGroup = global_tensors[
+                    self.sample_interface.pe
+                ][self.sample_interface.interface_idx]
+                other_global_tensor: LiveDTensorTileGroup = global_tensors[
+                    other.sample_interface.pe
+                ][other.sample_interface.interface_idx]
+                if len(sample_global_tensors.dtensor_groups) == len(
+                    other_global_tensor.dtensor_groups
+                ):
+                    sample_value = next(
+                        iter(sample_global_tensors.dtensor_groups.values())
+                    )
+                    other_value = next(
+                        iter(other_global_tensor.dtensor_groups.values())
+                    )
+                    return sample_value == other_value
+                else:
+                    return False
+
+            def _contiguous_data_transfer(self, other: "MulticastInterface") -> bool:
+                for interface in self.interface_list:
+                    if interface in other.interface_list:
+                        # TODO: can be relaxed
+                        return False
+                sample_global_tensors: LiveDTensorTileGroup = global_tensors[
+                    self.sample_interface.pe
+                ][self.sample_interface.interface_idx]
+                other_global_tensor: LiveDTensorTileGroup = global_tensors[
+                    other.sample_interface.pe
+                ][other.sample_interface.interface_idx]
+                if len(sample_global_tensors.dtensor_groups) == len(
+                    other_global_tensor.dtensor_groups
+                ):
+                    sample_value = next(
+                        iter(sample_global_tensors.dtensor_groups.values())
+                    )
+                    other_value = next(
+                        iter(other_global_tensor.dtensor_groups.values())
+                    )
+                    if len(sample_value) == len(other_value):
+                        for sample_tile, other_tile in zip(sample_value, other_value):
+                            if (
+                                not sample_tile.tile.dtensor_id
+                                == other_tile.tile.dtensor_id
+                            ):
+                                return False
+                            dtensor = global_dtensor[sample_tile.tile.dtensor_id]
+                            sample_offset = dtensor.offset_map[
+                                sample_tile.tile.tensor_tile_label
+                            ]
+                            other_offset = dtensor.offset_map[
+                                other_tile.tile.tensor_tile_label
+                            ]
+                            if not sample_offset.check_next_offset(other_offset):
+                                return False
+                        return True
+                return False
+
+        class ContiguousInterface:
+            """
+            ContiguousInterface always acquire adjacent memory block
+            """
+
+            def __init__(self, interface: MulticastInterface):
+                self.interface_list: list[MulticastInterface] = [interface]
+
+            def is_contiguous(self, other: MulticastInterface):
+                sample = self.interface_list[-1]
+                return sample._contiguous_data_transfer(other)
 
         mapped_interface: dict[str, set[int]] = {}
         for idx, dtensor_tile_group in global_tile_to_func.items():
-            dtensor = (
-                self.global_inputs[idx]
-                if idx in self.global_inputs
-                else self.global_outputs[idx]
-            )
+            dtensor = global_dtensor[idx]
             # key: offset specific to dtensor
             unresolved_tile: dict[Offset4D, list[MulticastInterface]] = {}
             for (
@@ -1162,7 +1221,10 @@ class CodeGenerator:
                 coalesce_memory_access(unresolved_tile)
             )
             for start_offset in coalesced_access_pattern.keys():
-                coalesced_interfaces = coalesced_multicast_interfaces[start_offset]
+                coalesced_interfaces: list[MulticastInterface] = (
+                    coalesced_multicast_interfaces[start_offset]
+                )
+
             # TODO: check
 
     def bind_port_to_fifo(self):

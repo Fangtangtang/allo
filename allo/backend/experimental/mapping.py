@@ -256,6 +256,24 @@ class LiveDTensorTile:
         return self.__str__()
 
 
+class LiveDTensorTileGroup:
+    """
+    For each interface, classified by LiveDTensorTile token, follow the sequence of liveness range.
+    """
+
+    def __init__(self, live_dtensor_tiles: list[LiveDTensorTile]):
+        self.dtensor_groups: dict[str, list[LiveDTensorTile]] = defaultdict(list)
+        for dtensor_tile in live_dtensor_tiles:
+            self.dtensor_groups[dtensor_tile.token].append(dtensor_tile)
+        for dtensor_groups in self.dtensor_groups.values():
+            dtensor_groups.sort(key=lambda x: x.first_use)
+            idx = 0
+            while idx < len(dtensor_groups) - 1:
+                assert (
+                    dtensor_groups[idx].last_use <= dtensor_groups[idx].first_use
+                ), "liveness range overlapped."
+
+
 # ------------------------------------------------------------
 class NodeBase:
     node_list: list["NodeBase"] = []
@@ -598,10 +616,10 @@ class ComputationGraph:
     # ------------------------------------------------------------
     # Graph Information
     # ------------------------------------------------------------
-    def get_global_io(self) -> dict[str, dict[int, list[LiveDTensorTile]]]:
-        global_tile_io: dict[str, dict[int, list[LiveDTensorTile]]] = {}
+    def get_global_io(self) -> dict[str, dict[int, LiveDTensorTileGroup]]:
+        global_tile_io: dict[str, dict[int, LiveDTensorTileGroup]] = {}
         for name, node in self.nodes.items():
-            global_tile_io[name] = node.global_interfaces
+            global_tile_io[name] = LiveDTensorTileGroup(node.global_interfaces)
         return global_tile_io
 
     def get_node_global_io(self) -> dict[str, dict[int, list[DTensorTile]]]:

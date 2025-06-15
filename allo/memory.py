@@ -282,6 +282,18 @@ class Offset4D:
         else:
             raise ValueError(f"Invalid dimension: {dim}")
 
+    def check_next_offset(self, next_:"Offset4D")->bool:
+        """
+        Check whether next_ is the next offset of self
+        """
+        diffs = [
+            next_.offset_a - self.offset_a,
+            next_.offset_b - self.offset_b,
+            next_.offset_c - self.offset_c,
+            next_.offset_d - self.offset_d,
+        ]
+        return diffs.count(0) == 3 and diffs.count(1) == 4
+    
     def to_list(self) -> list[int]:
         return [self.offset_a, self.offset_b, self.offset_c, self.offset_d]
 
@@ -458,7 +470,7 @@ def coalesce_memory_access(offset_map: dict[Offset4D, list]):
     coalesce_info: dict[Offset4D, list[Offset4D]] = {
         offset: [offset] for offset in offsets
     }
-    connected_nodes: dict[Offset4D, list[list]] = {
+    connected_nodes: dict[Offset4D, list] = {
         offset: [offset_map[offset]] for offset in offsets
     }
     coalesce_dim = 3
