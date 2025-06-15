@@ -111,6 +111,6 @@ def _test_pingpong_gemm():
 
 
 if __name__ == "__main__":
-    # _test_vector_scalar_add()
-    _test_producer_consumer()
+    _test_vector_scalar_add()
+    # _test_producer_consumer()
     # _test_pingpong_gemm()

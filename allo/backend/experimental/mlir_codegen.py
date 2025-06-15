@@ -1062,6 +1062,31 @@ class CodeGenerator:
             print("########################################################\n\n")
 
     def map_data_transfer(self):
+
+        def partition(size: Size4D) -> Size4D:
+            """
+            Partition the dma task into multiple sub-tasks.
+            """
+            # find the first none-1 dim
+            for dim in range(4):
+                if size.get_dim_size(dim) > 1:
+                    break
+            if dim >= 3:
+                raise ValueError("Fail to partition")
+            size_part = size.copy()
+            partition_size = size.get_dim_size(dim) - 1
+            size_part.set_dim_size(dim, partition_size)
+            return size_part
+
+        # ------------------------------------------------------------
+        MAX_MEM_TILES = self.device_config["mem_tile_num"]
+        MAX_SHIM_TILES = self.device_config["shim_tile_num"]
+
+        self.exp_used_mem_tiles = []
+        self.exp_used_shim_tiles = []
+        self.exp_global_io_dma = defaultdict(list)
+        # ------------------------------------------------------------
+
         dependencies = self.virtual_computation_graph.get_node_dependencies()
         ordered_nodes: list[str] = []  # topological order
         node_order_tag: dict[str, int] = {}
@@ -1160,39 +1185,242 @@ class CodeGenerator:
                             other_offset = dtensor.offset_map[
                                 other_tile.tile.tensor_tile_label
                             ]
-                            if not sample_offset.check_next_offset(other_offset):
+                            if sample_offset.check_next_offset(other_offset) < 0:
                                 return False
                         return True
                 return False
+
+            def get_pes(self) -> list[str]:
+                ret: list[str] = []
+                for pe_tile in self.interface_list:
+                    ret.append(pe_tile.pe)
+                return ret
+
+            def __str__(self):
+                return ", ".join(str(interface) for interface in self.interface_list)
+
+            def __repr__(self):
+                return self.__str__()
 
         class ContiguousInterface:
             """
             ContiguousInterface always acquire adjacent memory block
             """
 
-            def __init__(self, interface: MulticastInterface):
+            def __init__(self, offset: Offset4D, interface: MulticastInterface):
+                self.current_offset: Offset4D = offset
+                self.total_size: Size4D = Size4D(1, 1, 1, 1)
                 self.interface_list: list[MulticastInterface] = [interface]
 
-            def is_contiguous(self, other: MulticastInterface):
+            def is_contiguous(self, other: MulticastInterface) -> bool:
                 sample = self.interface_list[-1]
                 print(self.interface_list, sample)
                 return sample._contiguous_data_transfer(other)
+
+            def append(self, offset: Offset4D, other: MulticastInterface):
+                self.interface_list.append(other)
+                inc_idx = self.current_offset.check_next_offset(offset)
+                assert inc_idx >= 0
+                self.current_offset = offset
+                self.total_size.inc_on_dim(inc_idx)
+
+            def __str__(self):
+                return ";\n".join(str(interface) for interface in self.interface_list)
+
+            def __repr__(self):
+                return self.__str__()
+
+        def assign_mem_tile(
+            dtype: str,
+            interface_list: list[MulticastInterface],
+            is_input: bool,
+            coalesced_size: Size4D,
+            tile_size: Size4D,
+            tile_shape: list[int],
+        ):
+            """
+            fixme: maybe too aie-specific?
+            Assign a memory tile to the given dtensor tiles.
+            If no memory tile is available, return None.
+            Else, return the assigned memory tile, the port id to shim, and the port ids to compute.
+            """
+            send_need = len(interface_list) if is_input else 1
+            recv_need = (
+                1
+                if is_input
+                else sum(len(group.interface_list) for group in interface_list)
+            )
+            send_shape: list[int] = tile_shape if is_input else coalesced_size.to_list()
+            recv_shape: list[int] = coalesced_size.to_list() if is_input else tile_shape
+            tile_total_size = tile_size.get_total_size()
+            if os.getenv("VERBOSE") == "1":
+                print(f"send_need: {send_need}, recv_need: {recv_need}")
+            assigned_mem_tile = None
+            # Attempt to use a new memory tile
+            if (
+                len(self.exp_used_mem_tiles) < MAX_MEM_TILES
+                and send_need <= Config.MEM_MAX_SEND
+                and recv_need <= Config.MEM_MAX_RECV
+            ):
+                assigned_mem_tile = SwitchNode(
+                    name=f"{len(self.exp_used_mem_tiles)}_mem_tile",
+                    send_port_num=Config.MEM_MAX_SEND,
+                    recv_port_num=Config.MEM_MAX_RECV,
+                )
+                self.exp_used_mem_tiles.append(assigned_mem_tile)
+            else:
+                # Attempt to use an existing memory tile
+                for mem_tile in self.exp_used_mem_tiles:
+                    if (
+                        len(mem_tile.send_ports) + send_need <= Config.MEM_MAX_SEND
+                        and len(mem_tile.recv_ports) + recv_need <= Config.MEM_MAX_RECV
+                    ):
+                        assigned_mem_tile = mem_tile
+                        break
+            # Use new ports
+            if assigned_mem_tile is not None:
+                send_ports, recv_ports = [], []
+                for i in range(send_need):
+                    port = SwitchNode.Port(
+                        id=len(assigned_mem_tile.send_ports),
+                        data_shape=send_shape,
+                        dtype=dtype,
+                        connected_nodes=interface_list[i].get_pes() if is_input else [],
+                    )
+                    assigned_mem_tile.send_ports.append(port)
+                    send_ports.append(port.id)
+                if is_input:
+                    for i in range(recv_need):
+                        port = SwitchNode.Port(
+                            id=len(assigned_mem_tile.recv_ports),
+                            data_shape=recv_shape,
+                            dtype=dtype,
+                            connected_nodes=[],
+                        )
+                        assigned_mem_tile.recv_ports.append(port)
+                        recv_ports.append(port.id)
+                else:
+                    for multicast_interface in interface_list:
+                        for pe_interface in multicast_interface.interface_list:
+                            port = SwitchNode.Port(
+                                id=len(assigned_mem_tile.recv_ports),
+                                data_shape=recv_shape,
+                                dtype=dtype,
+                                connected_nodes=[pe_interface.pe],
+                            )
+                            assigned_mem_tile.recv_ports.append(port)
+                            recv_ports.append(port.id)
+                assigned_mem_tile.intra_connect.append(
+                    SwitchNode.IntraConnect(
+                        send_ports,
+                        recv_ports,
+                        list(
+                            range(
+                                0,
+                                max(send_need, recv_need) * tile_total_size,
+                                tile_total_size,
+                            )
+                        ),
+                    )
+                )
+                if os.getenv("VERBOSE") == "1":
+                    print("\nassigned_mem_tile: ", end="")
+                    assigned_mem_tile.print()
+                return (
+                    assigned_mem_tile,
+                    recv_ports[0] if is_input else send_ports[0],
+                    send_ports if is_input else recv_ports,
+                )
+            # TODO: port reuse
+            return None, -1, []
+
+        def assign_shim_tile(
+            mem_tile: SwitchNode,
+            port_id: int,
+            is_input: bool,
+        ):
+            port: SwitchNode.Port = (
+                mem_tile.recv_ports[port_id]
+                if is_input
+                else mem_tile.send_ports[port_id]
+            )
+            assigned_shim_tile = None
+            # Attempt to use a new shim tile
+            if len(self.exp_used_shim_tiles) < MAX_SHIM_TILES:
+                assigned_shim_tile = SwitchNode(
+                    name=f"{len(self.exp_used_shim_tiles)}_shim_tile",
+                    send_port_num=Config.SHIM_MAX_SEND,
+                    recv_port_num=Config.SHIM_MAX_RECV,
+                )
+                self.exp_used_shim_tiles.append(assigned_shim_tile)
+            else:
+                for shim_tile in self.exp_used_shim_tiles:
+                    if (
+                        len(shim_tile.send_ports) + 1 <= Config.SHIM_MAX_SEND
+                        and len(shim_tile.recv_ports) + 1 <= Config.SHIM_MAX_RECV
+                    ):
+                        assigned_shim_tile = shim_tile
+                        break
+            # Use new ports
+            if assigned_shim_tile is not None:
+                connected_mem = [mem_tile.name]
+                send_port = SwitchNode.Port(
+                    id=len(assigned_shim_tile.send_ports),
+                    data_shape=port.data_shape,
+                    dtype=port.dtype,
+                    connected_nodes=connected_mem if is_input else [],
+                )
+                assigned_shim_tile.send_ports.append(send_port)
+                recv_port = SwitchNode.Port(
+                    id=len(assigned_shim_tile.recv_ports),
+                    data_shape=port.data_shape,
+                    dtype=port.dtype,
+                    connected_nodes=[] if is_input else connected_mem,
+                )
+                assigned_shim_tile.recv_ports.append(recv_port)
+                port.connected_nodes.append(assigned_shim_tile.name)
+                assigned_shim_tile.intra_connect.append(
+                    SwitchNode.IntraConnect(
+                        send_port_ids=[send_port.id],
+                        recv_port_ids=[recv_port.id],
+                        offsets=[0],
+                    )
+                )
+                if os.getenv("VERBOSE") == "1":
+                    print("\nassigned_shim_tile: ", end="")
+                    assigned_shim_tile.print()
+                return assigned_shim_tile, recv_port.id if is_input else send_port.id
+                # TODO: port reuse
+            return None, -1
 
         mapped_interface: dict[str, set[int]] = {
             i: set() for i in global_tensors.keys()
         }
         for idx, dtensor_tile_group in global_tile_to_func.items():
             dtensor = global_dtensor[idx]
+            # transfer tile meta data
+            is_input = idx in self.global_inputs
+            tile_dtype = dtensor.dtype
+            tile_param_type = dtensor.type_as_param
+            tile_shape = dtensor.size
+            for i in dtensor.shared_dims:
+                tile_shape[i] = 1
+            tile_size = Size4D.from_list(tile_shape)
             # key: offset specific to dtensor
             unresolved_tile: dict[Offset4D, list[MulticastInterface]] = {}
+            in_process: set[PEInterface] = set()
             for (
                 dtensor_tile,
                 interface_list,
             ) in dtensor_tile_group.dtensor_tile_to_pe_interfaces.items():
                 unresolved: set[PEInterface] = set()
                 for interface in interface_list:
-                    if interface.interface_idx not in mapped_interface[interface.pe]:
+                    if (
+                        interface.interface_idx not in mapped_interface[interface.pe]
+                        and interface not in in_process
+                    ):
                         unresolved.add(interface)
+                        in_process.add(interface)
                 multicast_list: list[MulticastInterface] = [
                     MulticastInterface(interface) for interface in unresolved
                 ]
@@ -1234,7 +1462,7 @@ class CodeGenerator:
                 while left < len(coalesced_interfaces):
                     assert len(coalesced_interfaces[left]) == 1, "TO BE IMPLEMETENED"
                     contiguous: ContiguousInterface = ContiguousInterface(
-                        coalesced_interfaces[left][0]
+                        coalesce_info[start_offset][left], coalesced_interfaces[left][0]
                     )
                     right = left + 1
                     while right < len(
@@ -1243,10 +1471,71 @@ class CodeGenerator:
                         assert (
                             len(coalesced_interfaces[right]) == 1
                         ), "TO BE IMPLEMETENED"
-                        contiguous.interface_list.append(coalesced_interfaces[right][0])
+                        contiguous.append(
+                            coalesce_info[start_offset][right],
+                            coalesced_interfaces[right][0],
+                        )
                         right = right + 1
                     contiguous_interfaces.append(contiguous)
                     left = right
+            print("\n<<<<< contiguous_interfaces >>>>>")
+            for contiguous_interface in contiguous_interfaces:
+                print(contiguous_interface)
+            print("===== contiguous_interfaces =====")
+            for contiguous_interface in contiguous_interfaces:
+                interface_list: list[MulticastInterface] = (
+                    contiguous_interface.interface_list
+                )
+                size = contiguous_interface.total_size
+                while size.get_total_size() != 0:
+                    coalesced_size = Size4D.coalesce(size, tile_size)
+                    assigned_mem_tile, port_id, ports_to_compute = assign_mem_tile(
+                        tile_dtype,
+                        interface_list,
+                        is_input,
+                        coalesced_size,
+                        tile_size,
+                        tile_param_type,
+                    )
+                    if assigned_mem_tile is not None:
+                        assigned_shim_tile, shim_port_id = assign_shim_tile(
+                            assigned_mem_tile,
+                            port_id,
+                            is_input,
+                        )
+                        # if assigned_shim_tile is None:
+                        #     raise ValueError("Fail to assign shim tile")
+                        break
+                    size_cp = size.copy()
+                    # keep partitioning until success
+                    while True:
+                        partitioned_size = partition(size_cp)
+                        coalesced_size = Size4D.coalesce(partitioned_size, tile_size)
+                        partitioned_connected_nodes = interface_list[
+                            : partitioned_size.get_total_size()
+                        ]
+                        assigned_mem_tile, port_id, ports_to_compute = assign_mem_tile(
+                            tile_dtype,
+                            partitioned_connected_nodes,
+                            is_input,
+                            coalesced_size,
+                            tile_size,
+                            tile_param_type,
+                        )
+                        if assigned_mem_tile is not None:
+                            assigned_shim_tile, shim_port_id = assign_shim_tile(
+                                assigned_mem_tile,
+                                port_id,
+                                is_input,
+                            )
+                            # if assigned_shim_tile is None:
+                            #     raise ValueError("Fail to assign shim tile")
+                            break
+                        size_cp = partitioned_size
+                    size = Size4D.subtract(size, partitioned_size)
+                    inc = partitioned_size.get_total_size()
+                    interface_list = interface_list[inc:]
+                # TODO: assign 'path' and specify transferred data
 
     def bind_port_to_fifo(self):
         for dma_nodes in zip(self.used_shim_tiles, self.used_mem_tiles):

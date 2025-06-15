@@ -214,10 +214,10 @@ def _test_summa():
 
 
 if __name__ == "__main__":
-    _test_vector_scalar_add()
+    # _test_vector_scalar_add()
     # test_producer_consumer()
     # _test_summa()
-    # _test_summa_2x2()
+    _test_summa_2x2()
     # _test_tensor_parallelism()
     # _test_gemm_1D()
     # _test_gemm_2D()
