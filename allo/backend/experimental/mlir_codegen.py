@@ -28,7 +28,13 @@ from ..._mlir.ir import InsertionPoint, MemRefType, IntegerType
 
 from ..utils import format_str
 from ..._mlir.dialects import func as allo_func_d
-from ...memory import DTensor, Offset4D, Size4D, coalesce_memory_access
+from ...memory import (
+    DTensor,
+    Offset4D,
+    Size4D,
+    coalesce_memory_access,
+    format_memory_access,
+)
 
 from .utils import get_element_type, device_config_map, Argument, Stream, Config
 from ..aie import map_kernels_to_device_mesh
@@ -875,7 +881,12 @@ class CodeGenerator:
                             ].append(pe_interface.pe)
 
                     update += 1
-                coalesced_access, fallback_flag = coalesce_memory_access(offset_map)
+                access, coalesce_info, connected_nodes = coalesce_memory_access(
+                    offset_map
+                )
+                coalesced_access, fallback_flag = format_memory_access(
+                    access, coalesce_info, connected_nodes
+                )
 
                 if os.getenv("VERBOSE") == "1":
                     print()
@@ -1082,6 +1093,10 @@ class CodeGenerator:
                     )
 
         class MulticastInterface:
+            """
+            MulticastInterface use the same port from source tile
+            """
+
             def __init__(self, interface: PEInterface):
                 self.sample_interface: PEInterface = interface
                 self.interface_list: set[PEInterface] = {interface}
@@ -1100,7 +1115,13 @@ class CodeGenerator:
 
         mapped_interface: dict[str, set[int]] = {}
         for idx, dtensor_tile_group in global_tile_to_func.items():
-            unresolved_tile: dict[DTensorTile, list[MulticastInterface]] = {}
+            dtensor = (
+                self.global_inputs[idx]
+                if idx in self.global_inputs
+                else self.global_outputs[idx]
+            )
+            # key: offset specific to dtensor
+            unresolved_tile: dict[Offset4D, list[MulticastInterface]] = {}
             for (
                 dtensor_tile,
                 interface_list,
@@ -1133,13 +1154,16 @@ class CodeGenerator:
                         new_list.append(current)
                     multicast_list = new_list
                 if len(multicast_list) > 0:
-                    unresolved_tile[dtensor_tile] = multicast_list
-            dtensor = (
-                self.global_inputs[idx]
-                if idx in self.global_inputs
-                else self.global_outputs[idx]
+                    unresolved_tile[
+                        dtensor.offset_map[dtensor_tile.tensor_tile_label]
+                    ] = multicast_list
+            # coalesced access pattern on dtensor will give a hint
+            coalesced_access_pattern, coalesce_info, coalesced_multicast_interfaces = (
+                coalesce_memory_access(unresolved_tile)
             )
-            # TODO
+            for start_offset in coalesced_access_pattern.keys():
+                coalesced_interfaces = coalesced_multicast_interfaces[start_offset]
+            # TODO: check
 
     def bind_port_to_fifo(self):
         for dma_nodes in zip(self.used_shim_tiles, self.used_mem_tiles):

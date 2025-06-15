@@ -447,7 +447,7 @@ class Size4D:
         return self.__str__()
 
 
-def coalesce_memory_access(offset_map: dict[Offset4D, list[str]]):
+def coalesce_memory_access(offset_map: dict[Offset4D, list]):
     """
     Coalesce memory tile access.
         The default way is sending each tiling separately.
@@ -458,7 +458,7 @@ def coalesce_memory_access(offset_map: dict[Offset4D, list[str]]):
     coalesce_info: dict[Offset4D, list[Offset4D]] = {
         offset: [offset] for offset in offsets
     }
-    connected_nodes: dict[Offset4D, list[list[str]]] = {
+    connected_nodes: dict[Offset4D, list[list]] = {
         offset: [offset_map[offset]] for offset in offsets
     }
     coalesce_dim = 3
@@ -488,7 +488,7 @@ def coalesce_memory_access(offset_map: dict[Offset4D, list[str]]):
             coalesce_info.pop(offset)
             connected_nodes.pop(offset)
         coalesce_dim -= 1
-    return format_memory_access(access, coalesce_info, connected_nodes)
+    return access, coalesce_info, connected_nodes
 
 
 @dataclass(frozen=True)
