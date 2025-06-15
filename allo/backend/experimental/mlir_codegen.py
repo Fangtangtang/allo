@@ -35,6 +35,8 @@ from ..aie import map_kernels_to_device_mesh
 from .mapping import (
     SwitchNode,
     OrderedDTensorTileGroup,
+    PEInterface,
+    DTensorTile,
     DTensorTileGroup,
     ComputationGraph,
     FIFOManager,
@@ -876,7 +878,7 @@ class CodeGenerator:
 
                 if os.getenv("VERBOSE") == "1":
                     print()
-                    print("tag:", tag, "update:", update, fallback_flag)
+                    print("tag:", tag, "update:", update)
                     print(offset_map)
                     print("access:", coalesced_access)
                 offset_id = 0
@@ -1046,6 +1048,56 @@ class CodeGenerator:
                     print(f"    {dma}")
             print("########################################################\n\n")
 
+    def map_data_transfer(self):
+        dependencies = self.virtual_computation_graph.get_node_dependencies()
+        ordered_nodes: list[str] = [] # topological order
+        node_order_tag: dict[str, int] = {}
+        tag = 0
+        while len(dependencies.items()) > 0:
+            tagged_nodes = []
+            for node, deps in dependencies.items():
+                if len(deps) == 0:
+                    node_order_tag[node] = tag
+                    tagged_nodes.append(node)
+            ordered_nodes.extend(tagged_nodes)
+            for node in tagged_nodes:
+                del dependencies[node]
+                for _, deps in dependencies.items():
+                    if node in deps:
+                        deps.remove(node)
+            tag += 1
+    
+        # func name -> (arg idx -> dtensor tiles using that arg)
+        global_tensors = self.virtual_computation_graph.get_node_global_io()
+        all_keys = self.global_inputs.keys() | self.global_outputs.keys()
+        global_tile_to_func: dict[int, DTensorTileGroup] = {
+            i: DTensorTileGroup("") for i in all_keys
+        }
+        for func_name, io_info in global_tensors.items():
+            for arg_idx, tiles in io_info.items():
+                for tile_ in tiles:
+                    global_tile_to_func[tile_.dtensor_id].add_tensor_tile(
+                        tile_, func_name, arg_idx
+                    )
+
+        mapped_interface:dict[str,set[int]] = {}
+        for idx, dtensor_tile_group in global_tile_to_func.items():
+            unresolved_tile: dict[DTensorTile, list[PEInterface]] = {}
+            for dtensor_tile, interface_list in dtensor_tile_group.dtensor_tile_to_pe_interfaces.items():
+                unresolved_list: list[PEInterface] = [
+                    interface for interface in interface_list
+                    if interface.interface_idx not in mapped_interface[interface.pe]
+                ]
+                if len(unresolved_list) > 0:
+                    unresolved_tile[dtensor_tile] = unresolved_list
+            dtensor = self.global_inputs[idx] if idx in self.global_inputs else self.global_outputs[idx]
+            offset_map: dict[Offset4D, list[PEInterface]] = defaultdict(list)
+            for dtensor_tile, interface_list in unresolved_tile.items():
+                offset_map[dtensor.offset_map[dtensor_tile.tensor_tile_label]].extend(interface_list)
+            # TODO: check other tiles using same interface to determine whether it is valid to coalesce
+            coalesced_access, fallback_flag = coalesce_memory_access(offset_map)
+            
+
     def bind_port_to_fifo(self):
         for dma_nodes in zip(self.used_shim_tiles, self.used_mem_tiles):
             for dma_node in dma_nodes:
@@ -1084,6 +1136,10 @@ class CodeGenerator:
                     port.bind_fifo.name,
                     indices[0],
                 )
+    
+    # ------------------------------------------------------------
+    # Compute Tile
+    # ------------------------------------------------------------
 
     def map_core_func_to_physical_tiles(self) -> dict[str, tuple[int, int]]:
         """

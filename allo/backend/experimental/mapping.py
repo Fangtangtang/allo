@@ -258,6 +258,7 @@ class NodeBase:
         self.repeat: int = repeat
         self.op_tag: str = tag
         # arg_idx -> tiling using arg as interface
+        # TODO: interface reuse
         self.global_interfaces: dict[int, list[LiveDTensorTile]] = defaultdict(list)
         self.input_streams: list[Stream] = []
         self.output_streams: list[Stream] = []
