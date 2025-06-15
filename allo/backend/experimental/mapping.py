@@ -619,7 +619,10 @@ class ComputationGraph:
     def get_global_io(self) -> dict[str, dict[int, LiveDTensorTileGroup]]:
         global_tile_io: dict[str, dict[int, LiveDTensorTileGroup]] = {}
         for name, node in self.nodes.items():
-            global_tile_io[name] = LiveDTensorTileGroup(node.global_interfaces)
+            dict_: dict[int, LiveDTensorTileGroup] = {}
+            for idx, interfaces in node.global_interfaces.items():
+                dict_[idx] = LiveDTensorTileGroup(interfaces)
+            global_tile_io[name] = dict_
         return global_tile_io
 
     def get_node_global_io(self) -> dict[str, dict[int, list[DTensorTile]]]:

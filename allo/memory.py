@@ -470,7 +470,7 @@ def coalesce_memory_access(offset_map: dict[Offset4D, list]):
     coalesce_info: dict[Offset4D, list[Offset4D]] = {
         offset: [offset] for offset in offsets
     }
-    connected_nodes: dict[Offset4D, list] = {
+    connected_nodes: dict[Offset4D, list[list]] = {
         offset: [offset_map[offset]] for offset in offsets
     }
     coalesce_dim = 3

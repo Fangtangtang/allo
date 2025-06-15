@@ -1081,7 +1081,7 @@ class CodeGenerator:
             tag += 1
 
         # func name -> (arg idx -> dtensor tiles using that arg)
-        global_tensors: dict[str, LiveDTensorTileGroup] = (
+        global_tensors: dict[str, dict[int, LiveDTensorTileGroup]] = (
             self.virtual_computation_graph.get_global_io()
         )
         global_dtensor: dict[int, DTensor] = dict(self.global_inputs)
@@ -1090,11 +1090,12 @@ class CodeGenerator:
             i: DTensorTileGroup("") for i in global_dtensor.keys()
         }
         for func_name, io_info in global_tensors.items():
-            for arg_idx, tiles in io_info.items():
-                for tile_ in tiles:
-                    global_tile_to_func[tile_.tile.dtensor_id].add_tensor_tile(
-                        tile_.tile, func_name, arg_idx
-                    )
+            for arg_idx, live_dtensor_tiles in io_info.items():
+                for tiles in live_dtensor_tiles.dtensor_groups.values():
+                    for tile_ in tiles:
+                        global_tile_to_func[tile_.tile.dtensor_id].add_tensor_tile(
+                            tile_.tile, func_name, arg_idx
+                        )
 
         class MulticastInterface:
             """
@@ -1174,9 +1175,12 @@ class CodeGenerator:
 
             def is_contiguous(self, other: MulticastInterface):
                 sample = self.interface_list[-1]
+                print(self.interface_list, sample)
                 return sample._contiguous_data_transfer(other)
 
-        mapped_interface: dict[str, set[int]] = {}
+        mapped_interface: dict[str, set[int]] = {
+            i: set() for i in global_tensors.keys()
+        }
         for idx, dtensor_tile_group in global_tile_to_func.items():
             dtensor = global_dtensor[idx]
             # key: offset specific to dtensor
@@ -1220,12 +1224,29 @@ class CodeGenerator:
             coalesced_access_pattern, coalesce_info, coalesced_multicast_interfaces = (
                 coalesce_memory_access(unresolved_tile)
             )
+            print(coalesced_multicast_interfaces)
+            contiguous_interfaces: list[ContiguousInterface] = []
             for start_offset in coalesced_access_pattern.keys():
-                coalesced_interfaces: list[MulticastInterface] = (
+                coalesced_interfaces: list[list[MulticastInterface]] = (
                     coalesced_multicast_interfaces[start_offset]
                 )
-
-            # TODO: check
+                left = 0
+                while left < len(coalesced_interfaces):
+                    assert len(coalesced_interfaces[left]) == 1, "TO BE IMPLEMETENED"
+                    contiguous: ContiguousInterface = ContiguousInterface(
+                        coalesced_interfaces[left][0]
+                    )
+                    right = left + 1
+                    while right < len(
+                        coalesced_interfaces
+                    ) and contiguous.is_contiguous(coalesced_interfaces[right][0]):
+                        assert (
+                            len(coalesced_interfaces[right]) == 1
+                        ), "TO BE IMPLEMETENED"
+                        contiguous.interface_list.append(coalesced_interfaces[right][0])
+                        right = right + 1
+                    contiguous_interfaces.append(contiguous)
+                    left = right
 
     def bind_port_to_fifo(self):
         for dma_nodes in zip(self.used_shim_tiles, self.used_mem_tiles):
@@ -1387,6 +1408,7 @@ class CodeGenerator:
     ) -> aie_ir.Module:
         # mapping to physical/logical
         # TODO: co-designed mapping to different types of tiles
+        self.map_data_transfer()
         self.map_global_io_to_physical_tiles()
 
         if os.getenv("VERBOSE") == "1":
