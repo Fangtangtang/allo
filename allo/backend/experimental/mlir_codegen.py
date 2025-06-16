@@ -1273,9 +1273,6 @@ class CodeGenerator:
             If no memory tile is available, return None.
             Else, return the assigned memory tile, the port id to shim, and the port ids to compute.
             """
-            print("## assign_mem_tile")
-            print(interface_list)
-            print("--## assign_mem_tile")
             send_need = len(interface_list) if is_input else 1
             recv_need = (
                 1
@@ -1743,6 +1740,16 @@ class CodeGenerator:
     # ############################################################
     # AIE Code Generation
     # ############################################################
+    def aie_codegen_nightly(
+        self,
+        core_funcs: list[allo_func_d.FuncOp],
+        external_funcs: list[allo_func_d.FuncOp],
+        use_external_kernels: dict[str, bool],
+    ) -> aie_ir.Module:
+        # mapping to physical/logical
+        # TODO: co-designed mapping to different types of tiles
+        self.map_data_transfer()
+        
     def aie_codegen_experimental(
         self,
         core_funcs: list[allo_func_d.FuncOp],

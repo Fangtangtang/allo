@@ -262,10 +262,6 @@ class AIE_MLIRModule:
             os.path.join(self.project_dir, "top.mlir"), "w", encoding="utf-8"
         ) as f:
             f.write(str(self.aie_module))
-        # fixme:
-        import sys
-
-        sys.exit(0)
         if len(injected_kernels) > 0:
             kernel_code = codegen_external_kernels(injected_kernels, include_src)
             with open(
