@@ -843,7 +843,7 @@ class CodeGenerator:
                     self.function_port_map[node][dtensor] = port
 
             tile_dtype = dtensor.dtype
-            tile_shape = dtensor.size
+            tile_shape = list(dtensor.size)
             for i in dtensor.shared_dims:
                 tile_shape[i] = 1
             tile_size = Size4D.from_list(tile_shape)
@@ -1082,8 +1082,8 @@ class CodeGenerator:
         MAX_MEM_TILES = self.device_config["mem_tile_num"]
         MAX_SHIM_TILES = self.device_config["shim_tile_num"]
 
-        self.exp_used_mem_tiles = []
-        self.exp_used_shim_tiles = []
+        self.exp_used_mem_tiles: list[SwitchNode] = []
+        self.exp_used_shim_tiles: list[SwitchNode] = []
         self.exp_global_io_dma = defaultdict(list)
         # ------------------------------------------------------------
 
@@ -1151,11 +1151,13 @@ class CodeGenerator:
                 else:
                     return False
 
-            def _contiguous_data_transfer(self, other: "MulticastInterface") -> bool:
+            def _contiguous_data_transfer(
+                self, other: "MulticastInterface", current_size: Size4D
+            ) -> Size4D:
                 for interface in self.interface_list:
                     if interface in other.interface_list:
                         # TODO: can be relaxed
-                        return False
+                        return None
                 sample_global_tensors: LiveDTensorTileGroup = global_tensors[
                     self.sample_interface.pe
                 ][self.sample_interface.interface_idx]
@@ -1172,23 +1174,48 @@ class CodeGenerator:
                         iter(other_global_tensor.dtensor_groups.values())
                     )
                     if len(sample_value) == len(other_value):
+                        shape: list[int] = None
                         for sample_tile, other_tile in zip(sample_value, other_value):
                             if (
                                 not sample_tile.tile.dtensor_id
                                 == other_tile.tile.dtensor_id
                             ):
-                                return False
+                                return None
                             dtensor = global_dtensor[sample_tile.tile.dtensor_id]
+                            outer_shape = [1, 1, 1, 1]
+                            for i in dtensor.shared_dims:
+                                outer_shape[i] = dtensor.size[i]
+                            if shape is not None and shape != outer_shape:
+                                return None
+                            else:
+                                shape = outer_shape
+                            outer_stride = [1] * 4
+                            for i in reversed(range(3)):
+                                outer_stride[i] = (
+                                    outer_stride[i + 1] * outer_shape[i + 1]
+                                )
                             sample_offset = dtensor.offset_map[
                                 sample_tile.tile.tensor_tile_label
-                            ]
+                            ].to_list()
+                            sample_flattened_idx = sum(
+                                i * s for i, s in zip(sample_offset, outer_stride)
+                            )
                             other_offset = dtensor.offset_map[
                                 other_tile.tile.tensor_tile_label
-                            ]
-                            if sample_offset.check_next_offset(other_offset) < 0:
-                                return False
-                        return True
-                return False
+                            ].to_list()
+                            other_flattened_idx = sum(
+                                i * s for i, s in zip(other_offset, outer_stride)
+                            )
+                            if other_flattened_idx - sample_flattened_idx != 1:
+                                return None
+                        new_size_list = current_size.to_list()
+                        offset_1, offset_2 = sample_offset, other_offset
+                        for i in range(4):
+                            new_size_list[i] = (
+                                new_size_list[i] + offset_2[i] - offset_1[i]
+                            )
+                        return Size4D.from_list(new_size_list)
+                return None
 
             def get_pes(self) -> list[str]:
                 ret: list[str] = []
@@ -1197,7 +1224,11 @@ class CodeGenerator:
                 return ret
 
             def __str__(self):
-                return ", ".join(str(interface) for interface in self.interface_list)
+                return (
+                    "["
+                    + ", ".join(str(interface) for interface in self.interface_list)
+                    + "]"
+                )
 
             def __repr__(self):
                 return self.__str__()
@@ -1212,20 +1243,18 @@ class CodeGenerator:
                 self.total_size: Size4D = Size4D(1, 1, 1, 1)
                 self.interface_list: list[MulticastInterface] = [interface]
 
-            def is_contiguous(self, other: MulticastInterface) -> bool:
+            def append(self, offset: Offset4D, other: MulticastInterface) -> bool:
                 sample = self.interface_list[-1]
-                print(self.interface_list, sample)
-                return sample._contiguous_data_transfer(other)
-
-            def append(self, offset: Offset4D, other: MulticastInterface):
+                updated_size = sample._contiguous_data_transfer(other, self.total_size)
+                if updated_size is None:
+                    return False
                 self.interface_list.append(other)
-                inc_idx = self.current_offset.check_next_offset(offset)
-                assert inc_idx >= 0
                 self.current_offset = offset
-                self.total_size.inc_on_dim(inc_idx)
+                self.total_size = updated_size
+                return True
 
             def __str__(self):
-                return ";\n".join(str(interface) for interface in self.interface_list)
+                return "; ".join(str(interface) for interface in self.interface_list)
 
             def __repr__(self):
                 return self.__str__()
@@ -1244,6 +1273,9 @@ class CodeGenerator:
             If no memory tile is available, return None.
             Else, return the assigned memory tile, the port id to shim, and the port ids to compute.
             """
+            print("## assign_mem_tile")
+            print(interface_list)
+            print("--## assign_mem_tile")
             send_need = len(interface_list) if is_input else 1
             recv_need = (
                 1
@@ -1402,7 +1434,7 @@ class CodeGenerator:
             is_input = idx in self.global_inputs
             tile_dtype = dtensor.dtype
             tile_param_type = dtensor.type_as_param
-            tile_shape = dtensor.size
+            tile_shape = list(dtensor.size)
             for i in dtensor.shared_dims:
                 tile_shape[i] = 1
             tile_size = Size4D.from_list(tile_shape)
@@ -1452,7 +1484,9 @@ class CodeGenerator:
             coalesced_access_pattern, coalesce_info, coalesced_multicast_interfaces = (
                 coalesce_memory_access(unresolved_tile)
             )
+            print("<<<<< coalesced_multicast_interfaces >>>>>")
             print(coalesced_multicast_interfaces)
+            print("===== coalesced_multicast_interfaces =====")
             contiguous_interfaces: list[ContiguousInterface] = []
             for start_offset in coalesced_access_pattern.keys():
                 coalesced_interfaces: list[list[MulticastInterface]] = (
@@ -1465,23 +1499,23 @@ class CodeGenerator:
                         coalesce_info[start_offset][left], coalesced_interfaces[left][0]
                     )
                     right = left + 1
-                    while right < len(
-                        coalesced_interfaces
-                    ) and contiguous.is_contiguous(coalesced_interfaces[right][0]):
+                    while right < len(coalesced_interfaces):
                         assert (
                             len(coalesced_interfaces[right]) == 1
                         ), "TO BE IMPLEMETENED"
-                        contiguous.append(
+                        if contiguous.append(
                             coalesce_info[start_offset][right],
                             coalesced_interfaces[right][0],
-                        )
-                        right = right + 1
+                        ):
+                            right = right + 1
+                        else:
+                            break
                     contiguous_interfaces.append(contiguous)
                     left = right
             print("\n<<<<< contiguous_interfaces >>>>>")
             for contiguous_interface in contiguous_interfaces:
                 print(contiguous_interface)
-            print("===== contiguous_interfaces =====")
+            print("===== contiguous_interfaces =====\n")
             for contiguous_interface in contiguous_interfaces:
                 interface_list: list[MulticastInterface] = (
                     contiguous_interface.interface_list
@@ -1503,20 +1537,30 @@ class CodeGenerator:
                             port_id,
                             is_input,
                         )
-                        # if assigned_shim_tile is None:
-                        #     raise ValueError("Fail to assign shim tile")
+                        if assigned_shim_tile is None:
+                            print("============")
+                            print(interface_list)
+                            print("====++++====")
+                            for shim_tile in self.exp_used_shim_tiles:
+                                shim_tile.print()
+                            raise ValueError("Fail to assign shim tile")
+                        for interface in interface_list:
+                            for pe_interface in interface.interface_list:
+                                mapped_interface[pe_interface.pe].add(
+                                    pe_interface.interface_idx
+                                )
                         break
                     size_cp = size.copy()
                     # keep partitioning until success
                     while True:
                         partitioned_size = partition(size_cp)
                         coalesced_size = Size4D.coalesce(partitioned_size, tile_size)
-                        partitioned_connected_nodes = interface_list[
+                        partitioned_interface_list = interface_list[
                             : partitioned_size.get_total_size()
                         ]
                         assigned_mem_tile, port_id, ports_to_compute = assign_mem_tile(
                             tile_dtype,
-                            partitioned_connected_nodes,
+                            partitioned_interface_list,
                             is_input,
                             coalesced_size,
                             tile_size,
@@ -1528,8 +1572,18 @@ class CodeGenerator:
                                 port_id,
                                 is_input,
                             )
-                            # if assigned_shim_tile is None:
-                            #     raise ValueError("Fail to assign shim tile")
+                            if assigned_shim_tile is None:
+                                print("============")
+                                print(partitioned_interface_list)
+                                print("====++++====")
+                                for shim_tile in self.exp_used_shim_tiles:
+                                    shim_tile.print()
+                                raise ValueError("Fail to assign shim tile")
+                            for interface in interface_list:
+                                for pe_interface in interface.interface_list:
+                                    mapped_interface[pe_interface.pe].add(
+                                        pe_interface.interface_idx
+                                    )
                             break
                         size_cp = partitioned_size
                     size = Size4D.subtract(size, partitioned_size)

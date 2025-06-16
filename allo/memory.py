@@ -292,7 +292,7 @@ class Offset4D:
             next_.offset_c - self.offset_c,
             next_.offset_d - self.offset_d,
         ]
-        if diffs.count(0) == 3 and diffs.count(1) == 4:
+        if diffs.count(0) == 3 and diffs.count(1) == 1:
             indices = [i for i, diff in enumerate(diffs) if diff == 1]
             return indices[0]
         else:
