@@ -47,6 +47,7 @@ from .mapping import (
     LiveDTensorTileGroup,
     DTensorTileGroup,
     ComputationGraph,
+    FIFO,
     FIFOManager,
 )
 
@@ -1413,8 +1414,8 @@ class CodeGenerator:
                 # TODO: port reuse
             return None, -1
 
-        mapped_interface: dict[str, set[int]] = {
-            i: set() for i in global_tensors.keys()
+        mapped_interface: dict[str, dict[int, SwitchNode.Port]] = {
+            i: dict() for i in global_tensors.keys()
         }
         for idx, dtensor_tile_group in global_tile_to_func.items():
             dtensor = global_dtensor[idx]
@@ -1520,6 +1521,7 @@ class CodeGenerator:
                         tile_param_type,
                     )
                     if assigned_mem_tile is not None:
+                        interface_to_fifo: dict[str, FIFO] = {}
                         for port in ports_to_compute:
                             mem_port_to_compute: SwitchNode.Port = (
                                 assigned_mem_tile.send_ports[port]
@@ -1541,6 +1543,9 @@ class CodeGenerator:
                                     data_shape=mem_port_to_compute.data_shape,
                                     dtype=mem_port_to_compute.dtype,
                                 )
+                            for node in mem_port_to_compute.connected_nodes:
+                                assert node not in interface_to_fifo
+                                interface_to_fifo[node] = dma_fifo
                             mem_port_to_compute.bind_to_fifo(dma_fifo)
                         mem_port_to_shim = (
                             assigned_mem_tile.recv_ports[port_id]
@@ -1587,9 +1592,9 @@ class CodeGenerator:
                         mem_port_to_shim.bind_to_fifo(dma_fifo)
                         for interface in interface_list:
                             for pe_interface in interface.interface_list:
-                                mapped_interface[pe_interface.pe].add(
+                                mapped_interface[pe_interface.pe][
                                     pe_interface.interface_idx
-                                )
+                                ] = interface_to_fifo[pe_interface.pe]
                         break
                     size_cp = size.copy()
                     # keep partitioning until success
@@ -1608,6 +1613,7 @@ class CodeGenerator:
                             tile_param_type,
                         )
                         if assigned_mem_tile is not None:
+                            interface_to_fifo: dict[str, FIFO] = {}
                             for port in ports_to_compute:
                                 mem_port_to_compute: SwitchNode.Port = (
                                     assigned_mem_tile.send_ports[port]
@@ -1633,6 +1639,9 @@ class CodeGenerator:
                                             dtype=mem_port_to_compute.dtype,
                                         )
                                     )
+                                for node in mem_port_to_compute.connected_nodes:
+                                    assert node not in interface_to_fifo
+                                    interface_to_fifo[node] = dma_fifo
                                 mem_port_to_compute.bind_to_fifo(dma_fifo)
                             mem_port_to_shim = (
                                 assigned_mem_tile.recv_ports[port_id]
@@ -1677,11 +1686,11 @@ class CodeGenerator:
                                 )
                             shim_port_to_mem.bind_to_fifo(dma_fifo)
                             mem_port_to_shim.bind_to_fifo(dma_fifo)
-                            for interface in interface_list:
+                            for interface in partitioned_interface_list:
                                 for pe_interface in interface.interface_list:
-                                    mapped_interface[pe_interface.pe].add(
+                                    mapped_interface[pe_interface.pe][
                                         pe_interface.interface_idx
-                                    )
+                                    ] = interface_to_fifo[pe_interface.pe]
                             break
                         size_cp = partitioned_size
                     size = Size4D.subtract(size, partitioned_size)
