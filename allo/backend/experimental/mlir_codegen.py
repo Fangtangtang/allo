@@ -257,6 +257,7 @@ class CodeGenerator:
             lambda: defaultdict(SwitchNode.Port)
         )
         self.fifo_manager: FIFOManager = FIFOManager()
+        self.experimental_fifo_manager: FIFOManager = FIFOManager()
         # ------------------------------------------------------------
 
         self.aie_module = None  # The top-level AIE IR module
@@ -761,14 +762,9 @@ class CodeGenerator:
 
         def assign_shim_tile(
             mem_tile: SwitchNode,
-            port_id: int,
+            mem_port: SwitchNode.Port,
             is_input: bool,
         ) -> tuple[SwitchNode, int]:
-            port: SwitchNode.Port = (
-                mem_tile.recv_ports[port_id]
-                if is_input
-                else mem_tile.send_ports[port_id]
-            )
             assigned_shim_tile = None
             # Attempt to use a new shim tile
             if len(self.used_shim_tiles) < MAX_SHIM_TILES:
@@ -791,19 +787,19 @@ class CodeGenerator:
                 connected_mem = [mem_tile.name]
                 send_port = SwitchNode.Port(
                     id=len(assigned_shim_tile.send_ports),
-                    data_shape=port.data_shape,
-                    dtype=port.dtype,
+                    data_shape=mem_port.data_shape,
+                    dtype=mem_port.dtype,
                     connected_nodes=connected_mem if is_input else [],
                 )
                 assigned_shim_tile.send_ports.append(send_port)
                 recv_port = SwitchNode.Port(
                     id=len(assigned_shim_tile.recv_ports),
-                    data_shape=port.data_shape,
-                    dtype=port.dtype,
+                    data_shape=mem_port.data_shape,
+                    dtype=mem_port.dtype,
                     connected_nodes=[] if is_input else connected_mem,
                 )
                 assigned_shim_tile.recv_ports.append(recv_port)
-                port.connected_nodes.append(assigned_shim_tile.name)
+                mem_port.connected_nodes.append(assigned_shim_tile.name)
                 assigned_shim_tile.intra_connect.append(
                     SwitchNode.IntraConnect(
                         send_port_ids=[send_port.id],
@@ -929,7 +925,7 @@ class CodeGenerator:
                                 register_function_param_port(port_to_compute)
                             assigned_shim_tile, shim_port_id = assign_shim_tile(
                                 assigned_mem_tile,
-                                port_id,
+                                port_to_shim,
                                 is_input,
                             )
                             if assigned_shim_tile is None:
@@ -991,7 +987,7 @@ class CodeGenerator:
                                     register_function_param_port(port_to_compute)
                                 assigned_shim_tile, shim_port_id = assign_shim_tile(
                                     assigned_mem_tile,
-                                    port_id,
+                                    port_to_shim,
                                     is_input,
                                 )
                                 if assigned_shim_tile is None:
@@ -1365,14 +1361,9 @@ class CodeGenerator:
 
         def assign_shim_tile(
             mem_tile: SwitchNode,
-            port_id: int,
+            mem_port: SwitchNode.Port,
             is_input: bool,
         ):
-            port: SwitchNode.Port = (
-                mem_tile.recv_ports[port_id]
-                if is_input
-                else mem_tile.send_ports[port_id]
-            )
             assigned_shim_tile = None
             # Attempt to use a new shim tile
             if len(self.exp_used_shim_tiles) < MAX_SHIM_TILES:
@@ -1395,19 +1386,19 @@ class CodeGenerator:
                 connected_mem = [mem_tile.name]
                 send_port = SwitchNode.Port(
                     id=len(assigned_shim_tile.send_ports),
-                    data_shape=port.data_shape,
-                    dtype=port.dtype,
+                    data_shape=mem_port.data_shape,
+                    dtype=mem_port.dtype,
                     connected_nodes=connected_mem if is_input else [],
                 )
                 assigned_shim_tile.send_ports.append(send_port)
                 recv_port = SwitchNode.Port(
                     id=len(assigned_shim_tile.recv_ports),
-                    data_shape=port.data_shape,
-                    dtype=port.dtype,
+                    data_shape=mem_port.data_shape,
+                    dtype=mem_port.dtype,
                     connected_nodes=[] if is_input else connected_mem,
                 )
                 assigned_shim_tile.recv_ports.append(recv_port)
-                port.connected_nodes.append(assigned_shim_tile.name)
+                mem_port.connected_nodes.append(assigned_shim_tile.name)
                 assigned_shim_tile.intra_connect.append(
                     SwitchNode.IntraConnect(
                         send_port_ids=[send_port.id],
@@ -1529,9 +1520,36 @@ class CodeGenerator:
                         tile_param_type,
                     )
                     if assigned_mem_tile is not None:
+                        for port in ports_to_compute:
+                            mem_port_to_compute: SwitchNode.Port = (
+                                assigned_mem_tile.send_ports[port]
+                                if is_input
+                                else assigned_mem_tile.recv_ports[port]
+                            )
+                            if is_input:
+                                dma_fifo = self.experimental_fifo_manager.create_fifo(
+                                    src=assigned_mem_tile.name,
+                                    dst=mem_port_to_compute.connected_nodes,
+                                    data_shape=mem_port_to_compute.data_shape,
+                                    dtype=mem_port_to_compute.dtype,
+                                )
+                            else:
+                                assert len(mem_port_to_compute.connected_nodes) == 1
+                                dma_fifo = self.experimental_fifo_manager.create_fifo(
+                                    src=mem_port_to_compute.connected_nodes[0],
+                                    dst=[assigned_mem_tile.name],
+                                    data_shape=mem_port_to_compute.data_shape,
+                                    dtype=mem_port_to_compute.dtype,
+                                )
+                            mem_port_to_compute.bind_to_fifo(dma_fifo)
+                        mem_port_to_shim = (
+                            assigned_mem_tile.recv_ports[port_id]
+                            if is_input
+                            else assigned_mem_tile.send_ports[port_id]
+                        )
                         assigned_shim_tile, shim_port_id = assign_shim_tile(
                             assigned_mem_tile,
-                            port_id,
+                            mem_port_to_shim,
                             is_input,
                         )
                         if assigned_shim_tile is None:
@@ -1541,6 +1559,32 @@ class CodeGenerator:
                             for shim_tile in self.exp_used_shim_tiles:
                                 shim_tile.print()
                             raise ValueError("Fail to assign shim tile")
+                        shim_port_to_mem = (
+                            assigned_shim_tile.send_ports[shim_port_id]
+                            if is_input
+                            else assigned_shim_tile.recv_ports[shim_port_id]
+                        )
+                        if is_input:
+                            dma_fifo = self.experimental_fifo_manager.create_fifo(
+                                src=assigned_shim_tile.name,
+                                dst=shim_port_to_mem.connected_nodes,
+                                data_shape=mem_port_to_compute.data_shape,
+                                dtype=mem_port_to_compute.dtype,
+                            )
+                        else:
+                            assert (
+                                len(shim_port_to_mem.connected_nodes) == 1
+                                and shim_port_to_mem.connected_nodes[0]
+                                == assigned_mem_tile.name
+                            )
+                            dma_fifo = self.experimental_fifo_manager.create_fifo(
+                                src=assigned_mem_tile.name,
+                                dst=[assigned_shim_tile.name],
+                                data_shape=mem_port_to_compute.data_shape,
+                                dtype=mem_port_to_compute.dtype,
+                            )
+                        shim_port_to_mem.bind_to_fifo(dma_fifo)
+                        mem_port_to_shim.bind_to_fifo(dma_fifo)
                         for interface in interface_list:
                             for pe_interface in interface.interface_list:
                                 mapped_interface[pe_interface.pe].add(
@@ -1564,9 +1608,40 @@ class CodeGenerator:
                             tile_param_type,
                         )
                         if assigned_mem_tile is not None:
+                            for port in ports_to_compute:
+                                mem_port_to_compute: SwitchNode.Port = (
+                                    assigned_mem_tile.send_ports[port]
+                                    if is_input
+                                    else assigned_mem_tile.recv_ports[port]
+                                )
+                                if is_input:
+                                    dma_fifo = (
+                                        self.experimental_fifo_manager.create_fifo(
+                                            src=assigned_mem_tile.name,
+                                            dst=mem_port_to_compute.connected_nodes,
+                                            data_shape=mem_port_to_compute.data_shape,
+                                            dtype=mem_port_to_compute.dtype,
+                                        )
+                                    )
+                                else:
+                                    assert len(mem_port_to_compute.connected_nodes) == 1
+                                    dma_fifo = (
+                                        self.experimental_fifo_manager.create_fifo(
+                                            src=mem_port_to_compute.connected_nodes[0],
+                                            dst=[assigned_mem_tile.name],
+                                            data_shape=mem_port_to_compute.data_shape,
+                                            dtype=mem_port_to_compute.dtype,
+                                        )
+                                    )
+                                mem_port_to_compute.bind_to_fifo(dma_fifo)
+                            mem_port_to_shim = (
+                                assigned_mem_tile.recv_ports[port_id]
+                                if is_input
+                                else assigned_mem_tile.send_ports[port_id]
+                            )
                             assigned_shim_tile, shim_port_id = assign_shim_tile(
                                 assigned_mem_tile,
-                                port_id,
+                                mem_port_to_shim,
                                 is_input,
                             )
                             if assigned_shim_tile is None:
@@ -1576,6 +1651,32 @@ class CodeGenerator:
                                 for shim_tile in self.exp_used_shim_tiles:
                                     shim_tile.print()
                                 raise ValueError("Fail to assign shim tile")
+                            shim_port_to_mem = (
+                                assigned_shim_tile.send_ports[shim_port_id]
+                                if is_input
+                                else assigned_shim_tile.recv_ports[shim_port_id]
+                            )
+                            if is_input:
+                                dma_fifo = self.experimental_fifo_manager.create_fifo(
+                                    src=assigned_shim_tile.name,
+                                    dst=shim_port_to_mem.connected_nodes,
+                                    data_shape=mem_port_to_compute.data_shape,
+                                    dtype=mem_port_to_compute.dtype,
+                                )
+                            else:
+                                assert (
+                                    len(shim_port_to_mem.connected_nodes) == 1
+                                    and shim_port_to_mem.connected_nodes[0]
+                                    == assigned_mem_tile.name
+                                )
+                                dma_fifo = self.experimental_fifo_manager.create_fifo(
+                                    src=assigned_mem_tile.name,
+                                    dst=[assigned_shim_tile.name],
+                                    data_shape=mem_port_to_compute.data_shape,
+                                    dtype=mem_port_to_compute.dtype,
+                                )
+                            shim_port_to_mem.bind_to_fifo(dma_fifo)
+                            mem_port_to_shim.bind_to_fifo(dma_fifo)
                             for interface in interface_list:
                                 for pe_interface in interface.interface_list:
                                     mapped_interface[pe_interface.pe].add(
@@ -1749,7 +1850,7 @@ class CodeGenerator:
         # mapping to physical/logical
         # TODO: co-designed mapping to different types of tiles
         self.map_data_transfer()
-        
+
     def aie_codegen_experimental(
         self,
         core_funcs: list[allo_func_d.FuncOp],

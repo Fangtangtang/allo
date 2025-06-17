@@ -130,7 +130,21 @@ class FIFO:
 
 class FIFOManager:
     def __init__(self):
+        self.fifos: list[FIFO] = []
         self.fifo_map: dict[tuple, FIFO] = {}
+
+    def create_fifo(
+        self, src: str, dst: list[str], data_shape: list[str], dtype: str
+    ) -> FIFO:
+        fifo = FIFO(
+            name=f"fifo_{len(self.fifo_map)}",
+            src=src,
+            dst=dst,
+            data_shape=data_shape,
+            dtype=dtype,
+        )
+        self.fifos.append(fifo)
+        return fifo
 
     def get_or_create_fifo(
         self, src: str, dst: list[str], data_shape: list[str], dtype: str
