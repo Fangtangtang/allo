@@ -566,7 +566,7 @@ class CodeGenerator:
         func_core: aie_d.Core,
         original_func: allo_func_d.FuncOp,
         func_args: dict[int, tuple[Argument, bool]],
-        interfaces: dict[int, FIFO]
+        interfaces: dict[int, FIFO],
     ):
         """
         Generate the computation logic for the fake 'while(1)' loop body for an AIE compute core, transforming high-level Allo ops
@@ -595,6 +595,9 @@ class CodeGenerator:
                     else:
                         raise ValueError("Too many core functions. Fail to resolve.")
         assert not parsed_function is None
+        print("\n#------------------")
+        print(parsed_function)
+        print("#------------------\n")
         func_body = func_core.regions[0]
         entry_block = aie_ir.Block.create_at_start(func_body)
         with aie_ir.InsertionPoint(entry_block):
@@ -614,13 +617,16 @@ class CodeGenerator:
                     first_use = next(iter(argument.uses), None)
                     if first_use is not None:
                         first_use_op = first_use.owner
+                        # no branch
+                        while first_use_op.parent.name != "func.func":
+                            first_use_op = first_use_op.parent
                         fifo = self.exp_fifo_map[interfaces[i].name]
                         is_input = arg_info[0].dtensor in self.global_inputs
                         with aie_ir.InsertionPoint(first_use_op.operation):
                             if interfaces[i].name in reused_fifo_name:
                                 fifo.release(1 if is_input else 0, 1)
                             else:
-                                reused_fifo_name[interfaces[i].name]=is_input
+                                reused_fifo_name[interfaces[i].name] = is_input
                             acquired = fifo.acquire(1 if is_input else 0, 1)
                             # incorrect
                             argument.replace_all_uses_with(acquired)
@@ -632,8 +638,7 @@ class CodeGenerator:
                         op = use_.owner
                         with aie_ir.InsertionPoint(op.operation):
                             if op.name == "memref.store" or (
-                                op.name == "memref.copy"
-                                and argument == op.operands[1]
+                                op.name == "memref.copy" and argument == op.operands[1]
                             ):  # allo.stream_put
                                 acquired = fifo.acquire(0, 1)
                                 op.operands[1] = acquired
@@ -650,9 +655,7 @@ class CodeGenerator:
                                     old.replace_all_uses_with(new)
                                 fifo.release(1, 1)
                                 op.erase()
-                            elif (
-                                op.name == "memref.copy"
-                            ):  # allo.stream_get, tensor
+                            elif op.name == "memref.copy":  # allo.stream_get, tensor
                                 acquired = fifo.acquire(1, 1)
                                 op.operands[0] = acquired
                                 new_op = op.clone()
@@ -665,54 +668,37 @@ class CodeGenerator:
                         if op.name == "func.return":
                             continue
                         new_op = op.clone()
-                        if "aie.objectfifo" in op.name or op.name =="aie.objectfifo.subview.access":
-                            print(op)
-                        print(op)
-                        import sys
-                        sys.exit(0)
                         for old, new in zip(op.results, new_op.results):
                             old.replace_all_uses_with(new)
-                    import sys
-                    sys.exit(0)
-            #     # replace alloc with buffer
-            #     alloc_ops = []
+                # replace alloc with buffer
+                alloc_ops = []
 
-            #     print("\n###############")
-            #     print(parsed_function)
-            #     print("###############\n")
-            #     import sys
-            #     sys.exit(0)
-                
-                # def collect_allocs(op):
-                #     if op.name == "memref.alloc":
-                #         alloc_ops.append(op.operation)
-                #         return
-                #     for region in op.regions:
-                #         for block in region.blocks:
-                #             for inner_op in block.operations:
-                #                 collect_allocs(inner_op)
+                def collect_allocs(op):
+                    if op.name == "memref.alloc":
+                        alloc_ops.append(op.operation)
+                        return
+                    for region in op.regions:
+                        for block in region.blocks:
+                            for inner_op in block.operations:
+                                collect_allocs(inner_op)
 
-                # collect_allocs(loop)
-                # for alloc_op in alloc_ops:
-                #     buffer_op = aie_d.BufferOp(
-                #         buffer=alloc_op.results[0].type,
-                #         tile=func_core.tile,
-                #         ip=self.global_ip,
-                #     )
-                #     for old, new in zip(alloc_op.results, buffer_op.results):
-                #         old.replace_all_uses_with(new)
-                #     alloc_op.erase()
+                collect_allocs(loop)
+                for alloc_op in alloc_ops:
+                    buffer_op = aie_d.BufferOp(
+                        buffer=alloc_op.results[0].type,
+                        tile=func_core.tile,
+                        ip=self.global_ip,
+                    )
+                    for old, new in zip(alloc_op.results, buffer_op.results):
+                        old.replace_all_uses_with(new)
+                    alloc_op.erase()
 
-                # for fifo_name, is_input in reused_fifo_name.items():
-                #     self.exp_fifo_map[fifo_name].release(
-                #         1 if is_input else 0, 1
-                #     )
+                for fifo_name, is_input in reused_fifo_name.items():
+                    self.exp_fifo_map[fifo_name].release(1 if is_input else 0, 1)
 
                 aie_scf_d.YieldOp([])
             aie_d.EndOp()
-        print("\n###############")
-        print(parsed_function)
-        print("###############\n")
+
     # ------------------------------------------------------------
     # Data Transfer
     # ------------------------------------------------------------
@@ -1218,7 +1204,7 @@ class CodeGenerator:
                     print(f"    {dma}")
             print("########################################################\n\n")
 
-    def map_data_transfer(self)->dict[str, dict[int, FIFO]]:
+    def map_data_transfer(self) -> dict[str, dict[int, FIFO]]:
 
         def partition(size: Size4D) -> Size4D:
             """
@@ -1884,7 +1870,7 @@ class CodeGenerator:
                     inc = partitioned_size.get_total_size()
                     interface_list = interface_list[inc:]
         return mapped_interface
-    
+
     def bind_port_to_fifo(self):
         for dma_nodes in zip(self.used_shim_tiles, self.used_mem_tiles):
             for dma_node in dma_nodes:
@@ -2150,8 +2136,14 @@ class CodeGenerator:
                     if self.exp_global_ip is None:
                         self.exp_global_ip = aie_ir.InsertionPoint(func_core)
                     self.exp_build_core_function(
-                        func_core, func, self.core_func_args[func_name], mapped_interface[func_name]
+                        func_core,
+                        func,
+                        self.core_func_args[func_name],
+                        mapped_interface[func_name],
                     )
+
+                # runtime sequence
+                # TODO
 
         print(self.exp_aie_module)
 
