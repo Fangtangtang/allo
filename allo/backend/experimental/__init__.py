@@ -250,6 +250,9 @@ class AIE_MLIRModule:
             external_funcs,
             use_external_kernels,
         )
+        import sys
+
+        sys.exit(0)
         # TODO: opt passes on aie-mlir
         # passes = [
         #     "func.func(affine-loop-unroll), canonicalize",
