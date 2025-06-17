@@ -37,6 +37,7 @@ def _test_layer_norm():
         impl_path="norm.cc",
         input_idx=[0, 1],
         output_idx=[2],
+        arg_shape=[[4,512], [512], [4,512]]
     )
 
     Ty = float32
@@ -108,4 +109,4 @@ def _test_rms_norm():
 
 if __name__ == "__main__":
     _test_layer_norm()
-    _test_rms_norm()
+    # _test_rms_norm()

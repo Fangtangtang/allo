@@ -37,7 +37,9 @@ class ExternalModule:
     """
 
     def __init__(
-        self, top: str, impl_path: str, input_idx: list[int], output_idx: list[int]
+        self, top: str, impl_path: str, 
+        input_idx: list[int], output_idx: list[int],
+        arg_shape: list[list[int]] = None
     ):
         self.top = top  # identifier
         self.impl_path = impl_path
@@ -59,6 +61,11 @@ class ExternalModule:
                 all_functions.extend(functions)
             assert len(all_functions) == 1, "invalid external function"
             self.args = parse_cpp_function(all_functions[0], self.top)
-        assert (self.args is not None) or len(self.args) != len(self.input_idx) + len(
+            if arg_shape is not None:
+                assert len(arg_shape) == len(self.args), f"Failed to parse {self.impl}"
+                for idx, shape in enumerate(arg_shape):
+                    if shape is not None:
+                        self.args[idx] = (self.args[idx][0], tuple(shape))
+        assert (self.args is not None) and len(self.args) == len(self.input_idx) + len(
             self.output_idx
         ), f"Failed to parse {self.impl}"

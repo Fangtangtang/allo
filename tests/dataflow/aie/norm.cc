@@ -99,8 +99,12 @@ void rms_norm_single_batch(T_in *input_tensor, T_in *weight,
 
 extern "C" {
 
-void layer_norm(float A_in[4][512], float B_in[512], float C_out[4][512]) {
-  layer_norm_single_batch_no_bias<float, float, 4, 512>(&A_in[0][0], B_in, &C_out[0][0]);
+// void layer_norm(float A_in[4][512], float B_in[512], float C_out[4][512]) {
+//   layer_norm_single_batch_no_bias<float, float, 4, 512>(&A_in[0][0], B_in, &C_out[0][0]);
+// }
+
+void layer_norm(float *A_in, float *B_in, float *C_out) {
+  layer_norm_single_batch_no_bias<float, float, 4, 512>(A_in, B_in, C_out);
 }
 
 void rms_norm(float A_in[4][512], float B_in[512], float C_out[4][512]) {

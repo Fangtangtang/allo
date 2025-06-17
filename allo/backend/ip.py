@@ -81,6 +81,7 @@ def parse_cpp_function(code, target_function):
     # Process each parameter to extract type and shape
     result = []
     for param in params:
+        print(param)
         # Check if parameter is a pointer
         pointer_pattern = r"(\w+)\s+\*(\w+)"
         pointer_match = re.search(pointer_pattern, param)
