@@ -137,7 +137,7 @@ class FIFOManager:
         self, src: str, dst: list[str], data_shape: list[str], dtype: str
     ) -> FIFO:
         fifo = FIFO(
-            name=f"fifo_{len(self.fifo_map)}",
+            name=f"fifo_{len(self.fifos)}",
             src=src,
             dst=dst,
             data_shape=data_shape,
@@ -181,7 +181,7 @@ class SwitchNode:
             self.data_shape = data_shape
             self.dtype = dtype
             self.connected_nodes = connected_nodes
-            self.bind_fifo = None
+            self.bind_fifo: FIFO = None
             self.queue: list = []
 
         def bind_to_fifo(self, fifo: FIFO):
@@ -218,6 +218,12 @@ class SwitchNode:
         self.recv_ports: list[SwitchNode.Port] = []
         # connect send ports to recv ports
         self.intra_connect: list[SwitchNode.IntraConnect] = []
+
+    def __hash__(self):
+        return hash(self.name)
+
+    def __eq__(self, other):
+        return self.name == other.name
 
     def print(self):
         print(f"\n<<<<< Switch {self.name} >>>>>")
