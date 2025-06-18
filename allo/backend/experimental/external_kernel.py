@@ -37,9 +37,12 @@ class ExternalModule:
     """
 
     def __init__(
-        self, top: str, impl_path: str, 
-        input_idx: list[int], output_idx: list[int],
-        arg_shape: list[list[int]] = None
+        self,
+        top: str,
+        impl_path: str,
+        input_idx: list[int],
+        output_idx: list[int],
+        arg_shape: list[list[int]] = None,
     ):
         self.top = top  # identifier
         self.impl_path = impl_path
@@ -47,6 +50,7 @@ class ExternalModule:
         assert self.filename.endswith(
             ".cc"
         ), f"Expected a .cc file, but got: {self.filename}"
+        self.filename = self.filename.removesuffix(".cc") + "_.cc"
 
         self.input_idx = input_idx
         self.output_idx = output_idx
