@@ -541,7 +541,7 @@ class ComputationGraph:
         bundled_tag = (
             f"({node_a.op_tag})x{node_a.repeat}-({node_b.op_tag})x{node_b.repeat}"
         )
-        chained_node = CollocatedNode(bundled_tag, repeat=1)
+        chained_node = CollocatedNode(bundled_tag, name=f"{node_a.name}-{node_b.name}", repeat=1)
         bufferized_stream: dict[Stream, BufferizedStream] = {}
         node_a.output_streams = [
             stream for stream in node_a.output_streams if stream.dst != node_name_b
@@ -663,10 +663,22 @@ class ComputationGraph:
         self.func_args[chained_node.name] = param_a
         for key, value in param_b.items():
             self.func_args[chained_node.name][arg_idx_offset + key] = value
+        
         dep = self.dependencies.pop(node_name_a)
         dep.update(self.dependencies.pop(node_name_b))
-        dep.remove(node_name_a)
         self.dependencies[chained_node.name] = dep
+        for deps in self.dependencies.values():
+            if node_name_a in deps:
+                deps.remove(node_name_a)
+                deps.add(chained_node.name)
+            if node_name_b in deps:
+                deps.remove(node_name_b)
+                deps.add(chained_node.name)
+        for stream in self.edges.values():
+            if stream.src == node_name_a or stream.src == node_name_b:
+                stream.src = chained_node.name
+            if stream.dst == node_name_a or stream.dst == node_name_b:
+                stream.dst = chained_node.name
         self.nodes[chained_node.name] = chained_node
 
     # ------------------------------------------------------------

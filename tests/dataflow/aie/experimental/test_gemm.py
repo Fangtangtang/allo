@@ -34,16 +34,16 @@ def top2():
 mod1 = df.build(top1, target="aie-mlir", project="top1.prj")
 mod2 = df.build(top2, target="aie-mlir", project="top2.prj")
 
-# A = np.random.randint(0, 8, (total_M, total_K)).astype(np.int16)
-# B = np.random.randint(0, 8, (total_K, total_N)).astype(np.int16)
-# C_tmp = np.zeros((M, N)).astype(np.int32)
-# C = np.zeros((M, N)).astype(np.int32)
+A = np.random.randint(0, 8, (total_M, total_K)).astype(np.int16)
+B = np.random.randint(0, 8, (total_K, total_N)).astype(np.int16)
+C_tmp = np.zeros((M, N)).astype(np.int32)
+C = np.zeros((M, N)).astype(np.int32)
 
-# for i in range(total_K // K):
-#     tile_A = A[:, i * K : (i + 1) * K]
-#     tile_B = B[i * K : (i + 1) * K, :]
-#     mod1(tile_A, tile_B, C_tmp)
-#     mod2(C, C_tmp, C)
+for i in range(total_K // K):
+    tile_A = A[:, i * K : (i + 1) * K]
+    tile_B = B[i * K : (i + 1) * K, :]
+    mod1(tile_A, tile_B, C_tmp)
+    mod2(C, C_tmp, C)
 
-# np.testing.assert_allclose(C, A @ B, atol=1e-5)
-# print("PASSED!")
+np.testing.assert_allclose(C, A @ B, atol=1e-5)
+print("PASSED!")
