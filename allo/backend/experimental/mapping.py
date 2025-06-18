@@ -15,7 +15,6 @@ from .utils import (
     get_df_kernels,
     Config,
 )
-from ...memory import DTensor, Size4D, Offset4D
 
 
 # ############################################################

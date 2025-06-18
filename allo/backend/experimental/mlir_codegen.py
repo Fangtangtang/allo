@@ -1307,8 +1307,11 @@ class CodeGenerator:
                 other_global_tensor: LiveDTensorTileGroup = global_tensors[
                     other.sample_interface.pe
                 ][other.sample_interface.interface_idx]
-                if len(sample_global_tensors.dtensor_groups) == len(
-                    other_global_tensor.dtensor_groups
+                # TODO: can be relaxed
+                if (
+                    len(sample_global_tensors.dtensor_groups)
+                    == len(other_global_tensor.dtensor_groups)
+                    == 1
                 ):
                     sample_value = next(
                         iter(sample_global_tensors.dtensor_groups.values())
@@ -1869,6 +1872,74 @@ class CodeGenerator:
                     size = Size4D.subtract(size, partitioned_size)
                     inc = partitioned_size.get_total_size()
                     interface_list = interface_list[inc:]
+            # TODO: some data structure in replace of `self.global_io_dma`
+            for io_port in global_io_port:
+                interfaces: list[MulticastInterface] = io_port.connect_interface
+                # TODO: only support limited cases
+                if len(interfaces) == 1:
+                    tensor_tile_group = global_tensors[
+                        interfaces[0].sample_interface.pe
+                    ][interfaces[0].sample_interface.interface_idx]
+                    time_offset = 0
+                    for live_tensor_tiles in tensor_tile_group.dtensor_groups.values():
+                        live_tensor_tiles.sort(key=lambda t: t.first_use)
+                        end_time = live_tensor_tiles[-1].last_use
+                        tile_idx = 0
+                        while tile_idx < len(live_tensor_tiles):
+                            dtensor_idx = live_tensor_tiles[tile_idx].tile.dtensor_id
+                            dtensor = global_dtensor[dtensor_idx]
+                            outer_shape = [1, 1, 1, 1]
+                            for i in dtensor.shared_dims:
+                                outer_shape[i] = dtensor.size[i]
+                            outer_stride = [1] * 4
+                            for i in reversed(range(3)):
+                                outer_stride[i] = (
+                                    outer_stride[i + 1] * outer_shape[i + 1]
+                                )
+                            size_list = [1,1,1,1]
+                            offset = dtensor.offset_map[
+                                live_tensor_tiles[tile_idx].tile.tensor_tile_label
+                            ].to_list()
+                            flattened_idx = sum(
+                                i * s for i, s in zip(offset, outer_stride)
+                            )
+                            while tile_idx + 1 < len(live_tensor_tiles):
+                                if (
+                                    live_tensor_tiles[tile_idx + 1].tile.dtensor_id
+                                    == dtensor_idx
+                                ):
+                                    next_offset = dtensor.offset_map[
+                                        live_tensor_tiles[
+                                            tile_idx + 1
+                                        ].tile.tensor_tile_label
+                                    ].to_list()
+                                    flattened_next_idx = sum(
+                                        i * s for i, s in zip(next_offset, outer_stride)
+                                    )
+                                    if flattened_next_idx - flattened_idx == 1:
+                                        for i in range(4):
+                                            size_list[i] = (
+                                                size_list[i] + next_offset[i] - offset[i]
+                                            )
+                                        tile_idx = tile_idx + 1
+                                        flattened_idx = flattened_next_idx
+                                        offset = next_offset
+                                        break
+
+                            # dma
+
+                else:
+                    io_tensors: list[LiveDTensorTileGroup] = []
+                    for interface in interfaces:
+                        tensor_tile_group = global_tensors[
+                            interface.sample_interface.pe
+                        ][interface.sample_interface.interface_idx]
+                        assert (
+                            len(tensor_tile_group.dtensor_groups) == 1
+                        ), "TO BE IMPLEMENTED"
+                        io_tensors.append(tensor_tile_group)
+                    # size: io_port.fifo.data_shape
+
         return mapped_interface
 
     def bind_port_to_fifo(self):
@@ -2143,9 +2214,27 @@ class CodeGenerator:
                     )
 
                 # runtime sequence
-                # TODO
+                runtime_seq = aiex_d.RuntimeSequenceOp()
+                runtime_args = []
+                for i in range(len(self.global_inputs) + len(self.global_outputs)):
+                    arg = (
+                        self.global_inputs[i]
+                        if i in self.global_inputs
+                        else self.global_outputs[i]
+                    )
+                    runtime_args.append(
+                        aie_ir.MemRefType.get(
+                            arg.shape, get_element_type(str(arg.dtype))
+                        )
+                    )
+                runtime_seq_entry_block = runtime_seq.body.blocks.append(*runtime_args)
+                with aie_ir.InsertionPoint(runtime_seq_entry_block):
+                    # TODO
+
+                    aie_d.EndOp()
 
         print(self.exp_aie_module)
+        return self.exp_aie_module
 
     def aie_codegen_experimental(
         self,
@@ -2153,10 +2242,8 @@ class CodeGenerator:
         external_funcs: list[allo_func_d.FuncOp],
         use_external_kernels: dict[str, bool],
     ) -> aie_ir.Module:
-        return
         # mapping to physical/logical
         # TODO: co-designed mapping to different types of tiles
-        # self.map_data_transfer()
         self.map_global_io_to_physical_tiles()
 
         if os.getenv("VERBOSE") == "1":
