@@ -109,11 +109,12 @@ def _test_pingpong_gemm():
     np.testing.assert_allclose(C, A @ B, atol=1e-5)
     print("PASSED!")
 
+
 def _test_pingpong_gemm_v1():
 
     Ty = int16
-    M, N, K = 64, 64, 96
-    Pm, Pn, Pk = 2, 2, 3
+    M, N, K = 32, 32, 128
+    Pm, Pn, Pk = 1, 1, 4
     Mt, Nt, Kt = M // Pm, N // Pn, K // Pk
 
     LyA = Layout("S1S2")
@@ -145,12 +146,7 @@ def _test_pingpong_gemm_v1():
         mapping_primitives=[
             ("chain", ["gemm_0_0_0", "gemm_1_0_0"]),
             ("chain", ["gemm_0_0_0-gemm_1_0_0", "gemm_2_0_0"]),
-            ("chain", ["gemm_0_0_1", "gemm_1_0_1"]),
-            ("chain", ["gemm_0_0_1-gemm_1_0_1", "gemm_2_0_1"]),
-            ("chain", ["gemm_0_1_0", "gemm_1_1_0"]),
-            ("chain", ["gemm_0_1_0-gemm_1_1_0", "gemm_2_1_0"]),
-            ("chain", ["gemm_0_1_1", "gemm_1_1_1"]),
-            ("chain", ["gemm_0_1_1-gemm_1_1_1", "gemm_2_1_1"]),
+            ("chain", ["gemm_0_0_0-gemm_1_0_0-gemm_2_0_0", "gemm_3_0_0"]),
         ],
     )
     A = np.random.randint(0, 64, (M, K)).astype(np.int16)
