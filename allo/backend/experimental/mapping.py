@@ -292,6 +292,15 @@ class LiveDTensorTileGroup:
                     dtensor_groups[idx].last_use <= dtensor_groups[idx].first_use
                 ), "liveness range overlapped."
 
+    def __str__(self):
+        ret = ""
+        for token, tiles in self.dtensor_groups.items():
+            ret += f"\t\t{token}: {tiles}"
+        return ret
+
+    def __repr__(self):
+        return self.__str__()
+
 
 # ------------------------------------------------------------
 class NodeBase:
@@ -635,24 +644,20 @@ class ComputationGraph:
     # ------------------------------------------------------------
     # Graph Information
     # ------------------------------------------------------------
-    def get_global_io(self) -> dict[str, dict[int, LiveDTensorTileGroup]]:
+    def get_global_io(
+        self,
+    ) -> tuple[dict[str, dict[int, LiveDTensorTileGroup]], dict[str, dict[int, int]]]:
         global_tile_io: dict[str, dict[int, LiveDTensorTileGroup]] = {}
+        arg_idx_to_interface: dict[str, dict[int, int]] = {}
         for name, node in self.nodes.items():
             dict_: dict[int, LiveDTensorTileGroup] = {}
+            idx_to_interface: dict[int, int] = {}
             for idx, interfaces in node.global_interfaces.items():
                 dict_[idx] = LiveDTensorTileGroup(interfaces)
+                idx_to_interface[idx] = idx
             global_tile_io[name] = dict_
-        return global_tile_io
-
-    def get_node_global_io(self) -> dict[str, dict[int, list[DTensorTile]]]:
-        global_tile_io: dict[str, dict[int, list[DTensorTile]]] = {}
-        for name, node in self.nodes.items():
-            global_tiles: dict[int, list[DTensorTile]] = {}
-            for idx, live_tile_list in node.global_interfaces.items():
-                tile_list = [live_tile.tile for live_tile in live_tile_list]
-                global_tiles[idx] = tile_list
-            global_tile_io[name] = global_tiles
-        return global_tile_io
+            arg_idx_to_interface[name] = idx_to_interface
+        return global_tile_io, arg_idx_to_interface
 
     def get_node_dependencies(self) -> dict[str, set[str]]:
         dependencies: dict[str, set[str]] = {key: set() for key in self.nodes.keys()}
