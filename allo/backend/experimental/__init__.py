@@ -240,11 +240,6 @@ class AIE_MLIRModule:
             self.streams,
             self.virtual_computation_graph,
         )
-        # self.aie_module = code_generator.aie_codegen_experimental(
-        #     core_funcs,
-        #     external_funcs,
-        #     use_external_kernels,
-        # )
         self.aie_module = code_generator.aie_codegen_nightly(
             core_funcs,
             external_funcs,

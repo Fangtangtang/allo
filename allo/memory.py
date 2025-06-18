@@ -282,7 +282,7 @@ class Offset4D:
         else:
             raise ValueError(f"Invalid dimension: {dim}")
 
-    def check_next_offset(self, next_:"Offset4D")->bool:
+    def check_next_offset(self, next_: "Offset4D") -> bool:
         """
         Check whether next_ is the next offset of self
         """
@@ -297,7 +297,7 @@ class Offset4D:
             return indices[0]
         else:
             return -1
-    
+
     def to_list(self) -> list[int]:
         return [self.offset_a, self.offset_b, self.offset_c, self.offset_d]
 

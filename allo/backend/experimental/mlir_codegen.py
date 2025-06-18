@@ -242,32 +242,19 @@ class CodeGenerator:
         self.fifo_map: dict[str, aie_d.object_fifo] = {}
         # function name (with id) -> a map from DTensor to fifo name
         self.compute_core_io: dict[str : dict[DTensor, str]] = {}
-        # function name (with id) -> a map from DTensor to (fifo name, transfer idx, total tensfer number)
-        self.compute_core_io_experimental: dict[
-            str : dict[DTensor, tuple[str, int]]
-        ] = {}
         self.external_functions: str = ""
 
         # ------------------------------------------------------------
         # Experimental
         # ------------------------------------------------------------
-        self.used_mem_tiles: list[SwitchNode] = None
-        self.used_shim_tiles: list[SwitchNode] = None
-        self.global_io_dma: dict[str, list[CodeGenerator.GlobalIODMA]] = None
+        self.used_mem_tiles: list[SwitchNode] = []
+        self.used_shim_tiles: list[SwitchNode] = []
         self.function_port_map: dict[str, dict[DTensor, SwitchNode.Port]] = defaultdict(
             lambda: defaultdict(SwitchNode.Port)
         )
-        self.exp_tile_map: dict[str, aie_d.TileOp] = {}
-        self.exp_fifo_map: dict[str, aie_d.object_fifo] = {}
 
         self.fifo_manager: FIFOManager = FIFOManager()
-        self.experimental_fifo_manager: FIFOManager = FIFOManager()
         self.global_dma_trough_port: list[CodeGenerator.GlobalIODMATask] = []
-
-        self.exp_aie_module = None  # The top-level AIE IR module
-        self.exp_global_ip: aie_ir.InsertionPoint = (
-            None  # mark the inserting point for buffers
-        )
         # ------------------------------------------------------------
 
         self.aie_module = None  # The top-level AIE IR module
@@ -378,7 +365,6 @@ class CodeGenerator:
         func_core: aie_d.Core,
         original_func: allo_func_d.FuncOp,
         func_args: dict[int, tuple[Argument, bool]],
-        is_experimental: bool = False,
     ):
         """
         Generate the computation logic for the fake 'while(1)' loop body for an AIE compute core, transforming high-level Allo ops
@@ -417,67 +403,23 @@ class CodeGenerator:
                 # insert operations to get 'function parameter', acquire and subview
                 # fixme: arguments may reuse fifo (ordering and copy-release-acquire)
                 # fixme: what about the output??
-                compute_core_io = (
-                    self.compute_core_io_experimental
-                    if is_experimental
-                    else self.compute_core_io
-                )
+                compute_core_io = self.compute_core_io
                 io_map = (
                     compute_core_io[parsed_function.name.value]
                     if parsed_function.name.value in compute_core_io
                     else {}
                 )
                 argument_info: dict[str, list[tuple]] = defaultdict(list)
-                if is_experimental:
-                    for i, argument in enumerate(parsed_function.arguments):
-                        if not i in func_args:
-                            continue
-                        arg_info: tuple[Argument, bool] = func_args[i]
-                        if arg_info[0].dtensor is not None:
-                            fifo_name, transfer_idx = io_map[arg_info[0].dtensor]
-                            argument_info[fifo_name].append(
-                                (transfer_idx, argument, arg_info[1])
-                            )
-                    for key in argument_info:
-                        argument_sharing_fifo = argument_info[key]
-                        assert len(argument_sharing_fifo) >= 1
-                        argument_info[key].sort(key=lambda x: x[0])
-                        idx = 0
-                        while idx < len(argument_sharing_fifo) - 2:
-                            argument = argument_sharing_fifo[idx][1]
-                            acquired = self.fifo_map[key].acquire(
-                                1 if argument_sharing_fifo[idx][2] else 0, 1
-                            )
-                            assert argument_sharing_fifo[idx][
-                                2
-                            ], "At most one global output is supported"
-                            alloc_op = aie_memref_d.AllocOp(
-                                acquired.type,
-                                [],
-                                [],
-                            )
-                            aie_memref_d.CopyOp(
-                                acquired,
-                                alloc_op.memref,
-                            )
-                            argument.replace_all_uses_with(alloc_op.memref)
-                            idx += 1
-                        argument = argument_sharing_fifo[idx][1]
-                        acquired = self.fifo_map[key].acquire(
-                            1 if argument_sharing_fifo[idx][2] else 0, 1
-                        )
-                        argument.replace_all_uses_with(acquired)
 
                 for i, argument in enumerate(parsed_function.arguments):
                     if not i in func_args:
                         continue
                     arg_info: tuple[Argument, bool] = func_args[i]
                     if arg_info[0].dtensor is not None:
-                        if not is_experimental:
-                            acquired = self.fifo_map[
-                                io_map[arg_info[0].dtensor]
-                            ].acquire(1 if arg_info[1] else 0, 1)
-                            argument.replace_all_uses_with(acquired)
+                        acquired = self.fifo_map[io_map[arg_info[0].dtensor]].acquire(
+                            1 if arg_info[1] else 0, 1
+                        )
+                        argument.replace_all_uses_with(acquired)
                     else:
                         stream: Stream = arg_info[0].stream
                         fifo = self.fifo_map[stream.name]
@@ -544,20 +486,14 @@ class CodeGenerator:
                     alloc_op.erase()
 
                 # release
-                if is_experimental:
-                    for key in argument_info:
-                        self.fifo_map[key].release(
-                            1 if argument_info[key][0][2] else 0, 1
-                        )
                 for i, _ in enumerate(parsed_function.arguments):
                     if not i in func_args:
                         continue
                     arg_info: tuple[Argument, bool] = func_args[i]
                     if not arg_info[0].dtensor is None:
-                        if not is_experimental:
-                            self.fifo_map[io_map[arg_info[0].dtensor]].release(
-                                1 if arg_info[1] else 0, 1
-                            )
+                        self.fifo_map[io_map[arg_info[0].dtensor]].release(
+                            1 if arg_info[1] else 0, 1
+                        )
 
                 aie_scf_d.YieldOp([])
             aie_d.EndOp()
@@ -622,7 +558,7 @@ class CodeGenerator:
                         # no branch
                         while first_use_op.parent.name != "func.func":
                             first_use_op = first_use_op.parent
-                        fifo = self.exp_fifo_map[interfaces[i].name]
+                        fifo = self.fifo_map[interfaces[i].name]
                         is_input = arg_info[0].dtensor.global_id in self.global_inputs
                         with aie_ir.InsertionPoint(first_use_op):
                             if interfaces[i].name in reused_fifo_name:
@@ -635,7 +571,7 @@ class CodeGenerator:
                     pass
                 else:
                     stream: Stream = arg_info[0].stream
-                    fifo = self.exp_fifo_map[stream.name]
+                    fifo = self.fifo_map[stream.name]
                     for use_ in argument.uses:
                         op = use_.owner
                         with aie_ir.InsertionPoint(op.operation):
@@ -691,14 +627,14 @@ class CodeGenerator:
                     buffer_op = aie_d.BufferOp(
                         buffer=alloc_op.results[0].type,
                         tile=func_core.tile,
-                        ip=self.exp_global_ip,
+                        ip=self.global_ip,
                     )
                     for old, new in zip(alloc_op.results, buffer_op.results):
                         old.replace_all_uses_with(new)
                     alloc_op.erase()
 
                 for fifo_name, is_input in reused_fifo_name.items():
-                    self.exp_fifo_map[fifo_name].release(1 if is_input else 0, 1)
+                    self.fifo_map[fifo_name].release(1 if is_input else 0, 1)
 
                 aie_scf_d.YieldOp([])
             aie_d.EndOp()
@@ -808,422 +744,6 @@ class CodeGenerator:
         outer_tag, inner_tag, ext_tag = tag.split("-")
         return int(outer_tag), int(inner_tag), int(ext_tag)
 
-    def map_global_io_to_physical_tiles(
-        self,
-    ) -> tuple[
-        list[SwitchNode],
-        list[SwitchNode],
-        dict[str, list["CodeGenerator.GlobalIODMA"]],
-    ]:
-        """
-        Map the global io to physical tiles. (memory/shim tiles in AIE)
-        """
-        # ------------------------------------------------------------
-        MAX_MEM_TILES = self.device_config["mem_tile_num"]
-        MAX_SHIM_TILES = self.device_config["shim_tile_num"]
-
-        self.used_mem_tiles = []
-        self.used_shim_tiles = []
-        self.global_io_dma = defaultdict(list)
-        # ------------------------------------------------------------
-
-        def assign_mem_tile(
-            dtype: str,
-            connected_nodes: list[list[str]],
-            is_input: bool,
-            coalesced_size: Size4D,
-            tile_size: Size4D,
-            tile_shape: list[int],
-        ) -> tuple[SwitchNode, int, list[int]]:
-            """
-            fixme: maybe too aie-specific?
-            Assign a memory tile to the given dtensor tiles.
-            If no memory tile is available, return None.
-            Else, return the assigned memory tile, the port id to shim, and the port ids to compute.
-            """
-            send_need = len(connected_nodes) if is_input else 1
-            recv_need = 1 if is_input else sum(len(group) for group in connected_nodes)
-            send_shape: list[int] = tile_shape if is_input else coalesced_size.to_list()
-            recv_shape: list[int] = coalesced_size.to_list() if is_input else tile_shape
-            tile_total_size = tile_size.get_total_size()
-            if os.getenv("VERBOSE") == "1":
-                print(f"send_need: {send_need}, recv_need: {recv_need}")
-            assigned_mem_tile = None
-            # Attempt to use a new memory tile
-            if (
-                len(self.used_mem_tiles) < MAX_MEM_TILES
-                and send_need <= Config.MEM_MAX_SEND
-                and recv_need <= Config.MEM_MAX_RECV
-            ):
-                assigned_mem_tile = SwitchNode(
-                    name=f"{len(self.used_mem_tiles)}_mem_tile",
-                    send_port_num=Config.MEM_MAX_SEND,
-                    recv_port_num=Config.MEM_MAX_RECV,
-                )
-                self.used_mem_tiles.append(assigned_mem_tile)
-            else:
-                # Attempt to use an existing memory tile
-                for mem_tile in self.used_mem_tiles:
-                    if (
-                        len(mem_tile.send_ports) + send_need <= Config.MEM_MAX_SEND
-                        and len(mem_tile.recv_ports) + recv_need <= Config.MEM_MAX_RECV
-                    ):
-                        assigned_mem_tile = mem_tile
-                        break
-            # Use new ports
-            if assigned_mem_tile is not None:
-                send_ports, recv_ports = [], []
-                for i in range(send_need):
-                    port = SwitchNode.Port(
-                        id=len(assigned_mem_tile.send_ports),
-                        data_shape=send_shape,
-                        dtype=dtype,
-                        connected_nodes=connected_nodes[i] if is_input else [],
-                    )
-                    assigned_mem_tile.send_ports.append(port)
-                    send_ports.append(port.id)
-                if is_input:
-                    for i in range(recv_need):
-                        port = SwitchNode.Port(
-                            id=len(assigned_mem_tile.recv_ports),
-                            data_shape=recv_shape,
-                            dtype=dtype,
-                            connected_nodes=[],
-                        )
-                        assigned_mem_tile.recv_ports.append(port)
-                        recv_ports.append(port.id)
-                else:
-                    for group in connected_nodes:
-                        for node in group:
-                            port = SwitchNode.Port(
-                                id=len(assigned_mem_tile.recv_ports),
-                                data_shape=recv_shape,
-                                dtype=dtype,
-                                connected_nodes=[node],
-                            )
-                            assigned_mem_tile.recv_ports.append(port)
-                            recv_ports.append(port.id)
-                assigned_mem_tile.intra_connect.append(
-                    SwitchNode.IntraConnect(
-                        send_ports,
-                        recv_ports,
-                        list(
-                            range(
-                                0,
-                                max(send_need, recv_need) * tile_total_size,
-                                tile_total_size,
-                            )
-                        ),
-                    )
-                )
-                if os.getenv("VERBOSE") == "1":
-                    print("\nassigned_mem_tile: ", end="")
-                    assigned_mem_tile.print()
-                return (
-                    assigned_mem_tile,
-                    recv_ports[0] if is_input else send_ports[0],
-                    send_ports if is_input else recv_ports,
-                )
-            # TODO: port reuse
-            return None, -1, []
-
-        def assign_shim_tile(
-            mem_tile: SwitchNode,
-            mem_port: SwitchNode.Port,
-            is_input: bool,
-        ) -> tuple[SwitchNode, int]:
-            assigned_shim_tile = None
-            # Attempt to use a new shim tile
-            if len(self.used_shim_tiles) < MAX_SHIM_TILES:
-                assigned_shim_tile = SwitchNode(
-                    name=f"{len(self.used_shim_tiles)}_shim_tile",
-                    send_port_num=Config.SHIM_MAX_SEND,
-                    recv_port_num=Config.SHIM_MAX_RECV,
-                )
-                self.used_shim_tiles.append(assigned_shim_tile)
-            else:
-                for shim_tile in self.used_shim_tiles:
-                    if (
-                        len(shim_tile.send_ports) + 1 <= Config.SHIM_MAX_SEND
-                        and len(shim_tile.recv_ports) + 1 <= Config.SHIM_MAX_RECV
-                    ):
-                        assigned_shim_tile = shim_tile
-                        break
-            # Use new ports
-            if assigned_shim_tile is not None:
-                connected_mem = [mem_tile.name]
-                send_port = SwitchNode.Port(
-                    id=len(assigned_shim_tile.send_ports),
-                    data_shape=mem_port.data_shape,
-                    dtype=mem_port.dtype,
-                    connected_nodes=connected_mem if is_input else [],
-                )
-                assigned_shim_tile.send_ports.append(send_port)
-                recv_port = SwitchNode.Port(
-                    id=len(assigned_shim_tile.recv_ports),
-                    data_shape=mem_port.data_shape,
-                    dtype=mem_port.dtype,
-                    connected_nodes=[] if is_input else connected_mem,
-                )
-                assigned_shim_tile.recv_ports.append(recv_port)
-                mem_port.connected_nodes.append(assigned_shim_tile.name)
-                assigned_shim_tile.intra_connect.append(
-                    SwitchNode.IntraConnect(
-                        send_port_ids=[send_port.id],
-                        recv_port_ids=[recv_port.id],
-                        offsets=[0],
-                    )
-                )
-                if os.getenv("VERBOSE") == "1":
-                    print("\nassigned_shim_tile: ", end="")
-                    assigned_shim_tile.print()
-                return assigned_shim_tile, recv_port.id if is_input else send_port.id
-                # TODO: port reuse
-            return None, -1
-
-        def map_dtensor_to_physical_tiles(
-            dtensor: DTensor,
-            ordered_tile_group: OrderedDTensorTileGroup,
-            is_input: bool,
-        ):
-            def partition(size: Size4D) -> Size4D:
-                """
-                Partition the dma task into multiple sub-tasks.
-                """
-                # find the first none-1 dim
-                for dim in range(4):
-                    if size.get_dim_size(dim) > 1:
-                        break
-                if dim >= 3:
-                    raise ValueError("Fail to partition")
-                size_part = size.copy()
-                partition_size = size.get_dim_size(dim) - 1
-                size_part.set_dim_size(dim, partition_size)
-                return size_part
-
-            def register_function_param_port(port: SwitchNode.Port):
-                for node in port.connected_nodes:
-                    self.function_port_map[node][dtensor] = port
-
-            tile_dtype = dtensor.dtype
-            tile_shape = list(dtensor.size)
-            for i in dtensor.shared_dims:
-                tile_shape[i] = 1
-            tile_size = Size4D.from_list(tile_shape)
-            # Tags sorted in lexicographic order are used to preserve the data transfer sequence.
-            # tiles in DMATileGroup with the same tage can be sent in parallel.
-            sorted_tags = sorted(
-                list(ordered_tile_group.dtensor_tile_groups.keys()),
-                key=CodeGenerator.parse_tag2,
-            )
-            idx = 0
-            while idx < len(sorted_tags):
-                tag = sorted_tags[idx]
-                update = 0
-                offset_map: dict[Offset4D, list[str]] = {}
-                # fixme: this is an ugly and problematic hack. We need more elegant and robust way to handle this.
-                while len(
-                    offset_map
-                ) < Config.IO_TILE_LOSE_FACTOR and idx + update < len(sorted_tags):
-                    dma_tile_group = ordered_tile_group.dtensor_tile_groups[
-                        sorted_tags[idx + update]
-                    ]
-                    for dma_tile in dma_tile_group.dtensor_tile_to_pe_interfaces.keys():
-                        if (
-                            dtensor.offset_map[dma_tile.tensor_tile_label]
-                            not in offset_map
-                        ):
-                            offset_map[
-                                dtensor.offset_map[dma_tile.tensor_tile_label]
-                            ] = []
-                        for (
-                            pe_interface
-                        ) in dma_tile_group.dtensor_tile_to_pe_interfaces[dma_tile]:
-                            # fixme: the argument idx should guide the mapping
-                            offset_map[
-                                dtensor.offset_map[dma_tile.tensor_tile_label]
-                            ].append(pe_interface.pe)
-
-                    update += 1
-                access, coalesce_info, connected_nodes = coalesce_memory_access(
-                    offset_map
-                )
-                coalesced_access, fallback_flag = format_memory_access(
-                    access, coalesce_info, connected_nodes
-                )
-
-                if os.getenv("VERBOSE") == "1":
-                    print()
-                    print("tag:", tag, "update:", update)
-                    print(offset_map)
-                    print("access:", coalesced_access)
-                offset_id = 0
-                for offset, mem_access in coalesced_access.items():
-                    connected_nodes: list[list[str]] = mem_access.connected_nodes
-                    size = mem_access.transfer_size
-                    multiplier: Size4D = Size4D.divide(
-                        mem_access.total_size, mem_access.transfer_size
-                    )
-                    while size.get_total_size() != 0:
-                        coalesced_size = Size4D.coalesce(size, tile_size)
-                        assigned_mem_tile, port_id, ports_to_compute = assign_mem_tile(
-                            tile_dtype,
-                            connected_nodes,
-                            is_input,
-                            coalesced_size,
-                            tile_size,
-                            tile_shape=dtensor.type_as_param,
-                        )
-                        if assigned_mem_tile is not None:
-                            port_to_shim = (
-                                assigned_mem_tile.recv_ports[port_id]
-                                if is_input
-                                else assigned_mem_tile.send_ports[port_id]
-                            )
-                            extened_tag = f"{tag}-{len(port_to_shim.queue)}"
-                            port_to_shim.queue.append(dtensor)
-                            for port in ports_to_compute:
-                                port_to_compute = (
-                                    assigned_mem_tile.send_ports[port]
-                                    if is_input
-                                    else assigned_mem_tile.recv_ports[port]
-                                )
-                                port_to_compute.queue.append(dtensor)
-                                register_function_param_port(port_to_compute)
-                            assigned_shim_tile, shim_port_id = assign_shim_tile(
-                                assigned_mem_tile,
-                                port_to_shim,
-                                is_input,
-                            )
-                            if assigned_shim_tile is None:
-                                raise ValueError("Fail to assign shim tile")
-                            port = (
-                                assigned_shim_tile.send_ports[shim_port_id]
-                                if is_input
-                                else assigned_shim_tile.recv_ports[shim_port_id]
-                            )
-                            port.queue.append(dtensor)
-                            self.global_io_dma[extened_tag].append(
-                                CodeGenerator.GlobalIODMA(
-                                    dtensor=dtensor,
-                                    port=port,
-                                    offset=mem_access.offset_info[offset_id].to_list(),
-                                    size=Size4D.coalesce(
-                                        Size4D.multiply(multiplier, size), tile_size
-                                    ).to_list(),
-                                    stride=dtensor.stride,
-                                    is_input=is_input,
-                                )
-                            )
-                            break
-                        size_cp = size.copy()
-                        # keep partitioning until success
-                        while True:
-                            partitioned_size = partition(size_cp)
-                            coalesced_size = Size4D.coalesce(
-                                partitioned_size, tile_size
-                            )
-                            partitioned_connected_nodes = connected_nodes[
-                                : partitioned_size.get_total_size()
-                            ]
-                            assigned_mem_tile, port_id, ports_to_compute = (
-                                assign_mem_tile(
-                                    tile_dtype,
-                                    partitioned_connected_nodes,
-                                    is_input,
-                                    coalesced_size,
-                                    tile_size,
-                                    tile_shape=dtensor.type_as_param,
-                                )
-                            )
-                            if assigned_mem_tile is not None:
-                                port_to_shim = (
-                                    assigned_mem_tile.recv_ports[port_id]
-                                    if is_input
-                                    else assigned_mem_tile.send_ports[port_id]
-                                )
-                                extened_tag = f"{tag}-{len(port_to_shim.queue)}"
-                                port_to_shim.queue.append(dtensor)
-                                for port in ports_to_compute:
-                                    port_to_compute = (
-                                        assigned_mem_tile.send_ports[port]
-                                        if is_input
-                                        else assigned_mem_tile.recv_ports[port]
-                                    )
-                                    port_to_compute.queue.append(dtensor)
-                                    register_function_param_port(port_to_compute)
-                                assigned_shim_tile, shim_port_id = assign_shim_tile(
-                                    assigned_mem_tile,
-                                    port_to_shim,
-                                    is_input,
-                                )
-                                if assigned_shim_tile is None:
-                                    raise ValueError("Fail to assign shim tile")
-                                port = (
-                                    assigned_shim_tile.send_ports[shim_port_id]
-                                    if is_input
-                                    else assigned_shim_tile.recv_ports[shim_port_id]
-                                )
-                                port.queue.append(dtensor)
-                                self.global_io_dma[extened_tag].append(
-                                    CodeGenerator.GlobalIODMA(
-                                        dtensor=dtensor,
-                                        port=port,
-                                        offset=mem_access.offset_info[
-                                            offset_id
-                                        ].to_list(),
-                                        size=Size4D.coalesce(
-                                            Size4D.multiply(
-                                                multiplier, partitioned_size
-                                            ),
-                                            tile_size,
-                                        ).to_list(),
-                                        stride=dtensor.stride,
-                                        is_input=is_input,
-                                    )
-                                )
-                                break
-                            size_cp = partitioned_size
-                        size = Size4D.subtract(size, partitioned_size)
-                        inc = partitioned_size.get_total_size()
-                        connected_nodes = connected_nodes[inc:]
-                        offset_id += inc
-                idx += update
-
-        global_io_ordering, global_tile_to_func = self.analyze_global_io()
-        # fixme: what if the Tensor is send multiple times?
-        sorted_keys = sorted(global_io_ordering, key=lambda k: global_io_ordering[k])
-        for key in sorted_keys:
-            if key in self.global_inputs:
-                map_dtensor_to_physical_tiles(
-                    self.global_inputs[key],
-                    global_tile_to_func[key],
-                    is_input=True,
-                )
-            elif key in self.global_outputs:
-                map_dtensor_to_physical_tiles(
-                    self.global_outputs[key],
-                    global_tile_to_func[key],
-                    is_input=False,
-                )
-            else:
-                raise ValueError("Run into an unreachable point.")
-
-        if os.getenv("VERBOSE") == "1":
-            print("\n\n########################################################")
-            print("used_mem_tiles:")
-            for mem_tile in self.used_mem_tiles:
-                mem_tile.print()
-            print("\nused_shim_tiles:")
-            for shim_tile in self.used_shim_tiles:
-                shim_tile.print()
-            print("\nglobal_io_dma:")
-            for tag, dma_list in self.global_io_dma.items():
-                print(f"#: {tag}")
-                for dma in dma_list:
-                    print(f"    {dma}")
-            print("########################################################\n\n")
-
     def map_data_transfer(self) -> dict[str, dict[int, FIFO]]:
 
         def partition(size: Size4D) -> Size4D:
@@ -1244,10 +764,6 @@ class CodeGenerator:
         # ------------------------------------------------------------
         MAX_MEM_TILES = self.device_config["mem_tile_num"]
         MAX_SHIM_TILES = self.device_config["shim_tile_num"]
-
-        self.exp_used_mem_tiles: list[SwitchNode] = []
-        self.exp_used_shim_tiles: list[SwitchNode] = []
-        self.exp_global_io_dma = defaultdict(list)
         # ------------------------------------------------------------
 
         dependencies = self.virtual_computation_graph.get_node_dependencies()
@@ -1453,19 +969,19 @@ class CodeGenerator:
             assigned_mem_tile = None
             # Attempt to use a new memory tile
             if (
-                len(self.exp_used_mem_tiles) < MAX_MEM_TILES
+                len(self.used_mem_tiles) < MAX_MEM_TILES
                 and send_need <= Config.MEM_MAX_SEND
                 and recv_need <= Config.MEM_MAX_RECV
             ):
                 assigned_mem_tile = SwitchNode(
-                    name=f"{len(self.exp_used_mem_tiles)}_mem_tile",
+                    name=f"{len(self.used_mem_tiles)}_mem_tile",
                     send_port_num=Config.MEM_MAX_SEND,
                     recv_port_num=Config.MEM_MAX_RECV,
                 )
-                self.exp_used_mem_tiles.append(assigned_mem_tile)
+                self.used_mem_tiles.append(assigned_mem_tile)
             else:
                 # Attempt to use an existing memory tile
-                for mem_tile in self.exp_used_mem_tiles:
+                for mem_tile in self.used_mem_tiles:
                     if (
                         len(mem_tile.send_ports) + send_need <= Config.MEM_MAX_SEND
                         and len(mem_tile.recv_ports) + recv_need <= Config.MEM_MAX_RECV
@@ -1536,15 +1052,15 @@ class CodeGenerator:
         ):
             assigned_shim_tile = None
             # Attempt to use a new shim tile
-            if len(self.exp_used_shim_tiles) < MAX_SHIM_TILES:
+            if len(self.used_shim_tiles) < MAX_SHIM_TILES:
                 assigned_shim_tile = SwitchNode(
-                    name=f"{len(self.exp_used_shim_tiles)}_shim_tile",
+                    name=f"{len(self.used_shim_tiles)}_shim_tile",
                     send_port_num=Config.SHIM_MAX_SEND,
                     recv_port_num=Config.SHIM_MAX_RECV,
                 )
-                self.exp_used_shim_tiles.append(assigned_shim_tile)
+                self.used_shim_tiles.append(assigned_shim_tile)
             else:
-                for shim_tile in self.exp_used_shim_tiles:
+                for shim_tile in self.used_shim_tiles:
                     if (
                         len(shim_tile.send_ports) + 1 <= Config.SHIM_MAX_SEND
                         and len(shim_tile.recv_ports) + 1 <= Config.SHIM_MAX_RECV
@@ -1699,7 +1215,7 @@ class CodeGenerator:
                                 else assigned_mem_tile.recv_ports[port]
                             )
                             if is_input:
-                                dma_fifo = self.experimental_fifo_manager.create_fifo(
+                                dma_fifo = self.fifo_manager.create_fifo(
                                     src=assigned_mem_tile.name,
                                     dst=mem_port_to_compute.connected_nodes,
                                     data_shape=mem_port_to_compute.data_shape,
@@ -1707,7 +1223,7 @@ class CodeGenerator:
                                 )
                             else:
                                 assert len(mem_port_to_compute.connected_nodes) == 1
-                                dma_fifo = self.experimental_fifo_manager.create_fifo(
+                                dma_fifo = self.fifo_manager.create_fifo(
                                     src=mem_port_to_compute.connected_nodes[0],
                                     dst=[assigned_mem_tile.name],
                                     data_shape=mem_port_to_compute.data_shape,
@@ -1731,7 +1247,7 @@ class CodeGenerator:
                             print("============")
                             print(interface_list)
                             print("====++++====")
-                            for shim_tile in self.exp_used_shim_tiles:
+                            for shim_tile in self.used_shim_tiles:
                                 shim_tile.print()
                             raise ValueError("Fail to assign shim tile")
                         shim_port_to_mem = (
@@ -1740,7 +1256,7 @@ class CodeGenerator:
                             else assigned_shim_tile.recv_ports[shim_port_id]
                         )
                         if is_input:
-                            dma_fifo = self.experimental_fifo_manager.create_fifo(
+                            dma_fifo = self.fifo_manager.create_fifo(
                                 src=assigned_shim_tile.name,
                                 dst=shim_port_to_mem.connected_nodes,
                                 data_shape=shim_port_to_mem.data_shape,
@@ -1752,7 +1268,7 @@ class CodeGenerator:
                                 and shim_port_to_mem.connected_nodes[0]
                                 == assigned_mem_tile.name
                             )
-                            dma_fifo = self.experimental_fifo_manager.create_fifo(
+                            dma_fifo = self.fifo_manager.create_fifo(
                                 src=assigned_mem_tile.name,
                                 dst=[assigned_shim_tile.name],
                                 data_shape=shim_port_to_mem.data_shape,
@@ -1800,23 +1316,19 @@ class CodeGenerator:
                                     else assigned_mem_tile.recv_ports[port]
                                 )
                                 if is_input:
-                                    dma_fifo = (
-                                        self.experimental_fifo_manager.create_fifo(
-                                            src=assigned_mem_tile.name,
-                                            dst=mem_port_to_compute.connected_nodes,
-                                            data_shape=mem_port_to_compute.data_shape,
-                                            dtype=mem_port_to_compute.dtype,
-                                        )
+                                    dma_fifo = self.fifo_manager.create_fifo(
+                                        src=assigned_mem_tile.name,
+                                        dst=mem_port_to_compute.connected_nodes,
+                                        data_shape=mem_port_to_compute.data_shape,
+                                        dtype=mem_port_to_compute.dtype,
                                     )
                                 else:
                                     assert len(mem_port_to_compute.connected_nodes) == 1
-                                    dma_fifo = (
-                                        self.experimental_fifo_manager.create_fifo(
-                                            src=mem_port_to_compute.connected_nodes[0],
-                                            dst=[assigned_mem_tile.name],
-                                            data_shape=mem_port_to_compute.data_shape,
-                                            dtype=mem_port_to_compute.dtype,
-                                        )
+                                    dma_fifo = self.fifo_manager.create_fifo(
+                                        src=mem_port_to_compute.connected_nodes[0],
+                                        dst=[assigned_mem_tile.name],
+                                        data_shape=mem_port_to_compute.data_shape,
+                                        dtype=mem_port_to_compute.dtype,
                                     )
                                 for node in mem_port_to_compute.connected_nodes:
                                     assert node not in interface_to_fifo
@@ -1836,7 +1348,7 @@ class CodeGenerator:
                                 print("============")
                                 print(partitioned_interface_list)
                                 print("====++++====")
-                                for shim_tile in self.exp_used_shim_tiles:
+                                for shim_tile in self.used_shim_tiles:
                                     shim_tile.print()
                                 raise ValueError("Fail to assign shim tile")
                             shim_port_to_mem = (
@@ -1845,7 +1357,7 @@ class CodeGenerator:
                                 else assigned_shim_tile.recv_ports[shim_port_id]
                             )
                             if is_input:
-                                dma_fifo = self.experimental_fifo_manager.create_fifo(
+                                dma_fifo = self.fifo_manager.create_fifo(
                                     src=assigned_shim_tile.name,
                                     dst=shim_port_to_mem.connected_nodes,
                                     data_shape=shim_port_to_mem.data_shape,
@@ -1857,7 +1369,7 @@ class CodeGenerator:
                                     and shim_port_to_mem.connected_nodes[0]
                                     == assigned_mem_tile.name
                                 )
-                                dma_fifo = self.experimental_fifo_manager.create_fifo(
+                                dma_fifo = self.fifo_manager.create_fifo(
                                     src=assigned_mem_tile.name,
                                     dst=[assigned_shim_tile.name],
                                     data_shape=shim_port_to_mem.data_shape,
@@ -1910,45 +1422,6 @@ class CodeGenerator:
             print(ele)
         print()
         return mapped_interface
-
-    def bind_port_to_fifo(self):
-        for dma_nodes in zip(self.used_shim_tiles, self.used_mem_tiles):
-            for dma_node in dma_nodes:
-                for send_port in dma_node.send_ports:
-                    dma_fifo = self.fifo_manager.get_or_create_fifo(
-                        src=dma_node.name,
-                        dst=send_port.connected_nodes,
-                        data_shape=send_port.data_shape,
-                        dtype=send_port.dtype,
-                    )
-                    send_port.bind_to_fifo(dma_fifo)
-                for recv_port in dma_node.recv_ports:
-                    assert (
-                        len(recv_port.connected_nodes) <= 1
-                    ), "fifo should be single-source"
-                    dma_fifo = self.fifo_manager.get_or_create_fifo(
-                        src=(
-                            recv_port.connected_nodes[0]
-                            if len(recv_port.connected_nodes) == 1
-                            else None
-                        ),
-                        dst=[dma_node.name],
-                        data_shape=recv_port.data_shape,
-                        dtype=recv_port.dtype,
-                    )
-                    recv_port.bind_to_fifo(dma_fifo)
-        if os.getenv("VERBOSE") == "1":
-            self.fifo_manager.print()
-        # bind function ports to fifos
-        for func_name, port_map in self.function_port_map.items():
-            self.compute_core_io_experimental[func_name] = {}
-            for dtensor, port in port_map.items():
-                indices = [i for i, x in enumerate(port.queue) if x == dtensor]
-                assert len(indices) == 1
-                self.compute_core_io_experimental[func_name][dtensor] = (
-                    port.bind_fifo.name,
-                    indices[0],
-                )
 
     # ------------------------------------------------------------
     # Compute Tile
@@ -2073,177 +1546,6 @@ class CodeGenerator:
         # TODO: co-designed mapping to different types of tiles
         mapped_interface = self.map_data_transfer()
         core_function_mapping = self.map_core_func_to_physical_tiles()
-        self.external_functions = ""  # fixme
-        for func in external_funcs:
-            self.external_functions += format_str(str(func), indent=4)
-
-        wrapper_code = f"""
-            module {{
-                aie.device({self.device_type}) {{
-        """
-        wrapper_code += self.external_functions
-        wrapper_code += """
-                }
-            }
-        """
-
-        with aie_ir.Context() as ctx, aie_ir.Location.unknown():
-            # module wrapper
-            self.exp_aie_module = aie_ir.Module.parse(wrapper_code, ctx)
-            # find device op: aie.device(device_type)
-            device_op = None
-            for op in self.exp_aie_module.body.operations:
-                if isinstance(op, aie_d.DeviceOp):
-                    device_op = op
-                    break
-            assert device_op is not None, "aie.device not found"
-            device_body = device_op.regions[0].blocks[0]
-            # insert operations in the device body, before `aie.end``
-            end_op = None
-            for op in device_body.operations:
-                if isinstance(op, aie_d.EndOp):
-                    end_op = op
-                    break
-            assert not end_op is None
-
-            with aie_ir.InsertionPoint(end_op):
-                # shim tiles
-                for i, shim_tile in enumerate(self.exp_used_shim_tiles):
-                    self.exp_tile_map[shim_tile.name] = aie_d.TileOp(col=i, row=0)
-                # mem tiles
-                for i, mem_tile in enumerate(self.exp_used_mem_tiles):
-                    self.exp_tile_map[mem_tile.name] = aie_d.TileOp(col=i, row=1)
-                # compute tiles
-                for func_name, (row, col) in core_function_mapping.items():
-                    self.exp_tile_map[func_name] = aie_d.TileOp(col=col, row=row + 2)
-                # define fifos
-                # - stream fifos: compute <-> compute
-                print(self.streams)
-                for stream_name, stream in self.streams.items():
-                    self.exp_fifo_map[stream_name] = aie_d.object_fifo(
-                        stream_name,
-                        self.exp_tile_map[stream.src],
-                        self.exp_tile_map[stream.dst],
-                        depth=stream.type.depth,
-                        datatype=aie_ir.MemRefType.get(
-                            stream.type.shape,
-                            get_element_type(str(stream.type.dtype)),
-                        ),
-                    )
-                # - io fifos: shim <-> mem <-> compute
-                print(self.experimental_fifo_manager.fifos)
-                for dma_fifo in self.experimental_fifo_manager.fifos:
-                    self.exp_fifo_map[dma_fifo.name] = aie_d.object_fifo(
-                        dma_fifo.name,
-                        self.exp_tile_map[dma_fifo.src],
-                        [self.exp_tile_map[node] for node in dma_fifo.dst],
-                        depth=dma_fifo.depth,
-                        datatype=aie_ir.MemRefType.get(
-                            dma_fifo.data_shape,
-                            get_element_type(str(dma_fifo.dtype)),
-                        ),
-                    )
-                # link fifos: in aie, mem tile serves as the linkages
-                for dma_node in self.exp_used_mem_tiles:
-                    for connect in dma_node.intra_connect:
-                        producer = [
-                            self.exp_fifo_map[
-                                dma_node.recv_ports[recv_port_id].bind_fifo.name
-                            ]
-                            for recv_port_id in connect.recv_port_ids
-                        ]
-                        consumer = [
-                            self.exp_fifo_map[
-                                dma_node.send_ports[send_port_id].bind_fifo.name
-                            ]
-                            for send_port_id in connect.send_port_ids
-                        ]
-                        # fixme: is it possible that both producer and consumer are not single fifo?
-                        producer_offset = [] if len(producer) == 1 else connect.offsets
-                        consumer_offset = [] if len(consumer) == 1 else connect.offsets
-                        aie_d.object_fifo_link(
-                            producer, consumer, producer_offset, consumer_offset
-                        )
-                # compute logic on each compute tile
-                for func in core_funcs:
-                    func_name = func.attributes["sym_name"].value
-                    func_core = aie_d.Core(
-                        tile=self.exp_tile_map[func_name],
-                        link_with=(
-                            "external.o" if use_external_kernels[func_name] else None
-                        ),
-                    )
-                    if self.exp_global_ip is None:
-                        self.exp_global_ip = aie_ir.InsertionPoint(func_core)
-                    self.exp_build_core_function(
-                        func_core,
-                        func,
-                        self.core_func_args[func_name],
-                        mapped_interface[func_name],
-                    )
-
-                # runtime sequence
-                runtime_seq = aiex_d.RuntimeSequenceOp()
-                runtime_args = []
-                for i in range(len(self.global_inputs) + len(self.global_outputs)):
-                    arg = (
-                        self.global_inputs[i]
-                        if i in self.global_inputs
-                        else self.global_outputs[i]
-                    )
-                    runtime_args.append(
-                        aie_ir.MemRefType.get(
-                            arg.shape, get_element_type(str(arg.dtype))
-                        )
-                    )
-                runtime_seq_entry_block = runtime_seq.body.blocks.append(*runtime_args)
-                with aie_ir.InsertionPoint(runtime_seq_entry_block):
-                    self.global_dma_trough_port.sort(key=lambda x: x.start_time)
-                    launched_dma = []
-                    for global_dma in self.global_dma_trough_port:
-                        dma_fifo = self.exp_fifo_map[global_dma.io_port.fifo.name]
-                        aiex_d.NpuDmaMemcpyNd(
-                            metadata=dma_fifo,
-                            bd_id=len(launched_dma),
-                            mem=runtime_seq_entry_block.arguments[
-                                global_dma.dtensor.global_id
-                            ],
-                            offsets=global_dma.offset,
-                            sizes=global_dma.io_port.size,
-                            strides=global_dma.io_port.stride,
-                            issue_token=True,
-                        )
-                        launched_dma.append(dma_fifo)
-                        if len(launched_dma) == Config.DMA_MAX_BDS:
-                            for launched_fifo in launched_dma:
-                                aiex_d.dma_wait(launched_fifo)
-                            launched_dma.clear()
-                    for launched_fifo in launched_dma:
-                        aiex_d.dma_wait(launched_fifo)
-
-                    aie_d.EndOp()
-
-        print(self.exp_aie_module)
-        return self.exp_aie_module
-
-    def aie_codegen_experimental(
-        self,
-        core_funcs: list[allo_func_d.FuncOp],
-        external_funcs: list[allo_func_d.FuncOp],
-        use_external_kernels: dict[str, bool],
-    ) -> aie_ir.Module:
-        # mapping to physical/logical
-        # TODO: co-designed mapping to different types of tiles
-        self.map_global_io_to_physical_tiles()
-
-        if os.getenv("VERBOSE") == "1":
-            print("<<< function_port_map >>>")
-            for func_name, port_map in self.function_port_map.items():
-                print(f"{func_name}:")
-                for dtensor, port in port_map.items():
-                    print(f"  {dtensor}: {port}")
-        self.bind_port_to_fifo()
-        core_function_mapping = self.map_core_func_to_physical_tiles()
         for func in external_funcs:
             self.external_functions += format_str(str(func), indent=4)
 
@@ -2288,6 +1590,7 @@ class CodeGenerator:
                     self.tile_map[func_name] = aie_d.TileOp(col=col, row=row + 2)
                 # define fifos
                 # - stream fifos: compute <-> compute
+                print(self.streams)
                 for stream_name, stream in self.streams.items():
                     self.fifo_map[stream_name] = aie_d.object_fifo(
                         stream_name,
@@ -2300,10 +1603,8 @@ class CodeGenerator:
                         ),
                     )
                 # - io fifos: shim <-> mem <-> compute
-                for dma_fifo in self.fifo_manager.fifo_map.values():
-                    if dma_fifo.src is None or len(dma_fifo.dst) == 0:
-                        # from/to global
-                        continue
+                print(self.fifo_manager.fifos)
+                for dma_fifo in self.fifo_manager.fifos:
                     self.fifo_map[dma_fifo.name] = aie_d.object_fifo(
                         dma_fifo.name,
                         self.tile_map[dma_fifo.src],
@@ -2335,7 +1636,6 @@ class CodeGenerator:
                         aie_d.object_fifo_link(
                             producer, consumer, producer_offset, consumer_offset
                         )
-
                 # compute logic on each compute tile
                 for func in core_funcs:
                     func_name = func.attributes["sym_name"].value
@@ -2347,8 +1647,11 @@ class CodeGenerator:
                     )
                     if self.global_ip is None:
                         self.global_ip = aie_ir.InsertionPoint(func_core)
-                    self.build_core_function(
-                        func_core, func, self.core_func_args[func_name], True
+                    self.exp_build_core_function(
+                        func_core,
+                        func,
+                        self.core_func_args[func_name],
+                        mapped_interface[func_name],
                     )
 
                 # runtime sequence
@@ -2365,35 +1668,31 @@ class CodeGenerator:
                             arg.shape, get_element_type(str(arg.dtype))
                         )
                     )
-
                 runtime_seq_entry_block = runtime_seq.body.blocks.append(*runtime_args)
                 with aie_ir.InsertionPoint(runtime_seq_entry_block):
-                    sorted_tags = sorted(
-                        list(self.global_io_dma.keys()), key=CodeGenerator.parse_tag3
-                    )
+                    self.global_dma_trough_port.sort(key=lambda x: x.start_time)
                     launched_dma = []
-                    # use sorted tags to determine the data transfer sequence
-                    for tag in sorted_tags:
-                        for dma in self.global_io_dma[tag]:
-                            dma_fifo = self.fifo_map[dma.port.bind_fifo.name]
-                            aiex_d.NpuDmaMemcpyNd(
-                                metadata=dma_fifo,
-                                bd_id=len(launched_dma),
-                                mem=runtime_seq_entry_block.arguments[
-                                    dma.dtensor.global_id
-                                ],
-                                offsets=dma.offset,
-                                sizes=dma.size,
-                                strides=dma.stride,
-                                issue_token=True,
-                            )
-                            launched_dma.append(dma_fifo)
-                            if len(launched_dma) == Config.DMA_MAX_BDS:
-                                for launched_fifo in launched_dma:
-                                    aiex_d.dma_wait(launched_fifo)
-                                launched_dma.clear()
+                    for global_dma in self.global_dma_trough_port:
+                        dma_fifo = self.fifo_map[global_dma.io_port.fifo.name]
+                        aiex_d.NpuDmaMemcpyNd(
+                            metadata=dma_fifo,
+                            bd_id=len(launched_dma),
+                            mem=runtime_seq_entry_block.arguments[
+                                global_dma.dtensor.global_id
+                            ],
+                            offsets=global_dma.offset,
+                            sizes=global_dma.io_port.size,
+                            strides=global_dma.io_port.stride,
+                            issue_token=True,
+                        )
+                        launched_dma.append(dma_fifo)
+                        if len(launched_dma) == Config.DMA_MAX_BDS:
+                            for launched_fifo in launched_dma:
+                                aiex_d.dma_wait(launched_fifo)
+                            launched_dma.clear()
                     for launched_fifo in launched_dma:
                         aiex_d.dma_wait(launched_fifo)
+
                     aie_d.EndOp()
 
         return self.aie_module
