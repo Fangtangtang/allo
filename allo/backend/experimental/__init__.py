@@ -245,14 +245,12 @@ class AIE_MLIRModule:
         #     external_funcs,
         #     use_external_kernels,
         # )
-        code_generator.aie_codegen_nightly(
+        self.aie_module = code_generator.aie_codegen_nightly(
             core_funcs,
             external_funcs,
             use_external_kernels,
         )
-        import sys
-
-        sys.exit(0)
+        
         # TODO: opt passes on aie-mlir
         # passes = [
         #     "func.func(affine-loop-unroll), canonicalize",

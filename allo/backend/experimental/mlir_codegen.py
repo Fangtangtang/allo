@@ -262,6 +262,7 @@ class CodeGenerator:
 
         self.fifo_manager: FIFOManager = FIFOManager()
         self.experimental_fifo_manager: FIFOManager = FIFOManager()
+        self.global_dma_trough_port:list[CodeGenerator.GlobalIODMATask] = []
 
         self.exp_aie_module = None  # The top-level AIE IR module
         self.exp_global_ip: aie_ir.InsertionPoint = (
@@ -777,6 +778,22 @@ class CodeGenerator:
         size: list[int]
         stride: list[int]
         is_input: bool
+
+    @dataclass(frozen=True)
+    class GlobalIODMAPort:
+        fifo: FIFO
+        connect_interface: list # [MulticastInterface]
+        size: list[int]
+        stride: list[int]
+        is_input: bool
+    
+    @dataclass(frozen=True)
+    class GlobalIODMATask:
+        start_time:int
+        end_time: int
+        io_port: "CodeGenerator.GlobalIODMAPort"
+        dtensor: DTensor
+        offset: list[int]
 
     @staticmethod
     def parse_tag2(tag: str) -> tuple[int, int]:
@@ -1405,14 +1422,6 @@ class CodeGenerator:
             def __repr__(self):
                 return self.__str__()
 
-        @dataclass(frozen=True)
-        class GlobalIODMAPort:
-            fifo: FIFO
-            connect_interface: list[MulticastInterface]
-            size: list[int]
-            stride: list[int]
-            is_input: bool
-
         def assign_mem_tile(
             dtype: str,
             interface_list: list[MulticastInterface],
@@ -1574,7 +1583,7 @@ class CodeGenerator:
         mapped_interface: dict[str, dict[int, FIFO]] = {
             i: dict() for i in global_tensors.keys()
         }
-        global_io_port: list[GlobalIODMAPort] = []
+        global_io_port: list[CodeGenerator.GlobalIODMAPort] = []
         for idx, dtensor_tile_group in global_tile_to_func.items():
             dtensor = global_dtensor[idx]
             # transfer tile meta data
@@ -1749,10 +1758,10 @@ class CodeGenerator:
                         shim_port_to_mem.bind_to_fifo(dma_fifo)
                         mem_port_to_shim.bind_to_fifo(dma_fifo)
                         global_io_port.append(
-                            GlobalIODMAPort(
+                            CodeGenerator.GlobalIODMAPort(
                                 fifo=dma_fifo,
                                 connect_interface=interface_list,
-                                size=coalesced_size,
+                                size=coalesced_size.to_list(),
                                 stride=dtensor.stride,
                                 is_input=is_input,
                             )
@@ -1854,10 +1863,10 @@ class CodeGenerator:
                             shim_port_to_mem.bind_to_fifo(dma_fifo)
                             mem_port_to_shim.bind_to_fifo(dma_fifo)
                             global_io_port.append(
-                                GlobalIODMAPort(
+                                CodeGenerator.GlobalIODMAPort(
                                     fifo=dma_fifo,
                                     connect_interface=partitioned_interface_list,
-                                    size=coalesced_size,
+                                    size=coalesced_size.to_list(),
                                     stride=dtensor.stride,
                                     is_input=is_input,
                                 )
@@ -1872,74 +1881,29 @@ class CodeGenerator:
                     size = Size4D.subtract(size, partitioned_size)
                     inc = partitioned_size.get_total_size()
                     interface_list = interface_list[inc:]
-            # TODO: some data structure in replace of `self.global_io_dma`
-            for io_port in global_io_port:
-                interfaces: list[MulticastInterface] = io_port.connect_interface
-                # TODO: only support limited cases
-                if len(interfaces) == 1:
-                    tensor_tile_group = global_tensors[
-                        interfaces[0].sample_interface.pe
-                    ][interfaces[0].sample_interface.interface_idx]
-                    time_offset = 0
-                    for live_tensor_tiles in tensor_tile_group.dtensor_groups.values():
-                        live_tensor_tiles.sort(key=lambda t: t.first_use)
-                        end_time = live_tensor_tiles[-1].last_use
-                        tile_idx = 0
-                        while tile_idx < len(live_tensor_tiles):
-                            dtensor_idx = live_tensor_tiles[tile_idx].tile.dtensor_id
-                            dtensor = global_dtensor[dtensor_idx]
-                            outer_shape = [1, 1, 1, 1]
-                            for i in dtensor.shared_dims:
-                                outer_shape[i] = dtensor.size[i]
-                            outer_stride = [1] * 4
-                            for i in reversed(range(3)):
-                                outer_stride[i] = (
-                                    outer_stride[i + 1] * outer_shape[i + 1]
-                                )
-                            size_list = [1,1,1,1]
-                            offset = dtensor.offset_map[
-                                live_tensor_tiles[tile_idx].tile.tensor_tile_label
-                            ].to_list()
-                            flattened_idx = sum(
-                                i * s for i, s in zip(offset, outer_stride)
-                            )
-                            while tile_idx + 1 < len(live_tensor_tiles):
-                                if (
-                                    live_tensor_tiles[tile_idx + 1].tile.dtensor_id
-                                    == dtensor_idx
-                                ):
-                                    next_offset = dtensor.offset_map[
-                                        live_tensor_tiles[
-                                            tile_idx + 1
-                                        ].tile.tensor_tile_label
-                                    ].to_list()
-                                    flattened_next_idx = sum(
-                                        i * s for i, s in zip(next_offset, outer_stride)
-                                    )
-                                    if flattened_next_idx - flattened_idx == 1:
-                                        for i in range(4):
-                                            size_list[i] = (
-                                                size_list[i] + next_offset[i] - offset[i]
-                                            )
-                                        tile_idx = tile_idx + 1
-                                        flattened_idx = flattened_next_idx
-                                        offset = next_offset
-                                        break
-
-                            # dma
-
-                else:
-                    io_tensors: list[LiveDTensorTileGroup] = []
-                    for interface in interfaces:
-                        tensor_tile_group = global_tensors[
-                            interface.sample_interface.pe
-                        ][interface.sample_interface.interface_idx]
-                        assert (
-                            len(tensor_tile_group.dtensor_groups) == 1
-                        ), "TO BE IMPLEMENTED"
-                        io_tensors.append(tensor_tile_group)
-                    # size: io_port.fifo.data_shape
-
+            
+        for io_port in global_io_port:
+            interfaces: list[MulticastInterface] = io_port.connect_interface
+            # TODO: only support limited cases (need to use assert as guard)
+            tensor_tile_group = global_tensors[
+                interfaces[0].sample_interface.pe
+            ][interfaces[0].sample_interface.interface_idx]
+            for live_tensor_tiles in tensor_tile_group.dtensor_groups.values():
+                for live_tensor_tile in live_tensor_tiles:
+                    dtensor_ = global_dtensor[live_tensor_tile.tile.dtensor_id]
+                    self.global_dma_trough_port.append(
+                        CodeGenerator.GlobalIODMATask(
+                            start_time=live_tensor_tile.first_use,
+                            end_time=live_tensor_tile.last_use,
+                            io_port = io_port,
+                            dtensor=dtensor_,
+                            offset=dtensor_.offset_map[live_tensor_tile.tile.tensor_tile_label].to_list()
+                        )
+                    )
+        print("## global_dma_trough_port")
+        for ele in self.global_dma_trough_port:
+            print(ele)
+        print()
         return mapped_interface
 
     def bind_port_to_fifo(self):
@@ -2229,7 +2193,28 @@ class CodeGenerator:
                     )
                 runtime_seq_entry_block = runtime_seq.body.blocks.append(*runtime_args)
                 with aie_ir.InsertionPoint(runtime_seq_entry_block):
-                    # TODO
+                    self.global_dma_trough_port.sort(key=lambda x: x.start_time)
+                    launched_dma = []
+                    for global_dma in self.global_dma_trough_port:
+                        dma_fifo = self.exp_fifo_map[global_dma.io_port.fifo.name]
+                        aiex_d.NpuDmaMemcpyNd(
+                                metadata=dma_fifo,
+                                bd_id=len(launched_dma),
+                                mem=runtime_seq_entry_block.arguments[
+                                    global_dma.dtensor.global_id
+                                ],
+                                offsets=global_dma.offset,
+                                sizes=global_dma.io_port.size,
+                                strides=global_dma.io_port.stride,
+                                issue_token=True,
+                            )
+                        launched_dma.append(dma_fifo)
+                        if len(launched_dma) == Config.DMA_MAX_BDS:
+                            for launched_fifo in launched_dma:
+                                aiex_d.dma_wait(launched_fifo)
+                            launched_dma.clear()
+                    for launched_fifo in launched_dma:
+                        aiex_d.dma_wait(launched_fifo)
 
                     aie_d.EndOp()
 
