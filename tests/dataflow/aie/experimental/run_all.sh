@@ -6,6 +6,7 @@ PYTHON=python3
 
 FILES=(
     test_gemm.py
+    test_mapping.py
     test_matmul.py
     test_matrix_add.py
     test_pingpong_gemm.py
