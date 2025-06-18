@@ -281,16 +281,44 @@ class LiveDTensorTileGroup:
     """
 
     def __init__(self, live_dtensor_tiles: list[LiveDTensorTile]):
+        self.is_input = live_dtensor_tiles[0].is_input
         self.dtensor_groups: dict[str, list[LiveDTensorTile]] = defaultdict(list)
+        self.compatible_dtensor_ids: set[int] = set()
         for dtensor_tile in live_dtensor_tiles:
             self.dtensor_groups[dtensor_tile.token].append(dtensor_tile)
+            self.compatible_dtensor_ids.add(dtensor_tile.tile.dtensor_id)
         for dtensor_groups in self.dtensor_groups.values():
             dtensor_groups.sort(key=lambda x: x.first_use)
             idx = 0
             while idx < len(dtensor_groups) - 1:
                 assert (
-                    dtensor_groups[idx].last_use <= dtensor_groups[idx].first_use
+                    dtensor_groups[idx].last_use <= dtensor_groups[idx + 1].first_use
                 ), "liveness range overlapped."
+                idx = idx + 1
+
+    def grouping(self, tile_group: "LiveDTensorTileGroup") -> bool:
+        # fixme: currently using tensor_id to check data type
+        if self.is_input != tile_group.is_input:
+            return False
+        if self.compatible_dtensor_ids.isdisjoint(tile_group.compatible_dtensor_ids):
+            return False
+        if len(self.dtensor_groups) == len(tile_group.dtensor_groups):
+            for token, dtensor_groups in self.dtensor_groups.items():
+                if token not in tile_group.dtensor_groups:
+                    return False
+                merged = dtensor_groups + tile_group.dtensor_groups[token]
+                merged.sort(key=lambda x: x.first_use)
+                idx = 0
+                while idx < len(dtensor_groups) - 1:
+                    if dtensor_groups[idx].last_use > dtensor_groups[idx + 1].first_use:
+                        return False
+                    idx = idx + 1
+        else:
+            return False
+        # group up
+        for token, dtensor_groups in self.dtensor_groups.items():
+            dtensor_groups.extend(tile_group.dtensor_groups[token])
+        return True
 
     def __str__(self):
         ret = ""
@@ -650,11 +678,45 @@ class ComputationGraph:
         global_tile_io: dict[str, dict[int, LiveDTensorTileGroup]] = {}
         arg_idx_to_interface: dict[str, dict[int, int]] = {}
         for name, node in self.nodes.items():
+            input_interface, output_interface = 0, 0
             dict_: dict[int, LiveDTensorTileGroup] = {}
             idx_to_interface: dict[int, int] = {}
             for idx, interfaces in node.global_interfaces.items():
                 dict_[idx] = LiveDTensorTileGroup(interfaces)
                 idx_to_interface[idx] = idx
+                if interfaces[0].is_input:
+                    input_interface += 1
+                else:
+                    output_interface += 1
+            # try to satisfy compute tile port resource constraint
+            while (
+                input_interface > Config.COMPUTE_MAX_RECV
+                or output_interface > Config.COMPUTE_MAX_SEND
+            ):
+                changed = False
+                keys = list(dict_.keys())
+                for i in range(len(keys)):
+                    for j in range(i + 1, len(keys)):
+                        key_1, key_2 = keys[i], keys[j]
+                        value_1, value_2 = dict_[key_1], dict_[key_2]
+                        if value_1.grouping(value_2):
+                            changed = True
+                            if value_1.is_input:
+                                input_interface -= 1
+                            else:
+                                output_interface -= 1
+                            del dict_[key_2]
+                            for idx in idx_to_interface.keys():
+                                if idx_to_interface[idx] == key_2:
+                                    idx_to_interface[idx] = key_1
+                            break
+                    if changed:
+                        break
+                if not changed:
+                    raise ValueError(
+                        f"Invalide compute kernel {name}, port number exceeded."
+                    )
+
             global_tile_io[name] = dict_
             arg_idx_to_interface[name] = idx_to_interface
         return global_tile_io, arg_idx_to_interface

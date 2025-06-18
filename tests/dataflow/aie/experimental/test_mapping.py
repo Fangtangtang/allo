@@ -66,7 +66,7 @@ def _test_pingpong_gemm():
 
     Ty = int16
     M, N, K = 32, 32, 32
-    Pm, Pn, Pk = 1, 1, 2
+    Pm, Pn, Pk = 2, 2, 2
     Mt, Nt, Kt = M // Pm, N // Pn, K // Pk
 
     LyA = Layout("S1S2")
@@ -97,7 +97,7 @@ def _test_pingpong_gemm():
         target="aie-mlir",
         mapping_primitives=[
             ("chain", ["gemm_0_0_0", "gemm_1_0_0"]),
-            # ("chain", ["gemm_0_0_1", "gemm_1_0_1"]),
+            ("chain", ["gemm_0_0_1", "gemm_1_0_1"]),
             # ("chain", ["gemm_0_1_0", "gemm_1_1_0"]),
             # ("chain", ["gemm_0_1_1", "gemm_1_1_1"]),
         ],
