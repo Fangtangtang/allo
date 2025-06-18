@@ -262,7 +262,7 @@ class CodeGenerator:
 
         self.fifo_manager: FIFOManager = FIFOManager()
         self.experimental_fifo_manager: FIFOManager = FIFOManager()
-        self.global_dma_trough_port:list[CodeGenerator.GlobalIODMATask] = []
+        self.global_dma_trough_port: list[CodeGenerator.GlobalIODMATask] = []
 
         self.exp_aie_module = None  # The top-level AIE IR module
         self.exp_global_ip: aie_ir.InsertionPoint = (
@@ -615,15 +615,16 @@ class CodeGenerator:
                     continue
                 arg_info: tuple[Argument, bool] = func_args[i]
                 if arg_info[0].dtensor is not None:
-                    first_use = next(iter(argument.uses), None)
+                    # fixme: argument.uses is unordered??
+                    first_use = list(argument.uses)[-1]
                     if first_use is not None:
                         first_use_op = first_use.owner
                         # no branch
                         while first_use_op.parent.name != "func.func":
                             first_use_op = first_use_op.parent
                         fifo = self.exp_fifo_map[interfaces[i].name]
-                        is_input = arg_info[0].dtensor in self.global_inputs
-                        with aie_ir.InsertionPoint(first_use_op.operation):
+                        is_input = arg_info[0].dtensor.global_id in self.global_inputs
+                        with aie_ir.InsertionPoint(first_use_op):
                             if interfaces[i].name in reused_fifo_name:
                                 fifo.release(1 if is_input else 0, 1)
                             else:
@@ -634,7 +635,7 @@ class CodeGenerator:
                     pass
                 else:
                     stream: Stream = arg_info[0].stream
-                    fifo = self.fifo_map[stream.name]
+                    fifo = self.exp_fifo_map[stream.name]
                     for use_ in argument.uses:
                         op = use_.owner
                         with aie_ir.InsertionPoint(op.operation):
@@ -662,7 +663,9 @@ class CodeGenerator:
                                 new_op = op.clone()
                                 fifo.release(1, 1)
                                 op.erase()
-
+            print("\n#------------------")
+            print(parsed_function)
+            print("#------------------\n")
             with aie_ir.InsertionPoint(loop.body):
                 for parsed_func_block in parsed_function.body:
                     for op in parsed_func_block.operations:
@@ -688,7 +691,7 @@ class CodeGenerator:
                     buffer_op = aie_d.BufferOp(
                         buffer=alloc_op.results[0].type,
                         tile=func_core.tile,
-                        ip=self.global_ip,
+                        ip=self.exp_global_ip,
                     )
                     for old, new in zip(alloc_op.results, buffer_op.results):
                         old.replace_all_uses_with(new)
@@ -782,14 +785,14 @@ class CodeGenerator:
     @dataclass(frozen=True)
     class GlobalIODMAPort:
         fifo: FIFO
-        connect_interface: list # [MulticastInterface]
+        connect_interface: list  # [MulticastInterface]
         size: list[int]
         stride: list[int]
         is_input: bool
-    
+
     @dataclass(frozen=True)
     class GlobalIODMATask:
-        start_time:int
+        start_time: int
         end_time: int
         io_port: "CodeGenerator.GlobalIODMAPort"
         dtensor: DTensor
@@ -1740,8 +1743,8 @@ class CodeGenerator:
                             dma_fifo = self.experimental_fifo_manager.create_fifo(
                                 src=assigned_shim_tile.name,
                                 dst=shim_port_to_mem.connected_nodes,
-                                data_shape=mem_port_to_compute.data_shape,
-                                dtype=mem_port_to_compute.dtype,
+                                data_shape=shim_port_to_mem.data_shape,
+                                dtype=shim_port_to_mem.dtype,
                             )
                         else:
                             assert (
@@ -1752,8 +1755,8 @@ class CodeGenerator:
                             dma_fifo = self.experimental_fifo_manager.create_fifo(
                                 src=assigned_mem_tile.name,
                                 dst=[assigned_shim_tile.name],
-                                data_shape=mem_port_to_compute.data_shape,
-                                dtype=mem_port_to_compute.dtype,
+                                data_shape=shim_port_to_mem.data_shape,
+                                dtype=shim_port_to_mem.dtype,
                             )
                         shim_port_to_mem.bind_to_fifo(dma_fifo)
                         mem_port_to_shim.bind_to_fifo(dma_fifo)
@@ -1845,8 +1848,8 @@ class CodeGenerator:
                                 dma_fifo = self.experimental_fifo_manager.create_fifo(
                                     src=assigned_shim_tile.name,
                                     dst=shim_port_to_mem.connected_nodes,
-                                    data_shape=mem_port_to_compute.data_shape,
-                                    dtype=mem_port_to_compute.dtype,
+                                    data_shape=shim_port_to_mem.data_shape,
+                                    dtype=shim_port_to_mem.dtype,
                                 )
                             else:
                                 assert (
@@ -1857,8 +1860,8 @@ class CodeGenerator:
                                 dma_fifo = self.experimental_fifo_manager.create_fifo(
                                     src=assigned_mem_tile.name,
                                     dst=[assigned_shim_tile.name],
-                                    data_shape=mem_port_to_compute.data_shape,
-                                    dtype=mem_port_to_compute.dtype,
+                                    data_shape=shim_port_to_mem.data_shape,
+                                    dtype=shim_port_to_mem.dtype,
                                 )
                             shim_port_to_mem.bind_to_fifo(dma_fifo)
                             mem_port_to_shim.bind_to_fifo(dma_fifo)
@@ -1881,13 +1884,13 @@ class CodeGenerator:
                     size = Size4D.subtract(size, partitioned_size)
                     inc = partitioned_size.get_total_size()
                     interface_list = interface_list[inc:]
-            
+
         for io_port in global_io_port:
             interfaces: list[MulticastInterface] = io_port.connect_interface
             # TODO: only support limited cases (need to use assert as guard)
-            tensor_tile_group = global_tensors[
-                interfaces[0].sample_interface.pe
-            ][interfaces[0].sample_interface.interface_idx]
+            tensor_tile_group = global_tensors[interfaces[0].sample_interface.pe][
+                interfaces[0].sample_interface.interface_idx
+            ]
             for live_tensor_tiles in tensor_tile_group.dtensor_groups.values():
                 for live_tensor_tile in live_tensor_tiles:
                     dtensor_ = global_dtensor[live_tensor_tile.tile.dtensor_id]
@@ -1895,9 +1898,11 @@ class CodeGenerator:
                         CodeGenerator.GlobalIODMATask(
                             start_time=live_tensor_tile.first_use,
                             end_time=live_tensor_tile.last_use,
-                            io_port = io_port,
+                            io_port=io_port,
                             dtensor=dtensor_,
-                            offset=dtensor_.offset_map[live_tensor_tile.tile.tensor_tile_label].to_list()
+                            offset=dtensor_.offset_map[
+                                live_tensor_tile.tile.tensor_tile_label
+                            ].to_list(),
                         )
                     )
         print("## global_dma_trough_port")
@@ -2198,16 +2203,16 @@ class CodeGenerator:
                     for global_dma in self.global_dma_trough_port:
                         dma_fifo = self.exp_fifo_map[global_dma.io_port.fifo.name]
                         aiex_d.NpuDmaMemcpyNd(
-                                metadata=dma_fifo,
-                                bd_id=len(launched_dma),
-                                mem=runtime_seq_entry_block.arguments[
-                                    global_dma.dtensor.global_id
-                                ],
-                                offsets=global_dma.offset,
-                                sizes=global_dma.io_port.size,
-                                strides=global_dma.io_port.stride,
-                                issue_token=True,
-                            )
+                            metadata=dma_fifo,
+                            bd_id=len(launched_dma),
+                            mem=runtime_seq_entry_block.arguments[
+                                global_dma.dtensor.global_id
+                            ],
+                            offsets=global_dma.offset,
+                            sizes=global_dma.io_port.size,
+                            strides=global_dma.io_port.stride,
+                            issue_token=True,
+                        )
                         launched_dma.append(dma_fifo)
                         if len(launched_dma) == Config.DMA_MAX_BDS:
                             for launched_fifo in launched_dma:
