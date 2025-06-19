@@ -181,7 +181,6 @@ class SwitchNode:
             self.dtype = dtype
             self.connected_nodes = connected_nodes
             self.bind_fifo: FIFO = None
-            self.queue: list = []
 
         def bind_to_fifo(self, fifo: FIFO):
             assert (
@@ -190,7 +189,7 @@ class SwitchNode:
             self.bind_fifo = fifo
 
         def __str__(self):
-            return f"Port(data_shape={self.data_shape}, dtype={self.dtype}, connected_nodes={self.connected_nodes}, queue={self.queue})"
+            return f"Port(data_shape={self.data_shape}, dtype={self.dtype}, connected_nodes={self.connected_nodes})"
 
         def __repr__(self):
             return self.__str__()

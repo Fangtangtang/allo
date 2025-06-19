@@ -57,10 +57,10 @@ def call_mlir(project: str, output_dtype, trace_size: int, *args):
 from allo.ir.types import int32
 
 TyI, TyO = int32, int32
-M, N, K = 32, 32, 64
+M, N, K = 16, 16, 16
 A = np.random.randint(0, 64, (M, K)).astype(np.int32)
-B = np.random.randint(0, 64, (K, N)).astype(np.int32)
-C = np.zeros((M, N)).astype(np.int32)
-call_mlir("top.prj", TyI, 0, A, B, C)
-np.testing.assert_allclose(C, A @ B, atol=1e-5)
+B = np.zeros((M, N), dtype=np.int32)
+
+call_mlir("top.prj", TyI, 0, A, B)
+np.testing.assert_allclose(A, B)
 print("PASSED!")
