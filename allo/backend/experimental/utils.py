@@ -255,7 +255,6 @@ def inject_external_kernels(
                 if func.attributes["sym_name"].value != top_function_name:
                     func_name: str = func.attributes["sym_name"].value
                     use_external_kernels[func_name] = False
-                    # continue  # fixme: crash when using external kernels
                     for block in func.regions[0].blocks:
                         for op in block.operations:
                             kernel_code, kernel_header = "", ""
