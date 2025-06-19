@@ -8,7 +8,7 @@ import numpy as np
 from allo.memory import Layout
 
 
-def _test_vector_scalar_add():
+def _test_vector_scalar_add_v1():
     Ly = Layout("S0")
     # https://github.com/Xilinx/mlir-aie/tree/main/programming_examples/basic/vector_scalar_add
     Ty = int32
@@ -16,13 +16,70 @@ def _test_vector_scalar_add():
 
     @df.region()
     def top():
-        @df.kernel(mapping=[2])
+        @df.kernel(mapping=[4])
         def core(A: Ty[M] @ Ly, B: Ty[M] @ Ly):
             B[:] = allo.add(A, 1)
 
     A = np.random.randint(0, 100, M).astype(np.int32)
     mod = df.build(
-        top, target="aie-mlir", mapping_primitives=[("bundle", ["core_0", "core_1"])]
+        top,
+        target="aie-mlir",
+        mapping_primitives=[("bundle", ["core_0", "core_1", "core_2", "core_3"])],
+    )
+    B = np.zeros(M).astype(np.int32)
+    mod(A, B)
+    np.testing.assert_allclose(B, A + 1)
+    print("PASSED!")
+
+
+def _test_vector_scalar_add_v2():
+    Ly = Layout("S0")
+    # https://github.com/Xilinx/mlir-aie/tree/main/programming_examples/basic/vector_scalar_add
+    Ty = int32
+    M = 1024
+
+    @df.region()
+    def top():
+        @df.kernel(mapping=[4])
+        def core(A: Ty[M] @ Ly, B: Ty[M] @ Ly):
+            B[:] = allo.add(A, 1)
+
+    A = np.random.randint(0, 100, M).astype(np.int32)
+    mod = df.build(
+        top,
+        target="aie-mlir",
+        mapping_primitives=[
+            ("bundle", ["core_0", "core_1"]),
+            ("bundle", ["core_2", "core_3"]),
+        ],
+    )
+    B = np.zeros(M).astype(np.int32)
+    mod(A, B)
+    np.testing.assert_allclose(B, A + 1)
+    print("PASSED!")
+
+
+def _test_vector_scalar_add_v3():
+    Ly = Layout("S0")
+    # https://github.com/Xilinx/mlir-aie/tree/main/programming_examples/basic/vector_scalar_add
+    Ty = int32
+    M = 1024
+
+    @df.region()
+    def top():
+        @df.kernel(mapping=[4])
+        def core(A: Ty[M] @ Ly, B: Ty[M] @ Ly):
+            B[:] = allo.add(A, 1)
+
+    A = np.random.randint(0, 100, M).astype(np.int32)
+    mod = df.build(
+        top,
+        target="aie-mlir",
+        mapping_primitives=[
+            ("bundle", ["core_0", "core_1"]),  # -> bundled_node_name: core_0
+            ("bundle", ["core_2", "core_3"]),  # -> bundled_node_name: core_2
+            ("bundle", ["core_0", "core_2"]),  # name after bundled, may be confusing
+        ],
     )
     B = np.zeros(M).astype(np.int32)
     mod(A, B)
@@ -63,5 +120,7 @@ def _test_producer_consumer():
 
 
 if __name__ == "__main__":
-    _test_vector_scalar_add()
+    _test_vector_scalar_add_v1()
+    _test_vector_scalar_add_v2()
+    _test_vector_scalar_add_v3()
     _test_producer_consumer()
