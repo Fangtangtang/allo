@@ -294,7 +294,6 @@ class CodeGenerator:
                         MemRefType.get([], IntegerType.get_signless(8))
                     )
 
-            print(new_func_inputs)
             func_type = allo_func_d.FunctionType.get(
                 new_func_inputs,
                 original_func.type.results,
@@ -532,9 +531,6 @@ class CodeGenerator:
                     else:
                         raise ValueError("Too many core functions. Fail to resolve.")
         assert not parsed_function is None
-        print("\n#------------------")
-        print(parsed_function)
-        print("#------------------\n")
         func_body = func_core.regions[0]
         entry_block = aie_ir.Block.create_at_start(func_body)
         with aie_ir.InsertionPoint(entry_block):
@@ -599,9 +595,6 @@ class CodeGenerator:
                                 new_op = op.clone()
                                 fifo.release(1, 1)
                                 op.erase()
-            print("\n#------------------")
-            print(parsed_function)
-            print("#------------------\n")
             with aie_ir.InsertionPoint(loop.body):
                 for parsed_func_block in parsed_function.body:
                     for op in parsed_func_block.operations:
@@ -702,13 +695,14 @@ class CodeGenerator:
         global_tensors, arg_idx_to_interface = (
             self.virtual_computation_graph.get_global_io()
         )
-        print("############## global_tensors ##############")
-        for func_name, io_info in global_tensors.items():
-            print(func_name)
-            for arg_idx, tiles in io_info.items():
-                print("\t", arg_idx)
-                print(tiles)
-        print("#############- global_tensors -#############")
+        if os.getenv("VERBOSE") == "1":
+            print("############## global_tensors ##############")
+            for func_name, io_info in global_tensors.items():
+                print(func_name)
+                for arg_idx, tiles in io_info.items():
+                    print("\t", arg_idx)
+                    print(tiles)
+            print("#############- global_tensors -#############")
         global_dtensor: dict[int, DTensor] = dict(self.global_inputs)
         global_dtensor.update(self.global_outputs)
         global_tile_to_func: dict[int, DTensorTileGroup] = {
@@ -1080,9 +1074,10 @@ class CodeGenerator:
             coalesced_access_pattern, coalesce_info, coalesced_multicast_interfaces = (
                 coalesce_memory_access(unresolved_tile)
             )
-            print("<<<<< coalesced_multicast_interfaces >>>>>")
-            print(coalesced_multicast_interfaces)
-            print("===== coalesced_multicast_interfaces =====")
+            if os.getenv("VERBOSE") == "1":
+                print("<<<<< coalesced_multicast_interfaces >>>>>")
+                print(coalesced_multicast_interfaces)
+                print("===== coalesced_multicast_interfaces =====")
             contiguous_interfaces: list[ContiguousInterface] = []
             for start_offset in coalesced_access_pattern.keys():
                 coalesced_interfaces: list[list[MulticastInterface]] = (
@@ -1090,28 +1085,40 @@ class CodeGenerator:
                 )
                 left = 0
                 while left < len(coalesced_interfaces):
-                    assert len(coalesced_interfaces[left]) == 1, "TO BE IMPLEMETENED"
-                    contiguous: ContiguousInterface = ContiguousInterface(
-                        coalesce_info[start_offset][left], coalesced_interfaces[left][0]
-                    )
-                    right = left + 1
-                    while right < len(coalesced_interfaces):
-                        assert (
-                            len(coalesced_interfaces[right]) == 1
-                        ), "TO BE IMPLEMETENED"
-                        if contiguous.append(
-                            coalesce_info[start_offset][right],
-                            coalesced_interfaces[right][0],
-                        ):
-                            right = right + 1
-                        else:
-                            break
-                    contiguous_interfaces.append(contiguous)
-                    left = right
-            print("\n<<<<< contiguous_interfaces >>>>>")
-            for contiguous_interface in contiguous_interfaces:
-                print(contiguous_interface)
-            print("===== contiguous_interfaces =====\n")
+                    next_flag = True
+                    for left_i, multicast_interface in enumerate(
+                        coalesced_interfaces[left]
+                    ):
+                        if multicast_interface is not None:
+                            next_flag = False
+                            contiguous: ContiguousInterface = ContiguousInterface(
+                                coalesce_info[start_offset][left], multicast_interface
+                            )
+                            coalesced_interfaces[left][left_i] = None
+                            right = left + 1
+                            continue_flag = True
+                            while continue_flag and right < len(coalesced_interfaces):
+                                continue_flag = False
+                                for right_i, next_interface in enumerate(
+                                    coalesced_interfaces[right]
+                                ):
+                                    if next_interface is not None:
+                                        if contiguous.append(
+                                            coalesce_info[start_offset][right],
+                                            next_interface,
+                                        ):
+                                            continue_flag = True
+                                            coalesced_interfaces[right][right_i] = None
+                                            right = right + 1
+                                            break
+                            contiguous_interfaces.append(contiguous)
+                    if next_flag:
+                        left += 1
+            if os.getenv("VERBOSE") == "1":
+                print("\n<<<<< contiguous_interfaces >>>>>")
+                for contiguous_interface in contiguous_interfaces:
+                    print(contiguous_interface)
+                print("===== contiguous_interfaces =====\n")
             for contiguous_interface in contiguous_interfaces:
                 interface_list: list[MulticastInterface] = (
                     contiguous_interface.interface_list
@@ -1338,10 +1345,11 @@ class CodeGenerator:
                             ].to_list(),
                         )
                     )
-        print("## global_dma_trough_port")
-        for ele in self.global_dma_trough_port:
-            print(ele)
-        print()
+        if os.getenv("VERBOSE") == "1":
+            print("## global_dma_trough_port")
+            for ele in self.global_dma_trough_port:
+                print(ele)
+            print()
         global_arg_idx_to_interface: dict[str, dict[int, FIFO]] = {
             i: dict() for i in global_tensors.keys()
         }
@@ -1519,7 +1527,6 @@ class CodeGenerator:
                     self.tile_map[func_name] = aie_d.TileOp(col=col, row=row + 2)
                 # define fifos
                 # - stream fifos: compute <-> compute
-                print(self.streams)
                 for stream_name, stream in self.streams.items():
                     self.fifo_map[stream_name] = aie_d.object_fifo(
                         stream_name,
@@ -1532,7 +1539,6 @@ class CodeGenerator:
                         ),
                     )
                 # - io fifos: shim <-> mem <-> compute
-                print(self.fifo_manager.fifos)
                 for dma_fifo in self.fifo_manager.fifos:
                     self.fifo_map[dma_fifo.name] = aie_d.object_fifo(
                         dma_fifo.name,
