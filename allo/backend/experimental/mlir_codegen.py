@@ -33,17 +33,13 @@ from ...memory import (
     Offset4D,
     Size4D,
     coalesce_memory_access,
-    format_memory_access,
 )
 
 from .utils import get_element_type, device_config_map, Argument, Stream, Config
 from ..aie import map_kernels_to_device_mesh
 from .mapping import (
     SwitchNode,
-    OrderedDTensorTileGroup,
     PEInterface,
-    DTensorTile,
-    LiveDTensorTile,
     LiveDTensorTileGroup,
     DTensorTileGroup,
     ComputationGraph,
@@ -906,6 +902,7 @@ class CodeGenerator:
             # Use new ports
             if assigned_mem_tile is not None:
                 send_ports, recv_ports = [], []
+                connected_interfaces: list[list[PEInterface]] = []
                 for i in range(send_need):
                     port = SwitchNode.Port(
                         id=len(assigned_mem_tile.send_ports),
@@ -915,6 +912,10 @@ class CodeGenerator:
                     )
                     assigned_mem_tile.send_ports.append(port)
                     send_ports.append(port.id)
+                    if is_input:
+                        connected_interfaces.append(
+                            list(interface_list[i].interface_list)
+                        )
                 if is_input:
                     for i in range(recv_need):
                         port = SwitchNode.Port(
@@ -936,6 +937,7 @@ class CodeGenerator:
                             )
                             assigned_mem_tile.recv_ports.append(port)
                             recv_ports.append(port.id)
+                            connected_interfaces.append([pe_interface])
                 assigned_mem_tile.intra_connect.append(
                     SwitchNode.IntraConnect(
                         send_ports,
@@ -956,9 +958,10 @@ class CodeGenerator:
                     assigned_mem_tile,
                     recv_ports[0] if is_input else send_ports[0],
                     send_ports if is_input else recv_ports,
+                    connected_interfaces,
                 )
             # TODO: port reuse
-            return None, -1, []
+            return None, -1, [], []
 
         def assign_shim_tile(
             mem_tile: SwitchNode,
@@ -1126,7 +1129,12 @@ class CodeGenerator:
                 size = contiguous_interface.total_size
                 while size.get_total_size() != 0:
                     coalesced_size = Size4D.coalesce(size, tile_size)
-                    assigned_mem_tile, port_id, ports_to_compute = assign_mem_tile(
+                    (
+                        assigned_mem_tile,
+                        port_id,
+                        ports_to_compute,
+                        connected_interfaces,
+                    ) = assign_mem_tile(
                         tile_dtype,
                         interface_list,
                         is_input,
@@ -1135,8 +1143,8 @@ class CodeGenerator:
                         tile_param_type,
                     )
                     if assigned_mem_tile is not None:
-                        interface_to_fifo: dict[str, FIFO] = {}
-                        for port in ports_to_compute:
+                        assert len(connected_interfaces) == len(ports_to_compute)
+                        for idx, port in enumerate(ports_to_compute):
                             mem_port_to_compute: SwitchNode.Port = (
                                 assigned_mem_tile.send_ports[port]
                                 if is_input
@@ -1157,9 +1165,10 @@ class CodeGenerator:
                                     data_shape=mem_port_to_compute.data_shape,
                                     dtype=mem_port_to_compute.dtype,
                                 )
-                            for node in mem_port_to_compute.connected_nodes:
-                                assert node not in interface_to_fifo
-                                interface_to_fifo[node] = dma_fifo
+                            for interface in connected_interfaces[idx]:
+                                mapped_interface[interface.pe][
+                                    interface.interface_idx
+                                ] = dma_fifo
                             mem_port_to_compute.bind_to_fifo(dma_fifo)
                         mem_port_to_shim = (
                             assigned_mem_tile.recv_ports[port_id]
@@ -1213,11 +1222,6 @@ class CodeGenerator:
                                 is_input=is_input,
                             )
                         )
-                        for interface in interface_list:
-                            for pe_interface in interface.interface_list:
-                                mapped_interface[pe_interface.pe][
-                                    pe_interface.interface_idx
-                                ] = interface_to_fifo[pe_interface.pe]
                         break
                     size_cp = size.copy()
                     # keep partitioning until success
@@ -1227,7 +1231,12 @@ class CodeGenerator:
                         partitioned_interface_list = interface_list[
                             : partitioned_size.get_total_size()
                         ]
-                        assigned_mem_tile, port_id, ports_to_compute = assign_mem_tile(
+                        (
+                            assigned_mem_tile,
+                            port_id,
+                            ports_to_compute,
+                            connected_interfaces,
+                        ) = assign_mem_tile(
                             tile_dtype,
                             partitioned_interface_list,
                             is_input,
@@ -1236,8 +1245,8 @@ class CodeGenerator:
                             tile_param_type,
                         )
                         if assigned_mem_tile is not None:
-                            interface_to_fifo: dict[str, FIFO] = {}
-                            for port in ports_to_compute:
+                            assert len(connected_interfaces) == len(ports_to_compute)
+                            for idx, port in enumerate(ports_to_compute):
                                 mem_port_to_compute: SwitchNode.Port = (
                                     assigned_mem_tile.send_ports[port]
                                     if is_input
@@ -1258,9 +1267,10 @@ class CodeGenerator:
                                         data_shape=mem_port_to_compute.data_shape,
                                         dtype=mem_port_to_compute.dtype,
                                     )
-                                for node in mem_port_to_compute.connected_nodes:
-                                    assert node not in interface_to_fifo
-                                    interface_to_fifo[node] = dma_fifo
+                                for interface in connected_interfaces[idx]:
+                                    mapped_interface[interface.pe][
+                                        interface.interface_idx
+                                    ] = dma_fifo
                                 mem_port_to_compute.bind_to_fifo(dma_fifo)
                             mem_port_to_shim = (
                                 assigned_mem_tile.recv_ports[port_id]
@@ -1314,11 +1324,6 @@ class CodeGenerator:
                                     is_input=is_input,
                                 )
                             )
-                            for interface in partitioned_interface_list:
-                                for pe_interface in interface.interface_list:
-                                    mapped_interface[pe_interface.pe][
-                                        pe_interface.interface_idx
-                                    ] = interface_to_fifo[pe_interface.pe]
                             break
                         size_cp = partitioned_size
                     size = Size4D.subtract(size, partitioned_size)

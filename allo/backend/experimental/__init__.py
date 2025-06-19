@@ -211,7 +211,6 @@ class AIE_MLIRModule:
                     self.virtual_computation_graph.chain(arg_list[0], arg_list[1])
                 if primitive == "bundle":
                     self.virtual_computation_graph.bundle(arg_list)
-        print(self.virtual_computation_graph.func_args)
         # inject external kernels
         use_external_kernels, injected_kernels, include_src = inject_external_kernels(
             self.allo_module, self.top_func_name
@@ -247,12 +246,12 @@ class AIE_MLIRModule:
         )
 
         # TODO: opt passes on aie-mlir
-        # passes = [
-        #     "func.func(affine-loop-unroll), canonicalize",
-        # ]
-        # pipeline = f'builtin.module({",".join(passes)})'
-        # with self.aie_module.context:
-        #     aie_pass_manager.PassManager.parse(pipeline).run(self.aie_module.operation)
+        passes = [
+            "func.func(affine-loop-unroll), canonicalize",
+        ]
+        pipeline = f'builtin.module({",".join(passes)})'
+        with self.aie_module.context:
+            aie_pass_manager.PassManager.parse(pipeline).run(self.aie_module.operation)
 
         self.post_codegen_build(injected_kernels, include_src)
         return self
