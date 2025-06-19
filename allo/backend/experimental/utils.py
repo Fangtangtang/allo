@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import aie.ir as aie_ir
 import allo._mlir._mlir_libs._mlir as allo_ir
 from ..._mlir.dialects import func as allo_func_d
+import allo._mlir.dialects._memref_ops_gen as allo_memref_d
 from ..utils import format_str, format_code
 from ...memory import DTensor
 
@@ -258,9 +259,11 @@ def inject_external_kernels(
                     for block in func.regions[0].blocks:
                         for op in block.operations:
                             kernel_code, kernel_header = "", ""
+                            lib_kernel_name: str = None
                             # vec add/mul
                             if op.operation.name in {"linalg.add", "linalg.mul"}:
                                 op_name = op.operation.name.split(".")[1]
+                                lib_kernel_name = op_name
                                 include_src.add(f'#include "{op_name}.cc"\n')
                                 dtype = str(op.inputs[0].type.element_type)
                                 ctype = aie_external_kernel_ctype_map[dtype]
@@ -272,6 +275,7 @@ def inject_external_kernels(
                                 kernel_code += "}\n\n"
                             # matmul
                             elif op.operation.name == "linalg.matmul":
+                                lib_kernel_name = "matmul"
                                 M, K = MemRefType(op.inputs[0].type).shape
                                 _, N = MemRefType(op.inputs[1].type).shape
                                 dtype = str(op.inputs[0].type.element_type)
@@ -323,6 +327,10 @@ def inject_external_kernels(
                             kernel.attributes["sym_visibility"] = StringAttr.get(
                                 "private"
                             )
+                            if lib_kernel_name is not None:
+                                kernel.attributes["lib_kernel_name"] = StringAttr.get(
+                                    lib_kernel_name
+                                )
     return use_external_kernels, injected_kernels, include_src
 
 
@@ -456,6 +464,90 @@ def codegen_external_kernels(injected_kernels: dict, include_src) -> str:
 
     code += kernel_file_code
     return code
+
+
+# ############################################################
+# Optimization Passes
+# ############################################################
+
+
+def lib_kernel_replacement(function: allo_func_d.FuncOp):
+    """
+    Replace code with efficient lib/external kernels
+        pattern matching based
+    """
+
+    def replace_redundant_matmul(function: allo_func_d.FuncOp):
+        """
+        %alloc_0 = memref.alloc() : memref<32x32xi16>
+        linalg.fill {op_name = "matmul_init_zero_0"} ins(%c0_i16 : i16) outs(%alloc_0 : memref<32x32xi16>)
+        call @matmul_scalar_i16_i16(%arg0, %arg1, %alloc_0) : (memref<32x32xi16>, memref<32x32xi16>, memref<32x32xi16>) -> ()
+        %alloc_1 = memref.alloc() : memref<32x32xi16>
+        call @add_i16_vector(%alloc_0, %alloc, %alloc_1) : (memref<32x32xi16>, memref<32x32xi16>, memref<32x32xi16>) -> ()
+
+        ==> (if %alloc can be write safely)
+        call @matmul_scalar_i16_i16(%arg0, %arg1, %alloc) : (memref<32x32xi16>, memref<32x32xi16>, memref<32x32xi16>) -> ()
+        """
+        matmul_ops: list[allo_func_d.CallOp] = []
+
+        def collect_matmuls(op):
+            if isinstance(op, allo_func_d.CallOp):
+                if "@matmul" in str(op.callee) and len(op.operands_) == 3:
+                    matmul_ops.append(op.operation)
+                return
+
+            for region in op.regions:
+                for block in region.blocks:
+                    for inner_op in block.operations:
+                        collect_matmuls(inner_op)
+
+        collect_matmuls(function)
+        for call_matmul_op in matmul_ops:
+            output = call_matmul_op.operands[-1]
+            uses = list(output.uses)
+            if (
+                isinstance(output.owner, allo_ir.ir.Operation)
+                and output.owner.name == "memref.alloc"
+                and len(uses) == 3
+            ):
+                init_zero_op, acc_op = None, None
+                for operand in uses:
+                    op = operand.owner
+                    if isinstance(op, allo_func_d.CallOp) and "@add" in str(op.callee):
+                        acc_op = op
+                    elif op.attributes.__contains__(
+                        "op_name"
+                    ) and "matmul_init_zero_0" in str(
+                        op.attributes.__getitem__("op_name")
+                    ):
+                        init_zero_op = op
+                if init_zero_op is not None and acc_op is not None:
+                    acc_base = (
+                        acc_op.operands_[0]
+                        if acc_op.operands_[0] != output
+                        else acc_op.operands_[1]
+                    )
+                    if list(acc_base.uses)[0].owner == acc_op:
+                        # accumulation is the last use
+                        call_matmul_op.operands[-1] = acc_base
+                        init_zero_op.erase()
+                        acc_op.operands_[-1].replace_all_uses_with(acc_base)
+                        acc_op.erase()
+
+    replace_redundant_matmul(function)
+
+
+def local_buffer_opt(function: allo_func_d.FuncOp):
+    """
+    Optimize local buffer (allocated memory) usage
+    """
+    # TODO
+    pass
+
+
+def loop_rerolling(function: allo_func_d.FuncOp):
+    # TODO
+    pass
 
 
 # ############################################################

@@ -26,6 +26,8 @@ from .utils import (
     classify_aie_functions,
     classify_aie_functions_experimental,
     codegen_external_kernels,
+    lib_kernel_replacement,
+    local_buffer_opt,
     read_tensor_from_file,
     codegen_host,
 )
@@ -52,7 +54,7 @@ class AIE_MLIRModule:
             For example, launching the kernels in topological order.
         """
         # module metadata
-        print(module)
+        # print(module)
         self.project_dir: str = project_dir
         self.allo_module: allo_ir.ir.Module = module
         self.top_func_name: str = top_func_name
@@ -190,6 +192,25 @@ class AIE_MLIRModule:
                 i + len(self.global_inputs) in self.global_outputs
             ), "outputs should be the ending arguments of the function"
 
+    def allo_opt(self):
+        """
+        run optimized passes on allo mlir
+        """
+        for node in self.virtual_computation_graph.nodes.values():
+            function = node.func
+            lib_kernel_replacement(function)
+            local_buffer_opt(function)
+
+        pipeline = f"builtin.module(canonicalize)"
+        with self.allo_module.context:
+            mlir_pass_manager.parse(pipeline).run(self.allo_module.operation)
+
+        # record optimized allo mlir
+        with open(
+            os.path.join(self.project_dir, "original_opt.mlir"), "w", encoding="utf-8"
+        ) as f:
+            f.write(str(self.allo_module))
+
     def build_experimental(
         self,
         device_type="npu1_4col",
@@ -221,6 +242,9 @@ class AIE_MLIRModule:
             os.path.join(self.project_dir, "original.mlir"), "w", encoding="utf-8"
         ) as f:
             f.write(str(self.allo_module))
+
+        self.allo_opt()
+
         passes = [
             "func.func(convert-linalg-to-affine-loops),lower-affine",
         ]
