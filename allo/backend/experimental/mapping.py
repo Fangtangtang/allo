@@ -145,25 +145,6 @@ class FIFOManager:
         self.fifos.append(fifo)
         return fifo
 
-    def get_or_create_fifo(
-        self, src: str, dst: list[str], data_shape: list[str], dtype: str
-    ) -> FIFO:
-        dst = sorted(dst)
-        key = (src, tuple(dst), tuple(data_shape), dtype)
-
-        if key in self.fifo_map:
-            return self.fifo_map[key]
-        else:
-            fifo = FIFO(
-                name=f"fifo_{len(self.fifo_map)}",
-                src=src,
-                dst=dst,
-                data_shape=data_shape,
-                dtype=dtype,
-            )
-            self.fifo_map[key] = fifo
-            return fifo
-
     def print(self):
         print("\n***** FIFOs *****")
         for key, fifo in self.fifo_map.items():

@@ -968,6 +968,8 @@ class CodeGenerator:
             mem_port: SwitchNode.Port,
             is_input: bool,
         ):
+            send_need = 1 if is_input else 0
+            recv_need = 0 if is_input else 1
             assigned_shim_tile = None
             # Attempt to use a new shim tile
             if len(self.used_shim_tiles) < MAX_SHIM_TILES:
@@ -980,40 +982,36 @@ class CodeGenerator:
             else:
                 for shim_tile in self.used_shim_tiles:
                     if (
-                        len(shim_tile.send_ports) + 1 <= Config.SHIM_MAX_SEND
-                        and len(shim_tile.recv_ports) + 1 <= Config.SHIM_MAX_RECV
+                        len(shim_tile.send_ports) + send_need <= Config.SHIM_MAX_SEND
+                        and len(shim_tile.recv_ports) + recv_need
+                        <= Config.SHIM_MAX_RECV
                     ):
                         assigned_shim_tile = shim_tile
                         break
             # Use new ports
             if assigned_shim_tile is not None:
                 connected_mem = [mem_tile.name]
-                send_port = SwitchNode.Port(
-                    id=len(assigned_shim_tile.send_ports),
-                    data_shape=mem_port.data_shape,
-                    dtype=mem_port.dtype,
-                    connected_nodes=connected_mem if is_input else [],
-                )
-                assigned_shim_tile.send_ports.append(send_port)
-                recv_port = SwitchNode.Port(
-                    id=len(assigned_shim_tile.recv_ports),
-                    data_shape=mem_port.data_shape,
-                    dtype=mem_port.dtype,
-                    connected_nodes=[] if is_input else connected_mem,
-                )
-                assigned_shim_tile.recv_ports.append(recv_port)
-                mem_port.connected_nodes.append(assigned_shim_tile.name)
-                assigned_shim_tile.intra_connect.append(
-                    SwitchNode.IntraConnect(
-                        send_port_ids=[send_port.id],
-                        recv_port_ids=[recv_port.id],
-                        offsets=[0],
+                if is_input:
+                    send_port = SwitchNode.Port(
+                        id=len(assigned_shim_tile.send_ports),
+                        data_shape=mem_port.data_shape,
+                        dtype=mem_port.dtype,
+                        connected_nodes=connected_mem,
                     )
-                )
+                    assigned_shim_tile.send_ports.append(send_port)
+                else:
+                    recv_port = SwitchNode.Port(
+                        id=len(assigned_shim_tile.recv_ports),
+                        data_shape=mem_port.data_shape,
+                        dtype=mem_port.dtype,
+                        connected_nodes=connected_mem,
+                    )
+                    assigned_shim_tile.recv_ports.append(recv_port)
+                mem_port.connected_nodes.append(assigned_shim_tile.name)
                 if os.getenv("VERBOSE") == "1":
                     print("\nassigned_shim_tile: ", end="")
                     assigned_shim_tile.print()
-                return assigned_shim_tile, recv_port.id if is_input else send_port.id
+                return assigned_shim_tile, send_port.id if is_input else recv_port.id
                 # TODO: port reuse
             return None, -1
 

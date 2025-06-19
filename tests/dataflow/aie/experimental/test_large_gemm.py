@@ -7,11 +7,12 @@ import allo.dataflow as df
 import numpy as np
 from allo.memory import Layout
 
-def _test_pingpong_gemm_2x2x4():
+
+def _test_pingpong_gemm_4x4x4():
 
     Ty = int16
-    M, N, K = 96, 128, 128
-    Pm, Pn, Pk = 3, 4, 4
+    M, N, K = 128, 128, 128
+    Pm, Pn, Pk = 4, 4, 4
     Mt, Nt, Kt = M // Pm, N // Pn, K // Pk
 
     LyA = Layout("S1S2")
@@ -53,7 +54,6 @@ def _test_pingpong_gemm_2x2x4():
             ("chain", ["gemm_0_0_3", "gemm_1_0_3"]),
             ("chain", ["gemm_0_0_3-gemm_1_0_3", "gemm_2_0_3"]),
             ("chain", ["gemm_0_0_3-gemm_1_0_3-gemm_2_0_3", "gemm_3_0_3"]),
-
             ("chain", ["gemm_0_1_0", "gemm_1_1_0"]),
             ("chain", ["gemm_0_1_0-gemm_1_1_0", "gemm_2_1_0"]),
             ("chain", ["gemm_0_1_0-gemm_1_1_0-gemm_2_1_0", "gemm_3_1_0"]),
@@ -66,7 +66,6 @@ def _test_pingpong_gemm_2x2x4():
             ("chain", ["gemm_0_1_3", "gemm_1_1_3"]),
             ("chain", ["gemm_0_1_3-gemm_1_1_3", "gemm_2_1_3"]),
             ("chain", ["gemm_0_1_3-gemm_1_1_3-gemm_2_1_3", "gemm_3_1_3"]),
-
             ("chain", ["gemm_0_2_0", "gemm_1_2_0"]),
             ("chain", ["gemm_0_2_0-gemm_1_2_0", "gemm_2_2_0"]),
             ("chain", ["gemm_0_2_0-gemm_1_2_0-gemm_2_2_0", "gemm_3_2_0"]),
@@ -79,22 +78,19 @@ def _test_pingpong_gemm_2x2x4():
             ("chain", ["gemm_0_2_3", "gemm_1_2_3"]),
             ("chain", ["gemm_0_2_3-gemm_1_2_3", "gemm_2_2_3"]),
             ("chain", ["gemm_0_2_3-gemm_1_2_3-gemm_2_2_3", "gemm_3_2_3"]),
-
-            # fixme: exceed shim port resource constrain
-            # ("chain", ["gemm_0_3_0", "gemm_1_3_0"]),
-            # ("chain", ["gemm_0_3_0-gemm_1_3_0", "gemm_2_3_0"]),
-            # ("chain", ["gemm_0_3_0-gemm_1_3_0-gemm_2_3_0", "gemm_3_3_0"]),
-            # ("chain", ["gemm_0_3_1", "gemm_1_3_1"]),
-            # ("chain", ["gemm_0_3_1-gemm_1_3_1", "gemm_2_3_1"]),
-            # ("chain", ["gemm_0_3_1-gemm_1_3_1-gemm_2_3_1", "gemm_3_3_1"]),
-            # ("chain", ["gemm_0_3_2", "gemm_1_3_2"]),
-            # ("chain", ["gemm_0_3_2-gemm_1_3_2", "gemm_2_3_2"]),
-            # ("chain", ["gemm_0_3_2-gemm_1_3_2-gemm_2_3_2", "gemm_3_3_2"]),
-            # ("chain", ["gemm_0_3_3", "gemm_1_3_3"]),
-            # ("chain", ["gemm_0_3_3-gemm_1_3_3", "gemm_2_3_3"]),
-            # ("chain", ["gemm_0_3_3-gemm_1_3_3-gemm_2_3_3", "gemm_3_3_3"]),
+            ("chain", ["gemm_0_3_0", "gemm_1_3_0"]),
+            ("chain", ["gemm_0_3_0-gemm_1_3_0", "gemm_2_3_0"]),
+            ("chain", ["gemm_0_3_0-gemm_1_3_0-gemm_2_3_0", "gemm_3_3_0"]),
+            ("chain", ["gemm_0_3_1", "gemm_1_3_1"]),
+            ("chain", ["gemm_0_3_1-gemm_1_3_1", "gemm_2_3_1"]),
+            ("chain", ["gemm_0_3_1-gemm_1_3_1-gemm_2_3_1", "gemm_3_3_1"]),
+            ("chain", ["gemm_0_3_2", "gemm_1_3_2"]),
+            ("chain", ["gemm_0_3_2-gemm_1_3_2", "gemm_2_3_2"]),
+            ("chain", ["gemm_0_3_2-gemm_1_3_2-gemm_2_3_2", "gemm_3_3_2"]),
+            ("chain", ["gemm_0_3_3", "gemm_1_3_3"]),
+            ("chain", ["gemm_0_3_3-gemm_1_3_3", "gemm_2_3_3"]),
+            ("chain", ["gemm_0_3_3-gemm_1_3_3-gemm_2_3_3", "gemm_3_3_3"]),
         ],
-    
     )
     A = np.random.randint(0, 64, (M, K)).astype(np.int16)
     B = np.random.randint(0, 64, (K, N)).astype(np.int16)
@@ -103,5 +99,6 @@ def _test_pingpong_gemm_2x2x4():
     np.testing.assert_allclose(C, A @ B, atol=1e-5)
     print("PASSED!")
 
+
 if __name__ == "__main__":
-    _test_pingpong_gemm_2x2x4()
+    _test_pingpong_gemm_4x4x4()
