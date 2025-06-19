@@ -11,7 +11,7 @@ from allo.memory import Layout
 def _test_pingpong_gemm_4x4x4():
 
     Ty = int16
-    M, N, K = 128, 128, 128
+    M, N, K = 128, 128, 512
     Pm, Pn, Pk = 4, 4, 4
     Mt, Nt, Kt = M // Pm, N // Pn, K // Pk
 

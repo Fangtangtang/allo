@@ -35,7 +35,14 @@ from ...memory import (
     coalesce_memory_access,
 )
 
-from .utils import get_element_type, device_config_map, Argument, Stream, Config
+from .utils import (
+    get_element_type,
+    collect_op_by_name,
+    device_config_map,
+    Argument,
+    Stream,
+    Config,
+)
 from ..aie import map_kernels_to_device_mesh
 from .mapping import (
     SwitchNode,
@@ -458,18 +465,7 @@ class CodeGenerator:
                             old.replace_all_uses_with(new)
 
                 # replace alloc with buffer
-                alloc_ops = []
-
-                def collect_allocs(op):
-                    if op.name == "memref.alloc":
-                        alloc_ops.append(op.operation)
-                        return
-                    for region in op.regions:
-                        for block in region.blocks:
-                            for inner_op in block.operations:
-                                collect_allocs(inner_op)
-
-                collect_allocs(loop)
+                alloc_ops = collect_op_by_name(loop, "memref.alloc")
                 for alloc_op in alloc_ops:
                     buffer_op = aie_d.BufferOp(
                         buffer=alloc_op.results[0].type,

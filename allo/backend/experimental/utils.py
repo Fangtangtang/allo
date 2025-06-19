@@ -225,6 +225,22 @@ def parse_kernel_name(name: str):
     return prefix, indexs
 
 
+def collect_op_by_name(root, target: str) -> list:
+    collected_op = []
+
+    def collect(op):
+        if op.name == target:
+            collected_op.append(op.operation)
+            return
+        for region in op.regions:
+            for block in region.blocks:
+                for inner_op in block.operations:
+                    collect(inner_op)
+
+    collect(root)
+    return collected_op
+
+
 def inject_external_kernels(
     module: allo_ir.ir.Module, top_function_name: str
 ) -> tuple[dict[str, bool], dict[str, tuple[str, str]], set[str]]:
@@ -541,8 +557,20 @@ def local_buffer_opt(function: allo_func_d.FuncOp):
     """
     Optimize local buffer (allocated memory) usage
     """
-    # TODO
-    pass
+
+    def copy_on_write(function: allo_func_d.FuncOp):
+        """
+        avoid copy with best effort
+        """
+        copy_ops = collect_op_by_name(function, "linalg.copy")
+        for copy_op in copy_ops:
+            src, dst = copy_op.operands[0], copy_op.operands[1]
+            if list(src.uses)[0].owner == copy_op:
+                # copy is the last use
+                dst.replace_all_uses_with(src)
+                copy_op.erase()
+
+    copy_on_write(function)
 
 
 def loop_rerolling(function: allo_func_d.FuncOp):
