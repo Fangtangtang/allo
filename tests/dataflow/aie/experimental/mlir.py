@@ -40,7 +40,8 @@ def call_mlir(project: str, output_dtype, trace_size: int, *args):
     for i, arg in enumerate(args[:-1]):
         with open(os.path.join(project, f"input{i}.data"), "w", encoding="utf-8") as f:
             f.write("\n".join([str(i) for i in arg.flatten()]))
-    cmd = f"cd {project} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE -p true --warmup 200 --test_iter 1000"
+    cmd = f"cd {project} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE --trace_sz {trace_size}"
+    # cmd = f"cd {project} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE -p true --warmup 200 --test_iter 1000"
     with subprocess.Popen(cmd, shell=True) as process:
         process.wait()
     if process.returncode != 0:
@@ -54,14 +55,25 @@ def call_mlir(project: str, output_dtype, trace_size: int, *args):
 
 
 # fixme: update parameters as you need
-from allo.ir.types import int16
+from allo.ir.types import int16, int32
 
-TyI, TyO = int16, int16
-M, N, K = 128, 128, 1024
-A = np.random.randint(-8, 8, (M, K)).astype(np.int16)
-B = np.random.randint(-8, 8, (K, N)).astype(np.int16)
-C = np.zeros((M, N)).astype(np.int16)
+Ty = int32
+M = 1024
+A = np.random.randint(0, 100, M).astype(np.int32)
+B = np.zeros(M).astype(np.int32)
 
-call_mlir("top.prj", TyI, 0, A, B, C)
-np.testing.assert_allclose(C, A @ B, atol=1e-5)
+TyI, TyO = int32, int32
+M, K, N, L = 64, 64, 32, 32
+X = np.random.randint(0, 64, (M, K)).astype(np.int32)
+W1 = np.random.randint(0, 64, (K, N)).astype(np.int32)
+W2 = np.random.randint(0, 64, (N, L)).astype(np.int32)
+Z = np.zeros((M, L)).astype(np.int32)
+
+# M, N, K = 128, 128, 1024
+# A = np.random.randint(-8, 8, (M, K)).astype(np.int16)
+# B = np.random.randint(-8, 8, (K, N)).astype(np.int16)
+# C = np.zeros((M, N)).astype(np.int16)
+
+call_mlir("top.prj", TyI, 8192*128, X, W1, W2, Z)
+np.testing.assert_allclose(Z, X @ W1 @ W2, atol=1e-5)
 print("PASSED!")

@@ -775,7 +775,6 @@ int main(int argc, const char *argv[]) {
       std::cerr << "Error: Could not open output file.\\n";
       return 1;
   }
-
   // kernel arguments
   unsigned int opcode = 3;
 """
@@ -838,13 +837,26 @@ def codegen_host(inputs: dict[int, DTensor], outputs: dict[int, DTensor]):
                 code += format_str(
                     f"XRT_BO_FLAGS_HOST_ONLY, kernel.group_id({len(inputs) + 2 + i}));"
                 )
+        # trace
+        code += format_str(
+            "int tmp_trace_size = (trace_size > 0) ? trace_size : 1;", strip=False
+        )
+        code += format_str(
+            f"auto bo_trace = xrt::bo(device, tmp_trace_size * 4, XRT_BO_FLAGS_HOST_ONLY, kernel.group_id({len(inputs) + len(outputs) + 3}));"
+        )
         code += format_str("if (verbosity >= 1)")
         code += format_str(
             '  std::cout << "Writing data into buffer objects.\\n";', strip=False
         )
+        code += format_str("char *bufTrace = bo_trace.map<char *>();")
+        code += format_str("if (trace_size > 0)")
+        code += format_str("  memset(bufTrace, 0, trace_size);", strip=False)
+
         code += format_str("\nbo_instr.sync(XCL_BO_SYNC_BO_TO_DEVICE);", strip=False)
         for i in range(len(inputs)):
             code += format_str(f"bo_in{i}.sync(XCL_BO_SYNC_BO_TO_DEVICE);")
+        code += format_str("if (trace_size > 0)")
+        code += format_str("  bo_trace.sync(XCL_BO_SYNC_BO_TO_DEVICE);", strip=False)
         # run kernels
         code += format_str("if (verbosity >= 1)")
         code += format_str('  std::cout << "Running Kernel.\\n";', strip=False)
@@ -857,7 +869,7 @@ def codegen_host(inputs: dict[int, DTensor], outputs: dict[int, DTensor]):
             )
             code += format_str("// gid: (opcode, instr, instr_size, ...)")
             code += format_str(
-                f"auto run = kernel(opcode, bo_instr, instr_v.size(), {inbufs}, {outbufs});"
+                f"auto run = kernel(opcode, bo_instr, instr_v.size(), {inbufs}, {outbufs}, bo_trace);"
             )
             code += format_str("ert_cmd_state r = run.wait();")
             code += format_str(
@@ -881,7 +893,7 @@ def codegen_host(inputs: dict[int, DTensor], outputs: dict[int, DTensor]):
             code += format_str("for (size_t i = 0; i < n_warmup_iterations; i++) {")
             with format_code(indent=8):
                 code += format_str(
-                    f"auto run = kernel(opcode, bo_instr, instr_v.size(), {inbufs}, {outbufs});"
+                    f"auto run = kernel(opcode, bo_instr, instr_v.size(), {inbufs}, {outbufs}, bo_trace);"
                 )
                 code += format_str("ert_cmd_state r = run.wait();")
                 code += format_str("if (r != ERT_CMD_STATE_COMPLETED) {")
@@ -932,7 +944,15 @@ def codegen_host(inputs: dict[int, DTensor], outputs: dict[int, DTensor]):
         code += format_str("\n// Close files", strip=False)
         for i in range(len(inputs)):
             code += format_str(f"ifile{i}.close();")
+        code += format_str("if (trace_size > 0) {")
+        code += format_str("  bo_trace.sync(XCL_BO_SYNC_BO_FROM_DEVICE);", strip=False)
+        code += format_str(
+            '  test_utils::write_out_trace(((char *)bufTrace), trace_size, vm["trace_file"].as<std::string>());',
+            strip=False,
+        )
+        code += format_str("}")
         code += file_close_str
+
     return code
 
 
