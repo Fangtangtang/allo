@@ -57,23 +57,25 @@ def call_mlir(project: str, output_dtype, trace_size: int, *args):
 # fixme: update parameters as you need
 from allo.ir.types import int16, int32
 
-Ty = int32
-M = 1024
-A = np.random.randint(0, 100, M).astype(np.int32)
-B = np.zeros(M).astype(np.int32)
+# Ty = int32
+# M = 1024
+# A = np.random.randint(0, 100, M).astype(np.int32)
+# B = np.zeros(M).astype(np.int32)
 
-TyI, TyO = int32, int32
-M, K, N, L = 64, 64, 32, 32
-X = np.random.randint(0, 64, (M, K)).astype(np.int32)
-W1 = np.random.randint(0, 64, (K, N)).astype(np.int32)
-W2 = np.random.randint(0, 64, (N, L)).astype(np.int32)
-Z = np.zeros((M, L)).astype(np.int32)
+# TyI, TyO = int32, int32
+# M, K, N, L = 64, 64, 32, 32
+# X = np.random.randint(0, 64, (M, K)).astype(np.int32)
+# W1 = np.random.randint(0, 64, (K, N)).astype(np.int32)
+# W2 = np.random.randint(0, 64, (N, L)).astype(np.int32)
+# Z = np.zeros((M, L)).astype(np.int32)
 
-# M, N, K = 128, 128, 1024
+# M, N, K = 512, 512, 512
 # A = np.random.randint(-8, 8, (M, K)).astype(np.int16)
 # B = np.random.randint(-8, 8, (K, N)).astype(np.int16)
 # C = np.zeros((M, N)).astype(np.int16)
-
-call_mlir("top.prj", TyI, 8192*128, X, W1, W2, Z)
-np.testing.assert_allclose(Z, X @ W1 @ W2, atol=1e-5)
+M, N = 32, 32
+A = np.random.randint(0, 64, (M, N)).astype(np.int16)
+B = np.zeros((M, N)).astype(np.int16)
+call_mlir("top.prj", int16, 8192*128, A, B)
+np.testing.assert_allclose(A, B, atol=1e-5)
 print("PASSED!")

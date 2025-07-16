@@ -34,8 +34,8 @@ def gen_pingpong_gemm_mapping_primitive(Pm, Pn, Pk):
 
 def _test_pingpong_gemm_4x4x4(TyI, TyO):
 
-    M, N, K = 128, 1024, 64
-    Pm, Pn, Pk = 4, 128, 4
+    M, N, K = 512, 512, 512
+    Pm, Pn, Pk = 8, 8, 32
     Mt, Nt, Kt = M // Pm, N // Pn, K // Pk
 
     LyA = Layout("S1S2")

@@ -72,10 +72,11 @@ def my_matmul(M, K, N, m, k, n, dtype_in_str, dtype_out_str, trace_size):
             mem_tile = tile(0, 1)
             compute_tile2_col, compute_tile2_row = 0, 2
             compute_tile2 = tile(compute_tile2_col, compute_tile2_row)
-            compute_tile3 = tile(compute_tile2_col, 3)
+            compute_tile3 = tile(1, 4)
+            compute_tile4 = tile(0, 4)
 
             # fixme: use the tiles you want to trace
-            tiles_to_trace = [compute_tile2, compute_tile3]
+            tiles_to_trace = [compute_tile2, compute_tile3, compute_tile4]
             if trace_size > 0:
                 trace_utils.configure_packet_tracing_flow(tiles_to_trace, shim_tile)
 

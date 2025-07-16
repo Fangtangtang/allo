@@ -628,8 +628,7 @@ class AIE_MLIRModule:
             self.virtual_computation_graph,
         )
         self.aie_module = code_generator.aie_codegen_experimental(
-            core_funcs,
-            external_funcs,
+            core_funcs, external_funcs
         )
 
         # TODO: opt passes on aie-mlir
@@ -789,6 +788,8 @@ class AIE_MLIRModule:
         profile: bool = False,
         warmup: int = 20,
         num_iters: int = 100,
+        trace: list[tuple[str, tuple[int, ...]]] = None,
+        trace_size: int = 4096,
     ):
         if "npu1" in device_type:
             self.device = "npu1"
@@ -799,6 +800,8 @@ class AIE_MLIRModule:
         self.profile = profile
         self.warmup = warmup
         self.num_iters = num_iters
+        if trace is not None:
+            self.trace_size = trace_size
         build_dir = os.path.join(self.project_dir, "build")
         if os.path.exists(build_dir):
             shutil.rmtree(build_dir)
@@ -847,6 +850,8 @@ class AIE_MLIRModule:
             inputs,
             outputs,
             use_external_kernels,
+            trace,
+            trace_size,
         )
         self.post_codegen_build(injected_external_kernels, include_src)
         return self
@@ -861,7 +866,7 @@ class AIE_MLIRModule:
                 os.path.join(self.project_dir, f"input{i}.data"), "w", encoding="utf-8"
             ) as f:
                 f.write("\n".join([str(i) for i in args[i].flatten()]))
-        cmd = f"cd {self.project_dir} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE {f'-p true --warmup {self.warmup} --test_iter {self.num_iters}' if self.profile else ''}"
+        cmd = f"cd {self.project_dir} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE --trace_sz {self.trace_size} {f'-p true --warmup {self.warmup} --test_iter {self.num_iters}' if self.profile else ''}"
         with subprocess.Popen(cmd, shell=True) as process:
             process.wait()
         if process.returncode != 0:
