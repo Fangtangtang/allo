@@ -802,6 +802,8 @@ class AIE_MLIRModule:
         self.num_iters = num_iters
         if trace is not None:
             self.trace_size = trace_size
+        else:
+            self.trace_size = 0
         build_dir = os.path.join(self.project_dir, "build")
         if os.path.exists(build_dir):
             shutil.rmtree(build_dir)

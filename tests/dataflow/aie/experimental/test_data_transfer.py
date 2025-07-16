@@ -33,7 +33,8 @@ def top():
         B[:, :] = pipe.get()
 
 def test_cooperative_gemm():
-    mod = df.build(top, target="aie-mlir",project="transfer.prj", use_default_codegen=True, trace=[("producer", (0,)), ("consumer", (0,))])
+    mod = df.build(top, target="aie-mlir",project="transfer.prj", profile=True, use_default_codegen=True, trace=[("producer", (0,)), ("consumer", (0,))])
+    # mod = df.build(top, target="aie-mlir",project="transfer.prj", use_default_codegen=True)
     A = np.random.randint(0, 64, (M, N)).astype(np.int16)
     B = np.zeros((M, N)).astype(np.int16)
     mod(A, B)
