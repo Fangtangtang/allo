@@ -2,7 +2,7 @@ import os
 import torch
 import torch.nn.functional as F
 from ml_dtypes import bfloat16 as np_bfloat16
-from allo.ir.types import bfloat16, float32
+from allo.ir.types import float32, int32
 import allo.dataflow as df
 import numpy as np
 from allo.memory import Layout
@@ -19,14 +19,14 @@ def _test_masked_softmax_tiled():
         output_idx=[1],
     )
 
-    Ty_in = float32
-    Ty = bfloat16
+    Ty = float32
+    Ty_1 = int32
 
     @df.region()
     def top():
         @df.kernel(mapping=[1, 1])
         def core(
-            Input: Ty_in[1, VEC_LEN] @ Ly,
+            Input: Ty[1, VEC_LEN] @ Ly,
             Output: Ty[1, VEC_LEN] @ Ly,
         ):
             exp_kernel(Input, Output)
@@ -43,9 +43,9 @@ def _test_masked_softmax_tiled():
             warmup=20,
             num_iters=100,  # ! executing only once may get undefined result.
         )
-        output_allo = np.zeros((1, VEC_LEN)).astype(np_bfloat16)
+        output_allo = np.zeros((1, VEC_LEN)).astype(np.float32)
         mod(input_tensor, output_allo)
-        np.testing.assert_allclose(output_allo.astype(np.float32), output.astype(np.float32), rtol=1e-2)
+        np.testing.assert_allclose(output_allo, output, rtol=1e-2)
         print("PASS!")
     else:
         print("MLIR_AIE_INSTALL_DIR unset. Skipping AIE backend test.")
