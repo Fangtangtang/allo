@@ -31,6 +31,7 @@ allo2c_type = {
 c2allo_type = {v: k for k, v in allo2c_type.items()}
 c2allo_type["int32_t"] = "int32"
 c2allo_type["uint32_t"] = "uint32"
+c2allo_type["bfloat16"] = "bfloat16"
 
 
 def parse_cpp_function(code, target_function):

@@ -185,6 +185,10 @@ def get_mlir_dtype_from_str(dtype):
         if bitwidth == 64:
             return F64Type.get()
         raise RuntimeError("Unsupported type")
+    if dtype.startswith("bfloat"):
+        bitwidth = get_bitwidth_from_type("f" + dtype[6:])
+        if bitwidth == 16:
+            return BF16Type.get()
     raise RuntimeError("Unsupported type")
 
 

@@ -33,8 +33,8 @@ void customized_exp(T_in *input_tensor, T_out *output_tensor) {
 
 extern "C" {
 
-void my_exp(float A_in[1][64], float A_out[1][64]) {
-  customized_exp<float, float, 1, 64>(&A_in[0][0], &A_out[0][0]);
+void my_exp(bfloat16 A_in[1][64], bfloat16 A_out[1][64]) {
+  customized_exp<bfloat16, bfloat16, 1, 64>(&A_in[0][0], &A_out[0][0]);
 }
 
 } // extern "C"

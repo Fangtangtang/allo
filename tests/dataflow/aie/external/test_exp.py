@@ -1,8 +1,8 @@
 import os
 import torch
 import torch.nn.functional as F
-from typing import Annotated
-from allo.ir.types import float32, int32
+from ml_dtypes import bfloat16 as np_bfloat16
+from allo.ir.types import bfloat16
 import allo.dataflow as df
 import numpy as np
 from allo.memory import Layout
@@ -19,8 +19,7 @@ def _test_masked_softmax_tiled():
         output_idx=[1],
     )
 
-    Ty = float32
-    Ty_1 = int32
+    Ty = bfloat16
 
     @df.region()
     def top():
@@ -32,7 +31,7 @@ def _test_masked_softmax_tiled():
             exp_kernel(Input, Output)
 
     # Create random input data
-    input_tensor = np.random.random((1, VEC_LEN)).astype(np.float32)
+    input_tensor = np.random.random((1, VEC_LEN)).astype(np_bfloat16)
     output = np.exp2(input_tensor)
 
     if "MLIR_AIE_INSTALL_DIR" in os.environ:
@@ -43,9 +42,9 @@ def _test_masked_softmax_tiled():
             warmup=20,
             num_iters=100,  # ! executing only once may get undefined result.
         )
-        output_allo = np.zeros((1, VEC_LEN)).astype(np.float32)
+        output_allo = np.zeros((1, VEC_LEN)).astype(np_bfloat16)
         mod(input_tensor, output_allo)
-        np.testing.assert_allclose(output_allo, output, rtol=1e-2)
+        np.testing.assert_allclose(output_allo.astype(np.float32), output.astype(np.float32), rtol=1e-2)
         print("PASS!")
     else:
         print("MLIR_AIE_INSTALL_DIR unset. Skipping AIE backend test.")
