@@ -70,6 +70,7 @@ class AIE_MLIRModule:
             For example, launching the kernels in topological order.
         """
         # module metadata
+        self.trace_size = 0
         self.project_dir: str = project_dir
         self.allo_module: allo_ir.ir.Module = module
         self.top_func_name: str = top_func_name
@@ -802,8 +803,6 @@ class AIE_MLIRModule:
         self.num_iters = num_iters
         if trace is not None:
             self.trace_size = trace_size
-        else:
-            self.trace_size = 0
         build_dir = os.path.join(self.project_dir, "build")
         if os.path.exists(build_dir):
             shutil.rmtree(build_dir)
