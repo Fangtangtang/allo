@@ -18,14 +18,17 @@ void customized_exp(T_in *input_tensor, T_out *output_tensor) {
   const int F = HIDDEN / vec_factor;
   using vec_t = aie::vector<T_in, vec_factor>;
   event0();
-  aie::vector<bfloat16, vec_factor> scale_vec =
+  aie::vector<bfloat16, vec_factor> log2e_vec =
       aie::broadcast<bfloat16, vec_factor>(log2e);
+  aie::vector<bfloat16, vec_factor> scale_vec =
+      aie::broadcast<bfloat16, vec_factor>(1.0);
   for (int iter = 0; iter < SEQ_LEN; iter++) {
     T_in *__restrict input_ptr = input_tensor;
     T_out *__restrict output_ptr = output_tensor;
     for (int i = 0; i < F; i++) {
       vec_t input_vec = aie::load_v<vec_factor>(input_ptr);
       input_ptr += vec_factor;
+      input_vec = aie::mul(input_vec, log2e_vec);
       auto result_vec = aie::exp2<bfloat16>(input_vec); // ! require XDNA2
       aie::accum<accfloat, vec_factor> exp_out = aie::mul(result_vec, scale_vec);
       aie::store_v(output_ptr, (exp_out.to_vector<float>()));
