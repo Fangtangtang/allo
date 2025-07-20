@@ -91,6 +91,14 @@ void masked_softmax_float32(float attention_score[32][64],
     float *__restrict current_attention_score_row_ptr = &attention_score[r][0];
     float *__restrict current_attn_weights_row_ptr = &attn_weights[r][0];
 
+    // aie::vector<float, VEC_SIZE> scores_v0 =
+    //     aie::load_v<VEC_SIZE>(current_attention_score_row_ptr);
+    aie::vector<float, VEC_SIZE> scores_v1 =
+        aie::load_v<VEC_SIZE>(current_attention_score_row_ptr + VEC_SIZE);
+
+    scores_v1 = aie::mul(scores_v1, log2e_vec);
+    aie::store_v(current_attention_score_row_ptr + VEC_SIZE, scores_v1);
+    
     for (int k = 0; k < SEQ_COLS; ++k) {
       if (k > global_row_idx) {
         attention_score[r][k] = neg_inf;
@@ -98,8 +106,7 @@ void masked_softmax_float32(float attention_score[32][64],
     }
     aie::vector<float, VEC_SIZE> scores_v0 =
         aie::load_v<VEC_SIZE>(current_attention_score_row_ptr);
-    aie::vector<float, VEC_SIZE> scores_v1 =
-        aie::load_v<VEC_SIZE>(current_attention_score_row_ptr + VEC_SIZE);
+    scores_v1 = aie::load_v<VEC_SIZE>(current_attention_score_row_ptr + VEC_SIZE);
 
     // --- Find Max Value for Numerical Stability (LogSumExp trick) ---
     float row_max = aie::reduce_max(scores_v0);
@@ -119,11 +126,11 @@ void masked_softmax_float32(float attention_score[32][64],
     //   attn_weights[r][VEC_SIZE + k] = exp_value;
     // }
 
-    scores_v1 = aie::mul(scores_v1, log2e_vec);
+    // scores_v1 = aie::mul(scores_v1, log2e_vec);
     auto exp_vec1 = aie::exp2<bfloat16>(scores_v1); // ! require XDNA2
     aie::accum<accfloat, VEC_SIZE> exp_out1 = aie::mul(exp_vec1, scale_vec);
     auto attn_weight1 = exp_out1.to_vector<float>();
-    aie::store_v(current_attn_weights_row_ptr + VEC_SIZE, (exp_out.to_vector<float>()));
+    aie::store_v(current_attn_weights_row_ptr + VEC_SIZE, attn_weight1);
     sum_exp += aie::reduce_add(attn_weight1);
 
     float scale = 1.0f / sum_exp;
