@@ -23,8 +23,6 @@ void masked_softmax_float32(float attention_score[32][64],
   const float neg_inf = -std::numeric_limits<float>::infinity();
   aie::vector<float, VEC_SIZE> log2e_vec =
       aie::broadcast<float, VEC_SIZE>(log2e);
-  aie::vector<bfloat16, VEC_SIZE> scale_vec =
-      aie::broadcast<bfloat16, VEC_SIZE>(1.0);
   // Loop over each row in the tile
   for (int r = 0; r < TILE_ROWS; ++r) {
     // Calculate global row index for causal masking
@@ -63,26 +61,24 @@ void masked_softmax_float32(float attention_score[32][64],
     float sum_exp = 0.0f;
 
     auto exp_vec0 = aie::exp2<bfloat16>(scores_v0); // ! require XDNA2
-    aie::accum<accfloat, VEC_SIZE> exp_out0 = aie::mul(exp_vec0, scale_vec);
-    auto attn_weight0 = exp_out0.to_vector<float>();
-    aie::store_v(current_attn_weights_row_ptr + VEC_SIZE, attn_weight0);
-    sum_exp += aie::reduce_add(attn_weight0);
+    // aie::accum<accfloat, VEC_SIZE> exp_out0 = aie::mul(exp_vec0, scale_vec);
+    // auto attn_weight0 = exp_out0.to_vector<float>();
+    sum_exp += aie::reduce_add(exp_vec0);
 
     auto exp_vec1 = aie::exp2<bfloat16>(scores_v1); // ! require XDNA2
-    aie::accum<accfloat, VEC_SIZE> exp_out1 = aie::mul(exp_vec1, scale_vec);
-    auto attn_weight1 = exp_out1.to_vector<float>();
-    aie::store_v(current_attn_weights_row_ptr + VEC_SIZE, attn_weight1);
-    sum_exp += aie::reduce_add(attn_weight1);
+    // aie::accum<accfloat, VEC_SIZE> exp_out1 = aie::mul(exp_vec1, scale_vec);
+    // auto attn_weight1 = exp_out1.to_vector<float>();
+    sum_exp += aie::reduce_add(exp_vec1);
 
     float scale = 1.0f / sum_exp;
-    aie::vector<float, VEC_SIZE> weight_v0 =
-        aie::load_v<VEC_SIZE>(current_attn_weights_row_ptr);
-    aie::vector<float, VEC_SIZE> weight_v1 =
-        aie::load_v<VEC_SIZE>(current_attn_weights_row_ptr + VEC_SIZE);
-    weight_v0 = aie::mul(weight_v0, scale);
-    weight_v1 = aie::mul(weight_v1, scale);
-    aie::store_v(current_attn_weights_row_ptr, weight_v0);
-    aie::store_v(current_attn_weights_row_ptr + VEC_SIZE, weight_v1);
+    aie::vector<bfloat16, VEC_SIZE> scale_vec =
+      aie::broadcast<bfloat16, VEC_SIZE>(scale);
+    attn_weight0 = aie::mul(attn_weight0, scale);
+    attn_weight1 = aie::mul(attn_weight1, scale);
+    aie::accum<accfloat, VEC_SIZE> exp_out0 = aie::mul(exp_vec0, scale_vec);
+    aie::accum<accfloat, VEC_SIZE> exp_out1 = aie::mul(exp_vec1, scale_vec);
+    aie::store_v(current_attn_weights_row_ptr, exp_out0.to_vector<float>());
+    aie::store_v(current_attn_weights_row_ptr + VEC_SIZE, exp_out1.to_vector<float>());
   }
 }
 
