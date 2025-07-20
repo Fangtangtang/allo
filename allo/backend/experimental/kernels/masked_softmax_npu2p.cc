@@ -57,24 +57,16 @@ void masked_softmax_float32(float attention_score[32][64],
     row_max = std::max(row_max, aie::reduce_max(scores_v1));
     scores_v0 = aie::add(scores_v0, -row_max);
     scores_v1 = aie::add(scores_v1, -row_max);
-    // --- Compute exp(x - max) using scalar approximation ---
+    // --- Compute exp(x - max) ---
     float sum_exp = 0.0f;
-
     auto exp_vec0 = aie::exp2<bfloat16>(scores_v0); // ! require XDNA2
-    // aie::accum<accfloat, VEC_SIZE> exp_out0 = aie::mul(exp_vec0, scale_vec);
-    // auto attn_weight0 = exp_out0.to_vector<float>();
     sum_exp += aie::reduce_add(exp_vec0);
-
     auto exp_vec1 = aie::exp2<bfloat16>(scores_v1); // ! require XDNA2
-    // aie::accum<accfloat, VEC_SIZE> exp_out1 = aie::mul(exp_vec1, scale_vec);
-    // auto attn_weight1 = exp_out1.to_vector<float>();
     sum_exp += aie::reduce_add(exp_vec1);
 
     float scale = 1.0f / sum_exp;
     aie::vector<bfloat16, VEC_SIZE> scale_vec =
       aie::broadcast<bfloat16, VEC_SIZE>(scale);
-    attn_weight0 = aie::mul(attn_weight0, scale);
-    attn_weight1 = aie::mul(attn_weight1, scale);
     aie::accum<accfloat, VEC_SIZE> exp_out0 = aie::mul(exp_vec0, scale_vec);
     aie::accum<accfloat, VEC_SIZE> exp_out1 = aie::mul(exp_vec1, scale_vec);
     aie::store_v(current_attn_weights_row_ptr, exp_out0.to_vector<float>());
