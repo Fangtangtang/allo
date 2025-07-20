@@ -10,6 +10,7 @@
 #include <type_traits>
 
 #define NOCPP
+#define log2e 1.4453125
 
 template <typename T_in, typename T_out, const int SEQ_LEN, const int HIDDEN>
 void customized_exp(T_in *input_tensor, T_out *output_tensor) {
@@ -17,14 +18,17 @@ void customized_exp(T_in *input_tensor, T_out *output_tensor) {
   const int F = HIDDEN / vec_factor;
   using vec_t = aie::vector<T_in, vec_factor>;
   event0();
+  aie::vector<bfloat16, vec_factor> scale_vec =
+      aie::broadcast<bfloat16, vec_factor>(log2e);
   for (int iter = 0; iter < SEQ_LEN; iter++) {
     T_in *__restrict input_ptr = input_tensor;
     T_out *__restrict output_ptr = output_tensor;
     for (int i = 0; i < F; i++) {
       vec_t input_vec = aie::load_v<vec_factor>(input_ptr);
       input_ptr += vec_factor;
-    // TODO
-      aie::store_v(output_ptr, input_vec);
+      auto result_vec = aie::exp2<bfloat16>(input_vec); // ! require XDNA2
+      aie::accum<accfloat, vec_factor> exp_out = aie::mul(result_vec, scale_vec);
+      aie::store_v(output_ptr, (exp_out.to_vector<float>()));
       output_ptr += vec_factor;
     }
   }

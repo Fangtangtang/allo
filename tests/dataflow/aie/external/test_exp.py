@@ -33,7 +33,7 @@ def _test_masked_softmax_tiled():
 
     # Create random input data
     input_tensor = np.random.random((1, VEC_LEN)).astype(np.float32)
-    output = np.exp2(input_tensor)
+    output = np.exp(input_tensor)
 
     if "MLIR_AIE_INSTALL_DIR" in os.environ:
         mod = df.build(
