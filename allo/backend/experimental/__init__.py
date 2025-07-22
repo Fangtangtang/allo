@@ -308,9 +308,9 @@ class AIE_MLIRModule:
                 out_dtype = str(output.type.element_type)
                 matmul_configs = matmul_external_kernel_config_map[(dtype, out_dtype)]
                 if self.device == "npu1":
-                    m, n, k = matmul_configs["aie2"]
+                    m, k, n = matmul_configs["aie2"]
                 else:
-                    m, n, k = matmul_configs["aie2p"]
+                    m, k, n = matmul_configs["aie2p"]
                 with function.context, allo_ir.ir.Location.unknown():
                     new_input_0 = allo_d.transform_layout(
                         input_a.type,
@@ -554,6 +554,10 @@ class AIE_MLIRModule:
 
         now = datetime.now()
         print(now)
+        with open(
+            os.path.join(self.project_dir, "raw.mlir"), "w", encoding="utf-8"
+        ) as f:
+            f.write(str(self.allo_module))
         use_external_kernels, self.injected_external_kernels, include_src = (
             inject_external_kernels(
                 self.allo_module,
@@ -563,10 +567,10 @@ class AIE_MLIRModule:
             )
         )
         # record original allo mlir
-        with open(
-            os.path.join(self.project_dir, "raw.mlir"), "w", encoding="utf-8"
-        ) as f:
-            f.write(str(self.allo_module))
+        # with open(
+        #     os.path.join(self.project_dir, "raw.mlir"), "w", encoding="utf-8"
+        # ) as f:
+        #     f.write(str(self.allo_module))
         now = datetime.now()
         print(now, "start analyzing params")
         self.analyze_kernel_parameters(

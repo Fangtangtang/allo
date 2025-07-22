@@ -8,7 +8,7 @@
 #include <stdlib.h>
 #include <type_traits>
 #define NOCPP
-#define log2e 1.4453125
+#define log2e 1.44269504089
 
 extern "C" {
 
@@ -66,11 +66,12 @@ void masked_softmax_float32(float attention_score[32][64],
 
     float scale = 1.0f / sum_exp;
     aie::vector<bfloat16, VEC_SIZE> scale_vec =
-      aie::broadcast<bfloat16, VEC_SIZE>(scale);
+        aie::broadcast<bfloat16, VEC_SIZE>(scale);
     aie::accum<accfloat, VEC_SIZE> exp_out0 = aie::mul(exp_vec0, scale_vec);
     aie::accum<accfloat, VEC_SIZE> exp_out1 = aie::mul(exp_vec1, scale_vec);
     aie::store_v(current_attn_weights_row_ptr, exp_out0.to_vector<float>());
-    aie::store_v(current_attn_weights_row_ptr + VEC_SIZE, exp_out1.to_vector<float>());
+    aie::store_v(current_attn_weights_row_ptr + VEC_SIZE,
+                 exp_out1.to_vector<float>());
   }
 }
 
