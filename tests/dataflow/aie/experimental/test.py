@@ -51,6 +51,7 @@ def _test_tensor_parallelism():
     np.testing.assert_allclose(Z, X @ W1 @ W2, atol=1e-5)
     print("PASSED!")
 
+
 def _test_vector_scalar_add():
     # https://github.com/Xilinx/mlir-aie/tree/main/programming_examples/basic/vector_scalar_add
     Ty = int32
@@ -68,6 +69,7 @@ def _test_vector_scalar_add():
     mod(A, B)
     np.testing.assert_allclose(B, A + 1)
     print("PASSED!")
+
 
 if __name__ == "__main__":
     # _test_vector_scalar_add()

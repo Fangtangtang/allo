@@ -1377,7 +1377,7 @@ class CodeGenerator:
                     size_cp = size.copy()
                     # keep partitioning until success
                     while True:
-                        partitioned_size = partition(size_cp)
+                        partitioned_size = partition(size_cp) # partition too much, drop dim
                         partitioned_interface_list = interface_list[
                             : partitioned_size.get_total_size()
                         ]
@@ -1390,6 +1390,7 @@ class CodeGenerator:
                         ):
                             break
                         size_cp = partitioned_size
+                    # fixme: if more than one diff? need a nested loop for this
                     size = Size4D.subtract(size, partitioned_size)
                     inc = partitioned_size.get_total_size()
                     interface_list = interface_list[inc:]

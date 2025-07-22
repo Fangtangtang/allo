@@ -1,11 +1,14 @@
 # Copyright Allo authors. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import allo
 from allo.ir.types import int16, int32
 import allo.dataflow as df
 import numpy as np
 from allo.memory import Layout
+
+COL_NUM = 8 if os.getenv("NPU2") == 1 else 4
 
 
 def gen_pingpong_gemm_mapping_primitive(Pm, Pn, Pk):
@@ -21,21 +24,21 @@ def gen_pingpong_gemm_mapping_primitive(Pm, Pn, Pk):
                 base += f"-gemm_{k}_{i}_{j}"
             bases[i].append(base)
 
-    if Pn // 4 > 1 or Pm // 4 > 1:
-        for i in range(4):
+    if Pn // 4 > 1 or Pm // COL_NUM > 1:
+        for i in range(COL_NUM):
             for j in range(4):
                 bundle_list = []
-                for p in range(Pm // 4):
+                for p in range(Pm // COL_NUM):
                     for q in range(Pn // 4):
-                        bundle_list.append(bases[i + 4 * p][j + 4 * q])
+                        bundle_list.append(bases[i + COL_NUM * p][j + 4 * q])
                 mapping_primitives.append(("bundle", bundle_list))
     return mapping_primitives
 
 
-def _test_pingpong_gemm_4x4x4(TyI, TyO):
+def _test_pingpong_gemm(TyI, TyO):
 
-    M, N, K = 512, 128, 128
-    Pm, Pn, Pk = 4, 4, 4
+    M, N, K = 512, 512, 512
+    Pm, Pn, Pk = 8, 8, 8
     Mt, Nt, Kt = M // Pm, N // Pn, K // Pk
 
     LyA = Layout("S1S2")
@@ -81,4 +84,4 @@ def _test_pingpong_gemm_4x4x4(TyI, TyO):
 
 
 if __name__ == "__main__":
-    _test_pingpong_gemm_4x4x4(int16, int16)
+    _test_pingpong_gemm(int16, int16)
