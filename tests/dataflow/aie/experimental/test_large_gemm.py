@@ -8,11 +8,12 @@ import allo.dataflow as df
 import numpy as np
 from allo.memory import Layout
 
-COL_NUM = 8 
+COL_NUM = 8
 # if os.getenv("NPU2") == "1" else 4
 print(COL_NUM)
 
-def gen_pingpong_gemm_mapping_primitive(Pm, Pn, Pk):
+
+def gen_pingpong_gemm_mapping_primitive(Pm, Pn, Pk, col_num=4, row_num=4):
     # chaining to k dimension
     mapping_primitives = []
     bases: list[list[str]] = []
@@ -25,23 +26,17 @@ def gen_pingpong_gemm_mapping_primitive(Pm, Pn, Pk):
                 base += f"-gemm_{k}_{i}_{j}"
             bases[i].append(base)
 
-    if Pn // COL_NUM > 1 or Pm // 4 > 1:
-        for i in range(4):
-            for j in range(COL_NUM):
+    if col_num > row_num and Pn < Pm:
+        col_num, row_num = row_num, col_num
+    if Pn // col_num > 1 or Pm // row_num > 1:
+        for i in range(row_num):
+            for j in range(col_num):
                 bundle_list = []
-                for p in range(Pm // 4):
-                    for q in range(Pn // COL_NUM):
-                        bundle_list.append(bases[i + 4 * p][j + COL_NUM * q])
+                for p in range(Pm // row_num):
+                    for q in range(Pn // col_num):
+                        bundle_list.append(bases[i + row_num * p][j + col_num * q])
                 mapping_primitives.append(("bundle", bundle_list))
-    
-    # if Pn // 4 > 1 or Pm // COL_NUM > 1:
-    #     for i in range(COL_NUM):
-    #         for j in range(4):
-    #             bundle_list = []
-    #             for p in range(Pm // COL_NUM):
-    #                 for q in range(Pn // 4):
-    #                     bundle_list.append(bases[i + COL_NUM * p][j + 4 * q])
-    #             mapping_primitives.append(("bundle", bundle_list))
+
     return mapping_primitives
 
 
@@ -68,15 +63,15 @@ def _test_pingpong_gemm(TyI, TyO):
                 C_in: TyO[Mt, Nt] = pipe[pk - 1, pm, pn].get()
             with allo.meta_else():
                 C_in: TyO[Mt, Nt] = 0
-            # tmp_c: TyO[Mt, Nt] = allo.matmul(A, B)
-            # C_out: TyO[Mt, Nt] = allo.add(tmp_c, C_in)
             C_out: TyO[Mt, Nt] = allo.add(allo.matmul(A, B), C_in)
             with allo.meta_if(pk < Pk - 1):
                 pipe[pk, pm, pn].put(C_out)
             with allo.meta_elif(pk == Pk - 1):
                 C[:, :] = C_out
 
-    mapping_primitives = gen_pingpong_gemm_mapping_primitive(Pm, Pn, Pk)
+    mapping_primitives = gen_pingpong_gemm_mapping_primitive(
+        Pm, Pn, Pk, col_num=COL_NUM
+    )
     mod = df.build(
         top,
         target="aie-mlir",

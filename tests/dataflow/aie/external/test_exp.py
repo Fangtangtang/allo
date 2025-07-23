@@ -11,10 +11,11 @@ from allo.backend.experimental.external_kernel import ExternalModule
 VEC_LEN = 64
 Ly = Layout("S1S0")
 
+
 def _test_masked_softmax_tiled():
     exp_kernel = ExternalModule(
         top="my_exp",
-        impl_path= "exp.cc",
+        impl_path="exp.cc",
         input_idx=[0],
         output_idx=[1],
     )
