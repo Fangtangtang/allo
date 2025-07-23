@@ -8,8 +8,9 @@ import allo.dataflow as df
 import numpy as np
 from allo.memory import Layout
 
-COL_NUM = 8 if os.getenv("NPU2") == 1 else 4
-
+COL_NUM = 8 
+# if os.getenv("NPU2") == "1" else 4
+print(COL_NUM)
 
 def gen_pingpong_gemm_mapping_primitive(Pm, Pn, Pk):
     # chaining to k dimension
@@ -24,21 +25,30 @@ def gen_pingpong_gemm_mapping_primitive(Pm, Pn, Pk):
                 base += f"-gemm_{k}_{i}_{j}"
             bases[i].append(base)
 
-    if Pn // 4 > 1 or Pm // COL_NUM > 1:
-        for i in range(COL_NUM):
-            for j in range(4):
+    if Pn // COL_NUM > 1 or Pm // 4 > 1:
+        for i in range(4):
+            for j in range(COL_NUM):
                 bundle_list = []
-                for p in range(Pm // COL_NUM):
-                    for q in range(Pn // 4):
-                        bundle_list.append(bases[i + COL_NUM * p][j + 4 * q])
+                for p in range(Pm // 4):
+                    for q in range(Pn // COL_NUM):
+                        bundle_list.append(bases[i + 4 * p][j + COL_NUM * q])
                 mapping_primitives.append(("bundle", bundle_list))
+    
+    # if Pn // 4 > 1 or Pm // COL_NUM > 1:
+    #     for i in range(COL_NUM):
+    #         for j in range(4):
+    #             bundle_list = []
+    #             for p in range(Pm // COL_NUM):
+    #                 for q in range(Pn // 4):
+    #                     bundle_list.append(bases[i + COL_NUM * p][j + 4 * q])
+    #             mapping_primitives.append(("bundle", bundle_list))
     return mapping_primitives
 
 
 def _test_pingpong_gemm(TyI, TyO):
 
     M, N, K = 512, 512, 512
-    Pm, Pn, Pk = 8, 8, 8
+    Pm, Pn, Pk = 4, 8, 8
     Mt, Nt, Kt = M // Pm, N // Pn, K // Pk
 
     LyA = Layout("S1S2")

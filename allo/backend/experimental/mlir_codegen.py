@@ -683,7 +683,7 @@ class CodeGenerator:
         TODO: may have influenc on DMA scheduling
         """
 
-        def partition(size: Size4D) -> Size4D:
+        def partition(size: Size4D) -> tuple[int, Size4D]:
             """
             Partition the dma task into multiple sub-tasks.
             """
@@ -697,7 +697,7 @@ class CodeGenerator:
             size_part = size.copy()
             partition_size = size.get_dim_size(dim) - 1
             size_part.set_dim_size(dim, partition_size)
-            return size_part
+            return dim, size_part
 
         # ------------------------------------------------------------
         MAX_MEM_TILES = self.device_config["mem_tile_num"]
@@ -1369,31 +1369,82 @@ class CodeGenerator:
                 )
                 size = contiguous_interface.total_size
                 transfer_layout = contiguous_interface.layout
-                while size.get_total_size() != 0:
-                    if assign_tiles(
-                        interface_list, size, tile_size, is_input, tile_param_type
-                    ):
-                        break
-                    size_cp = size.copy()
-                    # keep partitioning until success
-                    while True:
-                        partitioned_size = partition(size_cp) # partition too much, drop dim
-                        partitioned_interface_list = interface_list[
-                            : partitioned_size.get_total_size()
-                        ]
+
+                # ############################
+                def transfer(size_: Size4D, interface_list_: list[MulticastInterface]):
+                    dim_ = None
+                    while size_.get_total_size() != 0:
                         if assign_tiles(
-                            partitioned_interface_list,
-                            partitioned_size,
-                            tile_size,
-                            is_input,
-                            tile_param_type,
+                            interface_list_, size_, tile_size, is_input, tile_param_type
                         ):
                             break
-                        size_cp = partitioned_size
-                    # fixme: if more than one diff? need a nested loop for this
-                    size = Size4D.subtract(size, partitioned_size)
-                    inc = partitioned_size.get_total_size()
-                    interface_list = interface_list[inc:]
+                        size_cp = size_.copy()
+                        # keep partitioning until success
+                        while True:
+                            print(size_cp, " -- ")
+                            partitioned_dim, partitioned_size = partition(
+                                size_cp
+                            )  # partition too much, drop dim
+                            partitioned_interface_list = interface_list_[
+                                : partitioned_size.get_total_size()
+                            ]
+                            if dim_ is None:
+                                dim_ = partitioned_dim
+                            elif dim_ != partitioned_dim:
+                                transfer(
+                                    size_cp, interface_list_[: size_cp.get_total_size()]
+                                )
+                                print("===", size_cp)
+                                partitioned_size = size_cp
+                                break
+                            if assign_tiles(
+                                partitioned_interface_list,
+                                partitioned_size,
+                                tile_size,
+                                is_input,
+                                tile_param_type,
+                            ):
+                                break
+                            size_cp = partitioned_size
+                        print(size_, partitioned_size)
+                        # fixme: if more than one diff? need a nested loop for this
+                        size_ = Size4D.subtract(size_, partitioned_size)
+                        inc = partitioned_size.get_total_size()
+                        interface_list_ = interface_list_[inc:]
+
+                transfer(size, interface_list)
+                # ############################
+                # while size.get_total_size() != 0:
+                #     if assign_tiles(
+                #         interface_list, size, tile_size, is_input, tile_param_type
+                #     ):
+                #         break
+                #     print(size, partitioned_size)
+                #     size_cp = size.copy()
+                #     # keep partitioning until success
+                #     partition_dims = []
+                #     while True:
+                #         print(size_cp)
+                #         partitioned_dim, partitioned_size = partition(size_cp) # partition too much, drop dim
+                #         partitioned_interface_list = interface_list[
+                #             : partitioned_size.get_total_size()
+                #         ]
+                #         if len(partition_dims) == 0 or partitioned_dim != partition_dims[-1]:
+                #             partition_dims.append(partitioned_dim)
+                #         if assign_tiles(
+                #             partitioned_interface_list,
+                #             partitioned_size,
+                #             tile_size,
+                #             is_input,
+                #             tile_param_type,
+                #         ):
+                #             break
+                #         size_cp = partitioned_size
+                #     print(size, partitioned_size)
+                #     # fixme: if more than one diff? need a nested loop for this
+                #     size = Size4D.subtract(size, partitioned_size)
+                #     inc = partitioned_size.get_total_size()
+                #     interface_list = interface_list[inc:]
 
         token_map: dict[str, str] = {}
         token_cnt = 0
