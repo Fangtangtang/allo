@@ -8,8 +8,7 @@ import allo.dataflow as df
 import numpy as np
 from allo.memory import Layout
 
-COL_NUM = 8
-# if os.getenv("NPU2") == "1" else 4
+COL_NUM = 8 if os.getenv("NPU2") == "1" else 4
 print(COL_NUM)
 
 
@@ -26,8 +25,9 @@ def gen_pingpong_gemm_mapping_primitive(Pm, Pn, Pk, col_num=4, row_num=4):
                 base += f"-gemm_{k}_{i}_{j}"
             bases[i].append(base)
 
-    if col_num > row_num and Pn < Pm:
+    if Pn // col_num < 1 or Pm // row_num < 1:
         col_num, row_num = row_num, col_num
+
     if Pn // col_num > 1 or Pm // row_num > 1:
         for i in range(row_num):
             for j in range(col_num):
@@ -42,8 +42,8 @@ def gen_pingpong_gemm_mapping_primitive(Pm, Pn, Pk, col_num=4, row_num=4):
 
 def _test_pingpong_gemm(TyI, TyO):
 
-    M, N, K = 512, 512, 512
-    Pm, Pn, Pk = 4, 8, 8
+    M, N, K = 128, 128, 256
+    Pm, Pn, Pk = 4, 4, 8
     Mt, Nt, Kt = M // Pm, N // Pn, K // Pk
 
     LyA = Layout("S1S2")
@@ -70,10 +70,11 @@ def _test_pingpong_gemm(TyI, TyO):
                 C[:, :] = C_out
 
     mapping_primitives = gen_pingpong_gemm_mapping_primitive(
-        Pm, Pn, Pk, col_num=COL_NUM
+        Pm, Pn, Pk, col_num=2, row_num=2
     )
     mod = df.build(
         top,
+        # project="top.prj",
         target="aie-mlir",
         mapping_primitives=mapping_primitives,
         profile=True,

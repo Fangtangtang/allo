@@ -697,6 +697,7 @@ class CodeGenerator:
             size_part = size.copy()
             partition_size = size.get_dim_size(dim) - 1
             size_part.set_dim_size(dim, partition_size)
+            print(size, size_part)
             return dim, size_part
 
         # ------------------------------------------------------------
@@ -2217,7 +2218,7 @@ class CodeGenerator:
                             row=trace_info.traced_tile_idx[1],
                         )
                         aiex_d.npu_writebd(
-                            bd_id=Config.DMA_MAX_BDS - packet_id,
+                            bd_id=Config.DMA_MAX_BDS - trace_info.packet_id,
                             buffer_length=trace_size,
                             buffer_offset=0,
                             enable_packet=1,

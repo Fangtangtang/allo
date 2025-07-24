@@ -65,7 +65,7 @@ device_config_map = {
     "npu1": {"mesh": (4, 5), "mem_tile_num": 5, "shim_tile_num": 4},
     "npu1_4col": {"mesh": (4, 4), "mem_tile_num": 4, "shim_tile_num": 4},
     "npu1_3col": {"mesh": (4, 3), "mem_tile_num": 3, "shim_tile_num": 3},
-    "npu1_2col": {"mesh": (4, 2), "mem_tile_num": 2, "shim_tile_num": 2},
+    "npu1_2col": {"mesh": (2, 2), "mem_tile_num": 2, "shim_tile_num": 2},
     "npu1_1col": {"mesh": (4, 1), "mem_tile_num": 1, "shim_tile_num": 1},
     "npu2": {"mesh": (4, 8), "mem_tile_num": 8, "shim_tile_num": 8},
     "npu2_7col": {"mesh": (4, 7), "mem_tile_num": 7, "shim_tile_num": 7},
