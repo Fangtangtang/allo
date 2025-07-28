@@ -34,7 +34,12 @@ def _test_gemm_2D():
         num_iters=1000,
         use_default_codegen=True,
         trace_size=8192 * 2048,
-        trace=[("gemm", (0, 0)),("gemm", (1, 0)),("gemm", (0, 1)),("gemm", (1, 1)),]
+        trace=[
+            ("gemm", (0, 0)),
+            ("gemm", (1, 0)),
+            ("gemm", (0, 1)),
+            ("gemm", (1, 1)),
+        ],
     )
     A = np.random.randint(-8, 8, (M, K)).astype(np.int16)
     B = np.random.randint(-8, 8, (K, N)).astype(np.int16)

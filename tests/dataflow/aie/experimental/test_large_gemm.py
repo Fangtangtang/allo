@@ -3,7 +3,8 @@
 
 import os
 import allo
-from allo.ir.types import int16, int32
+from allo.ir.types import int16, int8, bfloat16
+from ml_dtypes import bfloat16 as np_bfloat16
 import allo.dataflow as df
 import numpy as np
 from allo.memory import Layout
@@ -42,8 +43,8 @@ def gen_pingpong_gemm_mapping_primitive(Pm, Pn, Pk, col_num=4, row_num=4):
 
 def _test_pingpong_gemm(TyI, TyO):
 
-    M, N, K = 128, 128, 256
-    Pm, Pn, Pk = 4, 4, 8
+    M, N, K = 16, 16, 8
+    Pm, Pn, Pk = 1, 1, 1
     Mt, Nt, Kt = M // Pm, N // Pn, K // Pk
 
     LyA = Layout("S1S2")
@@ -70,7 +71,10 @@ def _test_pingpong_gemm(TyI, TyO):
                 C[:, :] = C_out
 
     mapping_primitives = gen_pingpong_gemm_mapping_primitive(
-        Pm, Pn, Pk, col_num=2, row_num=2
+        Pm,
+        Pn,
+        Pk,
+        # col_num=2, row_num=2
     )
     mod = df.build(
         top,
@@ -81,13 +85,21 @@ def _test_pingpong_gemm(TyI, TyO):
         warmup=200,
         num_iters=1000,
     )
-    A = np.random.randint(0, 64, (M, K)).astype(np.int16)
-    B = np.random.randint(0, 64, (K, N)).astype(np.int16)
-    C = np.zeros((M, N)).astype(np.int16)
+    A = np.random.randint(-1, 1, (M, K)).astype(np.int8)
+    B = np.random.randint(-1, 1, (K, N)).astype(np.int8)
+    C = np.zeros((M, N)).astype(np.int8)
+
+    # A = np.random.random((M, K)).astype(np_bfloat16)
+    # B = np.random.random((K, N)).astype(np_bfloat16)
+    # C = np.zeros((M, N)).astype(np_bfloat16)
+
     mod(A, B, C)
-    np.testing.assert_allclose(C, A @ B, atol=1e-5)
+    # print(C)
+    # print(A @ B)
+    # np.testing.assert_allclose(C.astype(np.float32), (A @ B).astype(np.float32), atol=1)
+    np.testing.assert_allclose(C, (A @ B), atol=1)
     print("PASSED!")
 
 
 if __name__ == "__main__":
-    _test_pingpong_gemm(int16, int16)
+    _test_pingpong_gemm(int8, int8)

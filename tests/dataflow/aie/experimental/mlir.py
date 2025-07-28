@@ -1,6 +1,7 @@
 import subprocess
 import os
 import numpy as np
+from ml_dtypes import bfloat16 as np_bfloat16
 
 np_supported_types = {
     "bf16": np.float32,  # numpy does not support bf16
@@ -37,9 +38,9 @@ def call_mlir(project: str, output_dtype, trace_size: int, *args):
     if process.returncode != 0:
         raise RuntimeError("Failed to build AIE project.")
     # suppose the last argument is output
-    for i, arg in enumerate(args[:-1]):
-        with open(os.path.join(project, f"input{i}.data"), "w", encoding="utf-8") as f:
-            f.write("\n".join([str(i) for i in arg.flatten()]))
+    # for i, arg in enumerate(args[:-1]):
+    #     with open(os.path.join(project, f"input{i}.data"), "w", encoding="utf-8") as f:
+    #         f.write("\n".join([str(i) for i in arg.flatten()]))
     cmd = f"cd {project} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE --trace_sz {trace_size}"
     # cmd = f"cd {project} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE -p true --warmup 200 --test_iter 1000"
     with subprocess.Popen(cmd, shell=True) as process:
@@ -55,7 +56,7 @@ def call_mlir(project: str, output_dtype, trace_size: int, *args):
 
 
 # fixme: update parameters as you need
-from allo.ir.types import int16, int32
+from allo.ir.types import int8, int16, int32, bfloat16
 
 # Ty = int32
 # M = 1024
@@ -76,10 +77,20 @@ from allo.ir.types import int16, int32
 # M, N, K = 32, 32, 32
 # A = np.random.randint(0, 64, (M, N)).astype(np.int16)
 # B = np.zeros((M, N)).astype(np.int16)
-M, N, K = 128, 128, 256
-A = np.random.randint(0, 64, (M, K)).astype(np.int16)
-B = np.random.randint(0, 64, (K, N)).astype(np.int16)
-C = np.zeros((M, N)).astype(np.int16)
-call_mlir("top.prj", int16, 8192 * 2048, A, B, C)
-# np.testing.assert_allclose(A, B, atol=1e-5)
+M, N, K = 256, 256, 128
+
+# A = np.random.random((M, K)).astype(np_bfloat16)
+# B = np.random.random((K, N)).astype(np_bfloat16)
+
+# C = np.zeros((M, N)).astype(np_bfloat16)
+# call_mlir("top.prj", bfloat16, 0, A, B, C)
+# print(C)
+# np.testing.assert_allclose(C.astype(np.float32), (A @ B).astype(np.float32), atol=1e-2)
+
+A = np.random.randint(-2, 2, (M, K)).astype(np.int8)
+B = np.random.randint(-2, 2, (K, N)).astype(np.int8)
+C = np.zeros((M, N)).astype(np.int8)
+call_mlir("top.prj", int8, 0, A, B, C)
+
+np.testing.assert_allclose(C, A @ B, atol=1e-5)
 print("PASSED!")

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import copy
 from collections import defaultdict
 from dataclasses import dataclass
 import numpy as np
@@ -664,6 +665,14 @@ class CodeGenerator:
         dtensor: DTensor
         size: list[int]
         offset: list[int]
+
+        def get_trans(self):
+            offset_num = 0
+            for i in range(4):
+                offset_num += self.offset[i] * self.io_port.stride[i]
+            return CodeGenerator.GlobalIODMATask(
+                self.token, self.start_time,self.end_time,self.io_port, self.dtensor, self.size, [0,0,0,offset_num]
+            )
 
     class DMATaskWithSameToken:
         def __init__(self, task: "CodeGenerator.GlobalIODMATask"):
@@ -1747,6 +1756,7 @@ class CodeGenerator:
                         shim_tile.name: 0 for shim_tile in self.used_shim_tiles
                     }
                     launched_dma_to_external: list[aie_d.object_fifo] = []
+                    coalesced_tasks_list: list[list[CodeGenerator.GlobalIODMATask]] = []
                     # launch a group of tasks with the same token
                     for task_group in task_groups:
                         task_group.tasks.sort(key=lambda x: x.start_time)
@@ -1828,6 +1838,8 @@ class CodeGenerator:
                         for tasks in fifo_to_tasks.values():
                             coalesced_tasks.extend(tasks)
                         coalesced_tasks.sort(key=lambda x: x.start_time)
+                        coalesced_tasks_list.append(coalesced_tasks)
+                        # ##################################################################
                         dma_bd_workload: dict[str, int] = {
                             shim_tile.name: 0 for shim_tile in self.used_shim_tiles
                         }
@@ -1879,6 +1891,107 @@ class CodeGenerator:
                             )
                             if not global_dma.io_port.is_input:
                                 launched_dma_to_external.append(dma_fifo)
+                        # ##################################################################
+
+                    # ##################################################################
+                    # tasks_idx_left = 0
+                    # while tasks_idx_left < len(coalesced_tasks_list):
+                    #     dma_bd_workload: dict[str, int] = {
+                    #         shim_tile.name: 0 for shim_tile in self.used_shim_tiles
+                    #     }
+                    #     overload_flag = False
+                    #     fifo_tasks: dict[
+                    #         str, list[tuple[int, list[int], list[int], list[int], int, bool]]
+                    #     ] = {}  # mem (idx), offsets, sizes, strides, bd_id, is_input
+                    #     tasks_idx_right = tasks_idx_left
+                    #     while tasks_idx_right < len(coalesced_tasks_list):
+                    #         updated_fifo_tasks: dict[
+                    #             str, list[tuple[int, list[int], list[int], list[int], int, bool]]
+                    #         ] = copy.deepcopy(fifo_tasks)
+                    #         for global_dma in coalesced_tasks_list[tasks_idx_right]:
+                    #             global_dma=global_dma.get_trans()
+                    #             if global_dma.io_port.fifo.name in updated_fifo_tasks:
+                    #                 prev_task = updated_fifo_tasks[
+                    #                     global_dma.io_port.fifo.name
+                    #                 ][-1]
+                    #                 if (
+                    #                     global_dma.dtensor.global_id == prev_task[0]
+                    #                 ):
+                    #                     # same data
+                    #                     if global_dma.offset == prev_task[1] and global_dma.size[1:] == prev_task[2][1:]:
+                    #                         if (global_dma.size[0]==1 or global_dma.io_port.stride[0] == 0) and (prev_task[2][0]== 1 or prev_task[3][0]==0):
+                    #                             prev_task[3][0]=0
+                    #                             prev_task[2][0]+=global_dma.size[0]
+                    #                             continue
+
+                    #                     # contiguous
+                    #                     if prev_task[3] == global_dma.io_port.stride:
+                    #                         offset_diffs = [i for i, (a, b) in enumerate(zip(global_dma.offset, prev_task[1])) if a != b]
+                    #                         if len(offset_diffs) == 1 and offset_diffs[0]>0:
+                    #                             valid = True
+                    #                             offset_factor = 1
+                    #                             for i in range(4):
+                    #                                 if i < offset_diffs[0]:
+                    #                                     offset_factor *= global_dma.size[i]
+                    #                                 elif global_dma.size[i] !=  prev_task[2][i]:
+                    #                                     valid =  False
+                    #                             diff = global_dma.offset[offset_diffs[0]] -  prev_task[1][offset_diffs[0]]
+                    #                             if valid and diff == global_dma.size[offset_diffs[0]] *offset_factor:
+                    #                                 prev_task[2][offset_diffs[0]-1] += 1
+                    #                                 continue
+                    #             else:
+                    #                 updated_fifo_tasks[global_dma.io_port.fifo.name] = (
+                    #                     []
+                    #                 )
+                    #             used_shim = (
+                    #                 global_dma.io_port.fifo.src
+                    #                 if global_dma.io_port.is_input
+                    #                 else global_dma.io_port.fifo.dst[0]
+                    #             )
+                    #             dma_bd_workload[used_shim] += 1
+                    #             if (
+                    #                 dma_bd_workload[used_shim] + dma_bd_map[used_shim]
+                    #                 >= Config.DMA_MAX_BDS
+                    #             ):
+                    #                 overload_flag = True
+                    #                 break
+                    #             updated_fifo_tasks[
+                    #                 global_dma.io_port.fifo.name
+                    #             ].append(
+                    #                 (
+                    #                     global_dma.dtensor.global_id,
+                    #                     global_dma.offset,
+                    #                     global_dma.size,
+                    #                     global_dma.io_port.stride,
+                    #                     dma_bd_workload[used_shim] + dma_bd_map[used_shim],
+                    #                     global_dma.io_port.is_input
+                    #                 )
+                    #             )
+                    #         if overload_flag:
+                    #             break
+                    #         tasks_idx_right += 1
+                    #         fifo_tasks = updated_fifo_tasks
+                    #     # launch tasks in fifo_tasks and wait
+                    #     print(fifo_tasks)
+                    #     for fifo_name, fifo_infos in fifo_tasks.items():
+                    #         for fifo_info in fifo_infos:
+                    #             aiex_d.NpuDmaMemcpyNd(
+                    #                 metadata=self.fifo_map[fifo_name],
+                    #                 bd_id=fifo_info[4],
+                    #                 mem=runtime_seq_entry_block.arguments[fifo_info[0]],
+                    #                 offsets=fifo_info[1],
+                    #                 sizes=fifo_info[2],
+                    #                 strides=fifo_info[3],
+                    #                 issue_token=True,
+                    #             )
+                    #             if not fifo_info[5]:
+                    #                 launched_dma_to_external.append(self.fifo_map[fifo_name])
+                    #     tasks_idx_left = tasks_idx_right
+                    #     for launched_fifo in launched_dma_to_external:
+                    #         aiex_d.dma_wait(launched_fifo)
+                    #     launched_dma_to_external.clear()
+                    # ##################################################################
+
                     for launched_fifo in launched_dma_to_external:
                         aiex_d.dma_wait(launched_fifo)
 
