@@ -8,6 +8,8 @@ import ast
 import sys
 import traceback
 import numpy as np
+from dataclasses import dataclass
+from collections import deque
 from .._mlir.ir import (
     Module,
     Location,
@@ -90,6 +92,19 @@ class ASTBuilder(ASTVisitor):
 
 # pylint: disable=too-many-public-methods
 class ASTTransformer(ASTBuilder):
+    @dataclass
+    class StructuralTag:
+        logic:str
+        idx: int | tuple[int]
+
+    structural_tag: deque[StructuralTag] = deque()
+
+    @staticmethod
+    def get_structural_tag()-> tuple[str, list[int | tuple[int]]]:
+        logic_str = "-".join(tag.logic for tag in ASTTransformer.structural_tag)
+        idx_list = [tag.idx for tag in ASTTransformer.structural_tag]
+        return logic_str, idx_list[1:]
+    
     @staticmethod
     def build_Name(ctx, node, val=None):
         if val is not None and isinstance(node.ctx, ast.Store):
@@ -1516,6 +1531,11 @@ class ASTTransformer(ASTBuilder):
                             )
                             orig_name = node.name
                             for dim in np.ndindex(*mapping):
+                                ASTTransformer.structural_tag.append(
+                                    ASTTransformer.StructuralTag(
+                                        orig_name, dim
+                                    )
+                                )
                                 new_ctx = old_ctx.copy()
                                 new_ctx.set_ip(old_ctx.top_func)
                                 new_ctx.top_func_tree = node
@@ -1531,6 +1551,12 @@ class ASTTransformer(ASTBuilder):
                                     new_ctx, node
                                 )
                                 func_op.attributes["df.kernel"] = UnitAttr.get()
+                                tag, idx = ASTTransformer.get_structural_tag()
+                                func_op.attributes["structural_tag"] = StringAttr.get(tag)
+                                func_op.attributes["structural_idx"] =ArrayAttr.get(
+                                    [IntegerAttr.get(IntegerType.get_signless(64), idx_) for idx_ in idx]
+                                )
+                                ASTTransformer.structural_tag.pop()
                             return
         else:
             old_ctx = None
@@ -2663,18 +2689,31 @@ class ASTTransformer(ASTBuilder):
                 )
             var = node.items[0].optional_vars.id
             for i in range(*rargs):
+                ASTTransformer.structural_tag.append(
+                    ASTTransformer.StructuralTag(
+                        f"loop{node.lineno}", i
+                    )
+                )
                 ctx.global_vars[var] = i
                 build_stmts(ctx, node.body)
                 ctx.global_vars.pop(var)
+                ASTTransformer.structural_tag.pop()
             return
         else:
             raise RuntimeError("Unsupported meta function")
         if final_cond:
+            ASTTransformer.structural_tag.append(
+                ASTTransformer.StructuralTag(
+                    f"branch{node.lineno}", 
+                    1 if node.items[0].context_expr.func.attr == "meta_if" else 0
+                )
+            )
             ctx.with_scope_level += 1
             stmts = build_stmts(ctx, node.body)
             # clear inner context
             ctx.meta_if_stack = ctx.meta_if_stack[: ctx.with_scope_level]
             ctx.with_scope_level -= 1
+            ASTTransformer.structural_tag.pop()
             return stmts[-1]
         return "WithStatementSkipped"
 
@@ -2694,6 +2733,12 @@ class ASTTransformer(ASTBuilder):
 
 build_stmt = ASTTransformer()
 
+def construct_with_attr(op):
+    tag, idx = ASTTransformer.get_structural_tag()
+    op.attributes["structural_tag"] = StringAttr.get(tag)
+    op.attributes["structural_idx"] =ArrayAttr.get(
+        [IntegerAttr.get(IntegerType.get_signless(64), idx_) for idx_ in idx]
+    )
 
 def build_stmts(ctx, stmts):
     results = []
