@@ -545,32 +545,73 @@ class CodeGenerator:
                 arg_info: tuple[Argument, bool] = func_args[i]
                 if arg_info[0].dtensor is not None:
                     # fixme: argument.uses is unordered??
-                    first_use = list(argument.uses)[-1]
-                    if first_use is not None:
-                        first_use_op = first_use.owner
-                        # no branch
-                        while first_use_op.parent.name != "func.func":
-                            first_use_op = first_use_op.parent
+                    # first_use = list(argument.uses)[-1]
+                    # if first_use is not None:
+                    #     first_use_op = first_use.owner
+                    #     # no branch
+                    #     while first_use_op.parent.name != "func.func":
+                    #         first_use_op = first_use_op.parent
+                    #     fifo = self.fifo_map[arg_to_fifo[i].name]
+                    #     with aie_ir.InsertionPoint(first_use_op):
+                    #         if arg_to_fifo[i].name in reused_fifo_name:
+                    #             fifo.release(
+                    #                 1 if arg_info[0].dtensor.is_input else 0, 1
+                    #             )
+                    #         else:
+                    #             reused_fifo_name[arg_to_fifo[i].name] = arg_info[
+                    #                 0
+                    #             ].dtensor.is_input
+                    #         acquired = fifo.acquire(
+                    #             1 if arg_info[0].dtensor.is_input else 0, 1
+                    #         )
+                    #         # incorrect
+                    #         argument.replace_all_uses_with(acquired)
+                        # ##############################################
+                    # fixme: argument.uses is unordered??
+                    if len(list(argument.uses)) == 1:
+                        op = list(argument.uses)[0].owner
+                        print("!", op)
+                        if isinstance(op.parent.opview, aie_scf_d.ForOp):
+                            parent_body = op.parent.opview.body
+                        elif isinstance(op.parent.opview, aie_func_d.FuncOp):
+                            parent_body = op.parent.opview.entry_block
                         fifo = self.fifo_map[arg_to_fifo[i].name]
-                        with aie_ir.InsertionPoint(first_use_op):
-                            if arg_to_fifo[i].name in reused_fifo_name:
-                                fifo.release(
-                                    1 if arg_info[0].dtensor.is_input else 0, 1
-                                )
-                            else:
-                                reused_fifo_name[arg_to_fifo[i].name] = arg_info[
-                                    0
-                                ].dtensor.is_input
+                        with aie_ir.InsertionPoint.at_block_begin(parent_body):
                             acquired = fifo.acquire(
                                 1 if arg_info[0].dtensor.is_input else 0, 1
                             )
-                            # incorrect
                             argument.replace_all_uses_with(acquired)
+                        with aie_ir.InsertionPoint.at_block_terminator(parent_body):
+                            fifo.release(1 if arg_info[0].dtensor.is_input else 0, 1)
+                    else:
+                        first_use = list(argument.uses)[-1]
+                        if first_use is not None:
+                            first_use_op = first_use.owner
+                            # no branch
+                            while first_use_op.parent.name != "func.func":
+                                first_use_op = first_use_op.parent
+                            fifo = self.fifo_map[arg_to_fifo[i].name]
+                            with aie_ir.InsertionPoint(first_use_op):
+                                if arg_to_fifo[i].name in reused_fifo_name:
+                                    fifo.release(
+                                        1 if arg_info[0].dtensor.is_input else 0, 1
+                                    )
+                                else:
+                                    reused_fifo_name[arg_to_fifo[i].name] = arg_info[
+                                        0
+                                    ].dtensor.is_input
+                                acquired = fifo.acquire(
+                                    1 if arg_info[0].dtensor.is_input else 0, 1
+                                )
+                                # incorrect
+                                argument.replace_all_uses_with(acquired)
+                        # ##############################################
                 else:
                     stream: Stream = arg_info[0].stream
                     fifo = self.fifo_map[stream.name]
                     for use_ in argument.uses:
                         op = use_.owner
+                        print("!", op, use_)
                         if isinstance(op.parent.opview, aie_scf_d.ForOp):
                             parent_body = op.parent.opview.body
                         elif isinstance(op.parent.opview, aie_func_d.FuncOp):
