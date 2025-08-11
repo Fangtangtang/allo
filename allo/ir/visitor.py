@@ -43,6 +43,7 @@ class ASTContext:
         verbose=False,
     ):
         self.ip_stack = []
+        self.module_ip = None
         self.buffers = {}
         # ast tree
         self.tree = tree
@@ -106,6 +107,14 @@ class ASTContext:
 
     def get_ip(self):
         return self.ip_stack[-1]
+
+    def set_module_ip(self, ip):
+        # if not isinstance(ip, InsertionPoint):
+        # ip = InsertionPoint(ip)
+        self.module_ip = ip
+
+    def get_module_ip(self):
+        return self.module_ip
 
     def pop_ip(self):
         return self.ip_stack.pop()

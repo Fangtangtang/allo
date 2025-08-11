@@ -1833,6 +1833,7 @@ class ASTTransformer(ASTBuilder):
         with ctx.mlir_ctx:
             module = Module.create()
         ctx.set_ip(module.body)
+        ctx.set_module_ip((module.body))
         for stmt in node.body:
             build_stmt(ctx, stmt)
         ctx.pop_ip()
@@ -1888,11 +1889,17 @@ class ASTTransformer(ASTBuilder):
                         if isinstance(node.func.value, ast.Name)
                         else node.func.value.value.id
                     )
+                    hint = None
                     if isinstance(node.func.value, ast.Subscript):
                         # pylint: disable=redefined-builtin
-                        slice = eval(
-                            ast.unparse(node.func.value.slice), ctx.global_vars
-                        )
+                        try:
+                            slice = eval(
+                                ast.unparse(node.func.value.slice), ctx.global_vars
+                            )
+                        except NameError as e:
+                            print(ast.dump(node.func.value.slice))
+                            hint = "iter_all"
+                            slice = 0
                         if isinstance(slice, int):
                             slice = tuple([slice])
                         else:
@@ -1915,13 +1922,16 @@ class ASTTransformer(ASTBuilder):
                         if op is not None
                         else InsertionPoint.at_block_begin(ctx.top_func.entry_block)
                     )
-                    stream = ctx.buffers[new_name].clone(ip=ip)
+                    stream = ctx.buffers[new_name]
+                    # .clone(ip=ip)
                     put_op = allo_d.StreamPutOp(
                         stream.result,
                         [],
                         stmts[0].result,
                         ip=ctx.get_ip(),
                     )
+                    if hint is not None:
+                        put_op.attributes["hint"] = StringAttr.get(hint)
                     if isinstance(node.func.value.dtype, UInt):
                         put_op.attributes["unsigned"] = UnitAttr.get()
                     return
@@ -1931,10 +1941,16 @@ class ASTTransformer(ASTBuilder):
                         if isinstance(node.func.value, ast.Name)
                         else node.func.value.value.id
                     )
+                    hint = None
                     if isinstance(node.func.value, ast.Subscript):
-                        slice = eval(
-                            ast.unparse(node.func.value.slice), ctx.global_vars
-                        )
+                        try:
+                            slice = eval(
+                                ast.unparse(node.func.value.slice), ctx.global_vars
+                            )
+                        except NameError as e:
+                            print(ast.dump(node.func.value.slice))
+                            hint = "iter_all"
+                            slice = 0
                         if isinstance(slice, int):
                             slice = tuple([slice])
                         else:
@@ -1957,13 +1973,16 @@ class ASTTransformer(ASTBuilder):
                         if op is not None
                         else InsertionPoint.at_block_begin(ctx.top_func.entry_block)
                     )
-                    stream = ctx.buffers[new_name].clone(ip=ip)
+                    stream = ctx.buffers[new_name]
+                    # .clone(ip=ip)
                     get_op = allo_d.StreamGetOp(
                         node.func.value.dtype.build(),
                         stream.result,
                         [],
                         ip=ctx.get_ip(),
                     )
+                    if hint is not None:
+                        get_op.attributes["hint"] = StringAttr.get(hint)
                     if isinstance(node.func.value.dtype.dtype, UInt):
                         get_op.attributes["unsigned"] = UnitAttr.get()
                     return get_op
@@ -2034,7 +2053,10 @@ class ASTTransformer(ASTBuilder):
                 # explicitly unravel the array
                 results = []
                 for dim in np.ndindex(*array.shape):
-                    stream_op = allo_d.StreamConstructOp(stream_type, ip=ctx.get_ip())
+                    stream_op = allo_d.StreamConstructOp(
+                        stream_type,
+                        ip=InsertionPoint.at_block_begin(ctx.get_module_ip()),
+                    )
                     # pylint: disable=bad-builtin
                     stream_op.attributes["id"] = StringAttr.get("_".join(map(str, dim)))
                     results.append(stream_op)
@@ -2092,7 +2114,9 @@ class ASTTransformer(ASTBuilder):
             if fn_name == "pipe":
                 stream = eval(ast.unparse(node), ctx.global_vars)
                 stream_type = allo_d.StreamType.get(stream.build(), depth=stream.depth)
-                stream_op = allo_d.StreamConstructOp(stream_type, ip=ctx.get_ip())
+                stream_op = allo_d.StreamConstructOp(
+                    stream_type, ip=InsertionPoint.at_block_begin(ctx.get_module_ip())
+                )
                 if isinstance(stream.dtype, UInt):
                     stream_op.attributes["unsigned"] = UnitAttr.get()
                 return stream_op

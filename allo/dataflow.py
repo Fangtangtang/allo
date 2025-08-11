@@ -342,9 +342,13 @@ def build(
     if target == "aie-mlir":
         global_vars = get_global_vars(func)
         s = _customize(func, global_vars=global_vars, enable_tensor=False)
+        print(s.module)
+
         stream_info, stream_types_dict = move_stream_to_interface(
             s, with_stream_type=True
         )
+        import sys
+        sys.exit(0)
         parameter_list, s = _build_top(
             s, stream_info, target="aie", get_parameter_list=True
         )
