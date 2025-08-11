@@ -109,7 +109,8 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
 
         @df.kernel(mapping=[1])
         def send_q(Q: Ty[chunk_size, HEAD_DIM]):
-            with allo.meta_for(SEQ_LEN // chunk_size) as i:
+            # with allo.meta_for(SEQ_LEN // chunk_size) as i:
+            for i in range(SEQ_LEN // chunk_size):
                 q_pipe[i].put(Q)
 
         @df.kernel(mapping=[SEQ_LEN // chunk_size])
@@ -147,7 +148,8 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
         @df.kernel(mapping=[1])
         def acc(O: Ty[chunk_size, HEAD_DIM]):
             attn_output: Ty[chunk_size, HEAD_DIM] = 0
-            with allo.meta_for(SEQ_LEN // chunk_size) as i:
+            # with allo.meta_for(SEQ_LEN // chunk_size) as i:
+            for i in range(SEQ_LEN // chunk_size):
                 attn_output[:, :] = allo.add(attn_output, o_pipe[i].get())
             scale_attn_output(attn_output, exp_sum_pipe.get(), O)
 

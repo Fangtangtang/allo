@@ -4,6 +4,7 @@
 
 import functools
 import os
+import numpy as np
 from ._mlir.ir import (
     InsertionPoint,
     FlatSymbolRefAttr,
@@ -136,7 +137,6 @@ def aie_move_stream_to_interface(s, with_stream_type: bool = False):
             funcs.append(op)
         elif isinstance(op, allo_d.StreamConstructOp):
             stream_ops[op.result] = op
-            print(op.attributes["name"].value)
             if (
                 with_stream_type
                 and op.attributes["name"].value not in stream_types_dict
@@ -157,7 +157,7 @@ def aie_move_stream_to_interface(s, with_stream_type: bool = False):
         s_type_str = "_" * len(in_types)
         new_args = new_func_args[func_name].copy()
 
-        # fixme: very frail
+        # fixme: very weak
         def collect_stream_op(op_):
             if isinstance(op_, allo_d.StreamGetOp | allo_d.StreamPutOp):
                 func_stream_ops.append(op_)
@@ -180,10 +180,23 @@ def aie_move_stream_to_interface(s, with_stream_type: bool = False):
                 direction = "out"
             else:
                 raise ValueError("Stream is not used correctly.")
-            stream_info[func_name].append((stream_name, direction))
+            if "hint" in op.attributes:
+                shape_tuple = tuple(
+                    map(int, construct_op.attributes["total"].value.split("x"))
+                )
+                parts = stream_name.split("_")
+                i = len(parts)
+                while i > 0 and parts[i - 1].isdigit():
+                    i -= 1
+                name_prefix = "_".join(parts[:i])
+                for dim in np.ndindex(*shape_tuple):
+                    stream_info[func_name].append(
+                        (f"{name_prefix}_{"_".join(map(str, dim))}", direction)
+                    )
+            else:
+                stream_info[func_name].append((stream_name, direction))
             s_type_str += direction[0]
             new_args.append(stream_name)
-            print(op, stream_ops[used_stream])
         # create new func to update arguments
         in_types += stream_types
         new_func_args[func_name] = new_args
@@ -219,6 +232,8 @@ def aie_move_stream_to_interface(s, with_stream_type: bool = False):
                         old.replace_all_uses_with(new)
             func.erase()
     s.func_args = new_func_args
+    for construct_op in stream_ops.values():
+        construct_op.erase()
     if with_stream_type:
         return stream_info, stream_types_dict
     return stream_info
@@ -440,13 +455,12 @@ def build(
     if target == "aie-mlir":
         global_vars = get_global_vars(func)
         s = _customize(func, global_vars=global_vars, enable_tensor=False)
-        # print(s.module)
-
+        print(s.module)
         stream_info, stream_types_dict = aie_move_stream_to_interface(
             s, with_stream_type=True
         )
-        print(s.module)
-
+        # TODO: stream
+        print(stream_info)
         parameter_list, s = _build_top(
             s, stream_info, target="aie", get_parameter_list=True
         )

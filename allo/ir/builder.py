@@ -2059,6 +2059,7 @@ class ASTTransformer(ASTBuilder):
                     )
                     # pylint: disable=bad-builtin
                     stream_op.attributes["id"] = StringAttr.get("_".join(map(str, dim)))
+                    stream_op.attributes["total"] = StringAttr.get("x".join(map(str, array.shape)))
                     results.append(stream_op)
                 return results
             # Allo library functions
@@ -2117,6 +2118,7 @@ class ASTTransformer(ASTBuilder):
                 stream_op = allo_d.StreamConstructOp(
                     stream_type, ip=InsertionPoint.at_block_begin(ctx.get_module_ip())
                 )
+                stream_op.attributes["total"] = StringAttr.get("1")
                 if isinstance(stream.dtype, UInt):
                     stream_op.attributes["unsigned"] = UnitAttr.get()
                 return stream_op
