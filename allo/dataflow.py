@@ -126,6 +126,104 @@ def move_stream_to_interface(s, with_stream_type: bool = False):
     return stream_info
 
 
+def aie_move_stream_to_interface(s, with_stream_type: bool = False):
+    stream_ops: dict[str, allo_d.StreamConstructOp] = {}
+    funcs = []
+    if with_stream_type:
+        stream_types_dict: dict[str, Type] = {}
+    for op in s.module.body.operations:
+        if isinstance(op, func_d.FuncOp) and "df.kernel" in op.attributes:
+            funcs.append(op)
+        elif isinstance(op, allo_d.StreamConstructOp):
+            stream_ops[op.result] = op
+            print(op.attributes["name"].value)
+            if (
+                with_stream_type
+                and op.attributes["name"].value not in stream_types_dict
+            ):
+                stream_types_dict[op.attributes["name"].value] = op.result.type
+
+    stream_info = {}
+    new_func_args = s.func_args.copy()
+
+    for func in funcs:
+        func_name = func.attributes["sym_name"].value
+        func_stream_ops = []
+        stream_types = []
+        stream_signed = ""
+        stream_info[func_name] = []
+        in_types = func.attributes["function_type"].value.inputs
+        out_types = func.attributes["function_type"].value.results
+        s_type_str = "_" * len(in_types)
+        new_args = new_func_args[func_name].copy()
+
+        # fixme: very frail
+        def collect_stream_op(op_):
+            if isinstance(op_, allo_d.StreamGetOp | allo_d.StreamPutOp):
+                func_stream_ops.append(op_)
+                return
+            for region in op_.regions:
+                for block in region.blocks:
+                    for inner_op in block.operations:
+                        collect_stream_op(inner_op)
+
+        collect_stream_op(func)
+        for op in func_stream_ops:
+            stream_types.append(op.operands[0].type)
+            used_stream = op.operands[0]
+            construct_op = stream_ops[used_stream]
+            stream_name = construct_op.attributes["name"].value
+            stream_signed += "u" if "unsigned" in construct_op.attributes else "_"
+            if isinstance(op, allo_d.StreamGetOp):
+                direction = "in"
+            elif isinstance(op, allo_d.StreamPutOp):
+                direction = "out"
+            else:
+                raise ValueError("Stream is not used correctly.")
+            stream_info[func_name].append((stream_name, direction))
+            s_type_str += direction[0]
+            new_args.append(stream_name)
+            print(op, stream_ops[used_stream])
+        # create new func to update arguments
+        in_types += stream_types
+        new_func_args[func_name] = new_args
+        with s.module.context, Location.unknown():
+            func_type = FunctionType.get(in_types, out_types)
+            new_func = func_d.FuncOp(
+                name=func.attributes["sym_name"].value,
+                type=func_type,
+                ip=InsertionPoint(func),
+            )
+            entry_block = new_func.add_entry_block()
+            # copy old attributes
+            if "itypes" in func.attributes:
+                new_func.attributes["itypes"] = StringAttr.get(
+                    func.attributes["itypes"].value + stream_signed
+                )
+            if "otypes" in func.attributes:
+                new_func.attributes["otypes"] = func.attributes["otypes"]
+            # tag stream types
+            new_func.attributes["stypes"] = StringAttr.get(s_type_str)
+            if "df.kernel" in func.attributes:
+                new_func.attributes["df.kernel"] = UnitAttr.get()
+            for i, arg in enumerate(func.arguments):
+                arg.replace_all_uses_with(new_func.arguments[i])
+            for op in func_stream_ops:
+                op.operands[0] = new_func.arguments[
+                    len(in_types) - len(func_stream_ops) + func_stream_ops.index(op)
+                ]
+            with InsertionPoint(entry_block):
+                for op in func.entry_block.operations:
+                    new_op = op.clone()
+                    for old, new in zip(op.results, new_op.results):
+                        old.replace_all_uses_with(new)
+            func.erase()
+    s.func_args = new_func_args
+    if with_stream_type:
+        return stream_info, stream_types_dict
+    return stream_info
+
+
 def remove_unused_func_ops(s, func_names):
     for func_op in s.module.body.operations:
         if not (
@@ -216,10 +314,10 @@ def _build_top(s, stream_info, target="vitis_hls", get_parameter_list: bool = Fa
         for i, func in enumerate(funcs):
             func_name = func.attributes["sym_name"].value
             arg_lst = [new_top.arguments[idx] for idx in arg_mapping[func_name]]
-            stream_lst = [
-                stream_map[stream_name] for stream_name, _ in stream_info[func_name]
-            ]
             if target != "aie":
+                stream_lst = [
+                    stream_map[stream_name] for stream_name, _ in stream_info[func_name]
+                ]
                 call_op = func_d.CallOp(
                     [],
                     FlatSymbolRefAttr.get(func_name),
@@ -342,13 +440,13 @@ def build(
     if target == "aie-mlir":
         global_vars = get_global_vars(func)
         s = _customize(func, global_vars=global_vars, enable_tensor=False)
-        print(s.module)
+        # print(s.module)
 
-        stream_info, stream_types_dict = move_stream_to_interface(
+        stream_info, stream_types_dict = aie_move_stream_to_interface(
             s, with_stream_type=True
         )
-        import sys
-        sys.exit(0)
+        print(s.module)
+
         parameter_list, s = _build_top(
             s, stream_info, target="aie", get_parameter_list=True
         )
