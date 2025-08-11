@@ -267,7 +267,7 @@ def inject_external_kernels(
     top_function_name,
     external_kernel_lib: dict[str, ExternalModule],
     lib_dir: str = "aie2",
-) -> tuple[dict[str, bool], dict[str, ExternalModuleBase], set[str]]:
+) -> tuple[dict[str, ExternalModuleBase], dict[str, set[str]], dict[str, set[str]]]:
     """
     Inject external kernels for compute cores.
     TODO: is it possible to use cpp pass to inject?
@@ -280,28 +280,29 @@ def inject_external_kernels(
     and generates corresponding C++ kernel code snippets.
 
     Returns:
-        - use_external_kernels: A mapping from function names to a boolean flag indicating
-                                whether an external kernel was injected in that function.
         - injected_external_kernels: A dictionary mapping kernel names to tuples of external code
                             strings (C++ code and preprocessor defines).
-        - include_src: A set of C++ include directives needed for the external kernels.
+        - used_external_kernels: A mapping from function names to a set of external kernels names.
+        - used_include_src: A mapping from function names to a set of C++ include directives needed for the external kernels.
     """
-    use_external_kernels: dict[str, bool] = {}
     injected_external_kernels: dict[str, ExternalModuleBase] = {}
-    include_src: set[str] = set()
+    used_external_kernels: dict[str, set[str]] = {}
+    used_include_src: dict[str, set[str]] = {}
 
     def inject_external_kernels_recursive(operations, df_function_name: str):
         for op in operations:
             # 1. customized external kernel
             if isinstance(op, allo_func_d.CallOp):
-                use_external_kernels[df_function_name] = True
                 callee_name = op.callee.value
+                external_module = external_kernel_lib[callee_name]
+                used_external_kernels[df_function_name].add(callee_name)
+                used_include_src[df_function_name].add(
+                    f'#include "{external_module.filename}"\n'
+                )
                 # register external kernel
                 if callee_name in injected_external_kernels:
                     continue
-                external_module = external_kernel_lib[callee_name]
                 assert external_module is not None, "external module not found"
-                include_src.add(f'#include "{external_module.filename}"\n')
                 injected_external_kernels[callee_name] = external_module
                 continue
             # 2. builtin external kernel
@@ -324,24 +325,26 @@ def inject_external_kernels(
                     N = op.outputs[0].type.shape[-1]
                     dtype = str(op.outputs[0].type.element_type)
                     ctype = aie_external_kernel_ctype_map[dtype]
-                    include_src.add(f'#include "{lib_dir}/zero.cc"\n')
-                    use_external_kernels[df_function_name] = True
                     kernel_name = f"fill_zeros_{dtype}_{M}_{N}_vector"
                     kernel_code += f"void {kernel_name}({ctype} *A)"
                     kernel_code += " {\n"
                     kernel_code += f"  zero_vectorized<{ctype}, {M}, {N}>(A);\n"
                     kernel_code += "}\n\n"
+                    used_include_src[df_function_name].add(
+                        f'#include "{lib_dir}/zero.cc"\n'
+                    )
                     call_builtin = True
                     output_idx.append(0)
                     operands = [op.outputs[0]]
             # vec add/mul
             elif op.operation.name in {"linalg.add", "linalg.mul"}:
                 op_name = op.operation.name.split(".")[1]
-                include_src.add(f'#include "aie2/{op_name}.cc"\n')
                 dtype = str(op.inputs[0].type.element_type)
                 ctype = aie_external_kernel_ctype_map[dtype]
                 kernel_name = f"{op_name}_{dtype}_vector"
-                use_external_kernels[df_function_name] = True
+                used_include_src[df_function_name].add(
+                    f'#include "aie2/{op_name}.cc"\n'
+                )
                 kernel_code += (
                     f"void {kernel_name}({ctype} *A_in, {ctype} *B_in, {ctype} *C_out)"
                 )
@@ -363,8 +366,6 @@ def inject_external_kernels(
                 dtype = str(op.inputs[0].type.element_type)
                 out_dtype = str(op.outputs[0].type.element_type)
                 if (dtype, out_dtype) in matmul_external_kernel_config_map:
-                    include_src.add('#include "mm.cc"\n')
-                    use_external_kernels[df_function_name] = True
                     kernel_header += f"#define DIM_M {M}\n"
                     kernel_header += f"#define DIM_N {N}\n"
                     kernel_header += f"#define DIM_K {K}\n"
@@ -373,12 +374,14 @@ def inject_external_kernels(
                     output_idx.append(2)
                     call_builtin = True
                     kernel_name = f"matmul_scalar_{dtype}_{out_dtype}"
+                    used_include_src[df_function_name].add('#include "mm.cc"\n')
                     operands = [
                         op.inputs[0],
                         op.inputs[1],
                         op.outputs[0],
                     ]
             if call_builtin:
+                used_external_kernels[df_function_name].add(kernel_name)
                 # replace operation
                 call_op = allo_func_d.CallOp(
                     [],
@@ -424,13 +427,14 @@ def inject_external_kernels(
             ):
                 if func.attributes["sym_name"].value != top_function_name:
                     func_name: str = func.attributes["sym_name"].value
-                    use_external_kernels[func_name] = False
+                    used_external_kernels[func_name] = set()
+                    used_include_src[func_name] = set()
                     for block in func.regions[0].blocks:
                         inject_external_kernels_recursive(block.operations, func_name)
     return (
-        use_external_kernels,
         injected_external_kernels,
-        include_src,
+        used_external_kernels,
+        used_include_src,
     )
 
 
@@ -529,7 +533,7 @@ def get_element_type(dtype_str: str) -> aie_ir.Type:
 
 
 def codegen_external_kernels(
-    injected_kernels: dict[str, ExternalModuleBase],
+    injected_kernels: list[ExternalModuleBase],
     include_src: set[str],
     lib_dir: str = "aie2",
 ) -> str:
@@ -561,7 +565,7 @@ def codegen_external_kernels(
             code += src
 
     kernel_code = ""
-    for kernel in injected_kernels.values():
+    for kernel in injected_kernels:
         code += kernel.kernel_header
         kernel_code += kernel.kernel_code
 

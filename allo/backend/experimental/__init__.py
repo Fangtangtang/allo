@@ -7,6 +7,7 @@ import re
 import subprocess
 import shutil
 import numpy as np
+from collections import defaultdict
 
 try:
     import aie.ir as aie_ir
@@ -163,7 +164,11 @@ class AIE_MLIRModule:
     # ############################################################
     # Build
     # ############################################################
-    def _init_virtual_graph(self, use_external_kernels: dict[str, bool]):
+    def _init_virtual_graph(
+        self,
+        used_external_kernels: dict[str, set[str]],
+        used_include_src: dict[str, set[str]],
+    ):
         assert (
             self.core_func_args is not None and self.global_tensors is not None
         ), "Analysis of kernel parameters should be done before initializing virtual graph"
@@ -173,7 +178,8 @@ class AIE_MLIRModule:
             self.top_func_name,
             self.streams,
             self.core_func_args,
-            use_external_kernels,
+            used_external_kernels,
+            used_include_src,
         )
 
     def assign_tag_to_kernel(self):
@@ -532,7 +538,7 @@ class AIE_MLIRModule:
             f.write(str(self.allo_module))
         # inject external kernels
         # (inject before virtual mapping since using external kernel may require layout transformation when transferring data)
-        use_external_kernels, self.injected_external_kernels, include_src = (
+        self.injected_external_kernels, used_external_kernels, used_include_src = (
             inject_external_kernels(
                 self.allo_module,
                 self.top_func_name,
@@ -540,16 +546,11 @@ class AIE_MLIRModule:
                 "aie2" if self.device == "npu1" else "aie2p",
             )
         )
-        # record original allo mlir
-        # with open(
-        #     os.path.join(self.project_dir, "raw.mlir"), "w", encoding="utf-8"
-        # ) as f:
-        #     f.write(str(self.allo_module))
         self.analyze_kernel_parameters(
             self.assign_tag_to_kernel(), self.injected_external_kernels
         )
         # ------------------------- virtual mapping -------------------------
-        self._init_virtual_graph(use_external_kernels)
+        self._init_virtual_graph(used_external_kernels, used_include_src)
         if enable_virtual_mapping:
             for mapping in mapping_primitives:
                 primitive = mapping[0]
@@ -574,6 +575,23 @@ class AIE_MLIRModule:
         pipeline = f'builtin.module({",".join(passes)})'
         with self.allo_module.context:
             mlir_pass_manager.parse(pipeline).run(self.allo_module.operation)
+        # ------------------------- external kernels -------------------------
+        external_info: dict[tuple[set[str], set[str]], str] = defaultdict(str)
+
+        for node in self.virtual_computation_graph.nodes.values():
+            if (
+                len(node.meta_data.used_external_kernels)
+                + len(node.meta_data.used_include_src)
+                > 0
+            ):
+                key = (
+                    frozenset(node.meta_data.used_external_kernels or []),
+                    frozenset(node.meta_data.used_include_src or []),
+                )
+                if key not in external_info:
+                    external_info[key] = f"external{len(external_info)}"
+                node.meta_data.external_kernel_file = external_info[key]
+
         # ------------------------- mlir-aie code generation -------------------------
         top_func, core_funcs, external_funcs = classify_aie_functions_experimental(
             self.allo_module, self.top_func_name
@@ -604,11 +622,13 @@ class AIE_MLIRModule:
             aie_pass_manager.PassManager.parse(pipeline).run(self.aie_module.operation)
 
         # ------------------------- build project -------------------------
-        self.post_codegen_build(self.injected_external_kernels, include_src)
+        self.post_codegen_build(self.injected_external_kernels, external_info)
         return self
 
     def post_codegen_build(
-        self, injected_kernels: dict[str, ExternalModuleBase], include_src: set[str]
+        self,
+        injected_kernels: dict[str, ExternalModuleBase],
+        external_info: dict[tuple[set[str], set[str]], str],
     ):
         with open(
             os.path.join(self.project_dir, "top.mlir"), "w", encoding="utf-8"
@@ -626,20 +646,30 @@ class AIE_MLIRModule:
                 ):
                     continue
                 shutil.copy(src_path, target_path)
-            kernel_code = codegen_external_kernels(
-                injected_kernels,
+            for (
+                injected_kernel_names,
                 include_src,
-                "aie2" if self.device == "npu1" else "aie2p",
-            )
-            with open(
-                os.path.join(self.project_dir, "external.cc"), "w", encoding="utf-8"
-            ) as f:
-                f.write(kernel_code)
-            cmd = f"cd {self.project_dir} && $PEANO_INSTALL_DIR/bin/clang++ -O2 -v -std=c++20 --target=aie2{"p" if self.device == "npu2" else ""}-none-unknown-elf -Wno-parentheses -Wno-attributes -Wno-macro-redefined -DNDEBUG -I $MLIR_AIE_INSTALL_DIR/include -I $MLIR_AIE_EXTERNAL_KERNEL_DIR/ -I. -c external.cc -o external.o"
-            with subprocess.Popen(cmd, shell=True) as process:
-                process.wait()
-            if process.returncode != 0:
-                raise RuntimeError("Failed to compile external kernels.")
+            ), file_name in external_info.items():
+                injected_kernel_list = [
+                    injected_kernels[kernel_name]
+                    for kernel_name in injected_kernel_names
+                ]
+                kernel_code = codegen_external_kernels(
+                    injected_kernel_list,
+                    include_src,
+                    "aie2" if self.device == "npu1" else "aie2p",
+                )
+                with open(
+                    os.path.join(self.project_dir, f"{file_name}.cc"),
+                    "w",
+                    encoding="utf-8",
+                ) as f:
+                    f.write(kernel_code)
+                cmd = f"cd {self.project_dir} && $PEANO_INSTALL_DIR/bin/clang++ -O2 -v -std=c++20 --target=aie2{"p" if self.device == "npu2" else ""}-none-unknown-elf -Wno-parentheses -Wno-attributes -Wno-macro-redefined -DNDEBUG -I $MLIR_AIE_INSTALL_DIR/include -I $MLIR_AIE_EXTERNAL_KERNEL_DIR/ -I. -c {file_name}.cc -o {file_name}.o"
+                with subprocess.Popen(cmd, shell=True) as process:
+                    process.wait()
+                if process.returncode != 0:
+                    raise RuntimeError("Failed to compile external kernels.")
         # build mlir-aie
         cmd = f"cd {self.project_dir} && aiecc.py --alloc-scheme=basic-sequential --aie-generate-xclbin --no-compile-host --xclbin-name=build/final.xclbin --no-xchesscc --no-xbridge --peano ${{PEANO_INSTALL_DIR}} --aie-generate-npu-insts --npu-insts-name=insts.txt top.mlir"
         with subprocess.Popen(cmd, shell=True) as process:
@@ -767,7 +797,7 @@ class AIE_MLIRModule:
         inputs, outputs = self.collect_io(core_func_groups)
 
         # - extract external kernels
-        use_external_kernels, injected_external_kernels, include_src = (
+        injected_external_kernels, used_external_kernels, used_include_src = (
             inject_external_kernels(
                 self.allo_module,
                 self.top_func_name,
@@ -790,6 +820,24 @@ class AIE_MLIRModule:
         top_func, core_func_groups, external_funcs = classify_aie_functions(
             self.allo_module, self.top_func_name
         )
+        external_info: dict[tuple[set[str], set[str]], str] = defaultdict(str)
+        external_kernel_files: dict[str, str] = {}
+        for func_list in core_func_groups.values():
+            for func in func_list:
+                func_name = func.attributes["sym_name"].value
+                if (
+                    len(used_external_kernels[func_name])
+                    + len(used_include_src[func_name])
+                    > 0
+                ):
+                    key = (
+                        frozenset(used_external_kernels[func_name] or []),
+                        frozenset(used_include_src[func_name] or []),
+                    )
+                    if key not in external_info:
+                        external_info[key] = f"external{len(external_info)}"
+                    external_kernel_files[func_name] = external_info[key]
+
         code_generator = CodeGenerator(
             device_type,
             self.global_tensors,
@@ -802,11 +850,11 @@ class AIE_MLIRModule:
             external_funcs,
             inputs,
             outputs,
-            use_external_kernels,
+            external_kernel_files,
             trace,
             trace_size,
         )
-        self.post_codegen_build(injected_external_kernels, include_src)
+        self.post_codegen_build(injected_external_kernels, external_info)
         return self
 
     def help(self):

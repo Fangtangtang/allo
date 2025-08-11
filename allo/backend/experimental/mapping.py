@@ -318,7 +318,8 @@ class NodeMetaData:
     def __init__(
         self,
         name: str = None,
-        use_external_kernel: bool = False,
+        used_external_kernels: set[str] = None,
+        used_include_src: set[str] = None,
         tag: str = None,
         repeat: int = 0,
         length: int = 1,
@@ -326,7 +327,10 @@ class NodeMetaData:
         self.id = NodeMetaData.node_cnt
         NodeMetaData.node_cnt += 1
         self.name = name if name is not None else f"function_{self.id}"
-        self.use_external_kernel = use_external_kernel
+        self.used_external_kernels = used_external_kernels
+        self.used_include_src = used_include_src
+        self.external_kernel_file = None
+
         self.op_tag: str = tag
         self.repeat: int = repeat  # repeat count after bundling
         self.length: int = length
@@ -352,13 +356,14 @@ class NodeBase:
         self,
         name: str = None,
         func: func_d.FuncOp = None,
-        use_external_kernel: bool = False,
+        used_external_kernels: set[str] = None,
+        used_include_src: set[str] = None,
         tag: str = None,
         repeat: int = 0,
         length: int = 1,
     ):
         self.meta_data: NodeMetaData = NodeMetaData(
-            name, use_external_kernel, tag, repeat, length
+            name, used_external_kernels, used_include_src, tag, repeat, length
         )
         self.func: func_d.FuncOp = func
         # arg_idx -> tiling using arg as interface
@@ -389,9 +394,20 @@ class NodeBase:
 
 
 class InitialNode(NodeBase):
-    def __init__(self, func: func_d.FuncOp, use_external_kernel: bool, tag: str):
+    def __init__(
+        self,
+        func: func_d.FuncOp,
+        used_external_kernels: set[str],
+        used_include_src: set[str],
+        tag: str,
+    ):
         super().__init__(
-            func.attributes["sym_name"].value, func, use_external_kernel, tag, 1
+            func.attributes["sym_name"].value,
+            func,
+            used_external_kernels,
+            used_include_src,
+            tag,
+            1,
         )
 
     def init_live_tile(self):
@@ -417,7 +433,10 @@ class CollocatedNode(NodeBase):
         super().__init__(name=name, func=func, tag=tag, repeat=repeat, length=length)
 
     def _init_for_bundle(self, sample_node: NodeBase):
-        self.meta_data.use_external_kernel = sample_node.meta_data.use_external_kernel
+        self.meta_data.used_external_kernels = (
+            sample_node.meta_data.used_external_kernels
+        )
+        self.meta_data.used_include_src = sample_node.meta_data.used_include_src
         self.meta_data.input_streams = sample_node.meta_data.input_streams
         self.meta_data.output_streams = sample_node.meta_data.output_streams
         self.global_interfaces = {key: [] for key in sample_node.global_interfaces}
@@ -431,7 +450,8 @@ class ComputationGraph:
         top_func_name: str,
         stream_map: dict[str, Stream],
         core_func_args: dict[str, dict[int, tuple[Argument, bool]]],
-        use_external_kernels: dict[str, bool],
+        used_external_kernels: dict[str, set[str]],
+        used_include_src: dict[str, set[str]],
     ):
         self.allo_module = allo_module
         self.insert_point: InsertionPoint = None
@@ -453,7 +473,9 @@ class ComputationGraph:
         for func in df_kernels:
             func_name = func.attributes["sym_name"].value
             tag = func.attributes["tag"].value
-            node = InitialNode(func, use_external_kernels[func_name], tag)
+            node = InitialNode(
+                func, used_external_kernels[func_name], used_include_src[func_name], tag
+            )
             _, indexes = parse_kernel_name(func_name)
             params = core_func_args[func_name]
             for idx, (argument, is_input) in params.items():
@@ -561,8 +583,15 @@ class ComputationGraph:
             repeat=1,
             length=node_a.meta_data.length + node_b.meta_data.length,
         )
-        chained_node.meta_data.use_external_kernel = (
-            node_a.meta_data.use_external_kernel or node_b.meta_data.use_external_kernel
+        chained_node.meta_data.used_external_kernels = (
+            node_a.meta_data.used_external_kernels
+        )
+        chained_node.meta_data.used_external_kernels.update(
+            node_b.meta_data.used_external_kernels
+        )
+        chained_node.meta_data.used_include_src = node_a.meta_data.used_include_src
+        chained_node.meta_data.used_include_src.update(
+            node_b.meta_data.used_include_src
         )
         buffered_stream: dict[Stream, BufferedStream] = {}
         node_a.meta_data.output_streams = [
