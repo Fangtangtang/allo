@@ -479,11 +479,11 @@ class ComputationGraph:
             _, indexes = parse_kernel_name(func_name)
             params = core_func_args[func_name]
             for idx, (argument, is_input) in params.items():
-                if argument.stream is not None:
-                    if is_input:
-                        node.meta_data.input_streams.append(argument.stream)
-                    else:
-                        node.meta_data.output_streams.append(argument.stream)
+                # if argument.stream is not None:
+                #     if is_input:
+                #         node.meta_data.input_streams.append(argument.stream)
+                #     else:
+                #         node.meta_data.output_streams.append(argument.stream)
                 if argument.dtensor is not None:
                     tensor_tile = DTensorTile(
                         argument.dtensor.global_id,
@@ -501,6 +501,8 @@ class ComputationGraph:
         # initiate dependencies
         for stream in self.edges.values():
             self.dependencies[stream.dst].add(stream.src)
+            self.nodes[stream.dst].meta_data.input_streams.append(stream)
+            self.nodes[stream.src].meta_data.output_streams.append(stream)
 
     # ------------------------------------------------------------
     # Transformation Primitives
@@ -536,14 +538,23 @@ class ComputationGraph:
                 bundled_node.global_interfaces[key].extend(value)
 
         # update stream
+        removed_edges = []
         for name, stream in self.edges.items():
-            if stream.src in node_name_list:
-                self.dependencies[stream.dst].remove(stream.src)
-                stream.src = bundled_node.meta_data.name
-                self.dependencies[stream.dst].add(bundled_node.meta_data.name)
-            if stream.dst in node_name_list:
-                stream.dst = bundled_node.meta_data.name
-                self.dependencies[bundled_node.meta_data.name].add(stream.src)
+            if (
+                stream.src in node_name_list
+                and stream.src != bundled_node.meta_data.name
+            ):
+                # self.dependencies[stream.dst].remove(stream.src)
+                # self.dependencies[stream.dst].add(bundled_node.meta_data.name)
+                removed_edges.append(name)
+            if (
+                stream.dst in node_name_list
+                and stream.dst != bundled_node.meta_data.name
+            ):
+                # self.dependencies[bundled_node.meta_data.name].add(stream.src)
+                removed_edges.append(name)
+        for removed in removed_edges:
+            self.edges.pop(removed)
         # update nodes and remove bundled function
         for name in node_name_list:
             removed = self.nodes.pop(name)

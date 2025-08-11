@@ -514,6 +514,7 @@ class CodeGenerator:
             - func_args (dict): Maps argument indices to (Argument, is_output) tuples.
         """
         func_string = self.preporocess_dumped_core_func(original_func, func_args)
+        print(func_string)
         original_module = aie_ir.Module.parse(func_string)
         parsed_function: aie_func_d.FuncOp = None
         for func in original_module.body.operations:
@@ -570,31 +571,60 @@ class CodeGenerator:
                     fifo = self.fifo_map[stream.name]
                     for use_ in argument.uses:
                         op = use_.owner
-                        with aie_ir.InsertionPoint(op.operation):
-                            if op.name == "memref.store" or (
-                                op.name == "memref.copy" and argument == op.operands[1]
-                            ):  # allo.stream_put
+                        if isinstance(op.parent.opview, aie_scf_d.ForOp):
+                            parent_body = op.parent.opview.body
+                        elif isinstance(op.parent.opview, aie_func_d.FuncOp):
+                            parent_body = op.parent.opview.entry_block
+                        # ##############################################
+                        if op.name == "memref.store" or (
+                            op.name == "memref.copy" and argument == op.operands[1]
+                        ):  # allo.stream_put
+                            with aie_ir.InsertionPoint.at_block_begin(parent_body):
                                 acquired = fifo.acquire(0, 1)
                                 op.operands[1] = acquired
-                                new_op = op.clone()  # no use, no need to replace
+                            with aie_ir.InsertionPoint.at_block_terminator(parent_body):
                                 fifo.release(0, 1)
-                                op.erase()
-                            elif (
-                                op.name == "memref.load"
-                            ):  # allo.stream_get, non-tensor
+                        elif op.name == "memref.load":  # allo.stream_get, non-tensor
+                            with aie_ir.InsertionPoint.at_block_begin(parent_body):
                                 acquired = fifo.acquire(1, 1)
-                                op.operands[0] = acquired
-                                new_op = op.clone()
-                                for old, new in zip(op.results, new_op.results):
-                                    old.replace_all_uses_with(new)
+                            op.results[0].replace_all_uses_with(acquired)
+                            with aie_ir.InsertionPoint.at_block_terminator(parent_body):
                                 fifo.release(1, 1)
-                                op.erase()
-                            elif op.name == "memref.copy":  # allo.stream_get, tensor
+                            op.erase()
+                        elif op.name == "memref.copy":  # allo.stream_get, tensor
+                            with aie_ir.InsertionPoint.at_block_begin(parent_body):
                                 acquired = fifo.acquire(1, 1)
-                                op.operands[0] = acquired
-                                new_op = op.clone()
+                            op.operands[1].replace_all_uses_with(acquired)
+                            with aie_ir.InsertionPoint.at_block_terminator(parent_body):
                                 fifo.release(1, 1)
-                                op.erase()
+                            op.erase()
+                        # ##############################################
+                        # with aie_ir.InsertionPoint(op.operation):
+                        #     if op.name == "memref.store" or (
+                        #         op.name == "memref.copy" and argument == op.operands[1]
+                        #     ):  # allo.stream_put
+                        #         acquired = fifo.acquire(0, 1)
+                        #         op.operands[1] = acquired
+                        #         new_op = op.clone()  # no use, no need to replace
+                        #         fifo.release(0, 1)
+                        #         op.erase()
+                        #     elif (
+                        #         op.name == "memref.load"
+                        #     ):  # allo.stream_get, non-tensor
+                        #         acquired = fifo.acquire(1, 1)
+                        #         op.operands[0] = acquired
+                        #         new_op = op.clone()
+                        #         for old, new in zip(op.results, new_op.results):
+                        #             old.replace_all_uses_with(new)
+                        #         fifo.release(1, 1)
+                        #         op.erase()
+                        #     elif op.name == "memref.copy":  # allo.stream_get, tensor
+                        #         acquired = fifo.acquire(1, 1)
+                        #         op.operands[0] = acquired
+                        #         new_op = op.clone()
+                        #         fifo.release(1, 1)
+                        #         op.erase()
+                        # ##############################################
             with aie_ir.InsertionPoint(loop.body):
                 for parsed_func_block in parsed_function.body:
                     for op in parsed_func_block.operations:
@@ -1908,7 +1938,7 @@ class CodeGenerator:
                         self.core_func_args[func_name],
                         arg_to_fifo[func_name],
                     )
-
+                print(self.aie_module)
                 # runtime sequence
                 global_tensor_types: dict[
                     tuple[str, bool], tuple[RuntimeArgs, list[int]]

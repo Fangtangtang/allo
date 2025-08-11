@@ -156,10 +156,18 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
     mod = df.build(
         top,
         target="aie-mlir",
-        # mapping_primitives=[
-        #     ("bundle", ["cal_attn_score_0", "cal_attn_score_1"]),
-        #     ("bundle", ["attn_0", "attn_1"])
-        # ],
+        mapping_primitives=[
+            (
+                "bundle",
+                [
+                    "cal_attn_score_0",
+                    "cal_attn_score_1",
+                    "cal_attn_score_2",
+                    "cal_attn_score_3",
+                ],
+            ),
+            ("bundle", ["attn_0", "attn_1", "attn_2", "attn_3"]),
+        ],
         profile=True,
         warmup=20,
         num_iters=100,  # ! executing only once may get undefined result.
@@ -172,7 +180,7 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
     mod(Q, K, V, O)
 
 
-N, D = 64, 64  # Sequence Length, Embedding Dim = 64
+N, D = 128, 64  # Sequence Length, Embedding Dim = 64
 chunk_size = 32
 # Q = np.random.randn(N, D).astype(np.float32)
 # K = np.random.randn(N, D).astype(np.float32)
