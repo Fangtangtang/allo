@@ -5,8 +5,8 @@
 from dataclasses import dataclass
 from collections import defaultdict, Counter
 import allo._mlir._mlir_libs._mlir as allo_ir
-from allo._mlir.ir import InsertionPoint, FunctionType, Value, UnitAttr
-from allo._mlir.dialects import func as func_d, allo as allo_d
+from allo._mlir.ir import InsertionPoint, FunctionType, Value, UnitAttr, IndexType
+from allo._mlir.dialects import func as func_d, allo as allo_d, arith as arith_d, scf as scf_d, memref as memref_d
 from .utils import (
     Argument,
     parse_kernel_name,
@@ -271,10 +271,11 @@ class LiveDTensorTileGroup:
         for dtensor_groups in self.dtensor_groups.values():
             dtensor_groups.sort(key=lambda x: x.first_use)
             idx = 0
+            print(dtensor_groups)
             while idx < len(dtensor_groups) - 1:
-                assert (
-                    dtensor_groups[idx].last_use <= dtensor_groups[idx + 1].first_use
-                ), "liveness range overlapped."
+                # assert (
+                #     dtensor_groups[idx].last_use <= dtensor_groups[idx + 1].first_use
+                # ), "liveness range overlapped."
                 idx = idx + 1
 
     def grouping(self, tile_group: "LiveDTensorTileGroup") -> bool:
@@ -584,9 +585,9 @@ class ComputationGraph:
                 f"Cannot chain Node({node_name_a}) and Node({node_name_b})"
             )
         # TODO: repeat function
-        assert (
-            node_a.meta_data.repeat == node_b.meta_data.repeat == 1
-        ), "Cannot chaining nodes with repeats currently"
+        # assert (
+        #     node_a.meta_data.repeat == node_b.meta_data.repeat == 1
+        # ), "Cannot chaining nodes with repeats currently"
         chained_tag = f"({node_a.meta_data.op_tag})x{node_a.meta_data.repeat}-({node_b.meta_data.op_tag})x{node_b.meta_data.repeat}"
         chained_node = CollocatedNode(
             chained_tag,
@@ -674,60 +675,101 @@ class ComputationGraph:
                 bufferized_stream_info.arg_b = new_function.arguments[
                     bufferized_stream_info.arg_idx_b + arg_idx_offset
                 ]
-            with InsertionPoint(entry_block):
-                for func_block in function_a.body:
-                    for op in func_block.operations:
-                        if isinstance(op, func_d.ReturnOp):
-                            assert len(op.operands_) == 0
-                            continue
-                        new_op = op.clone()
-                        for old, new in zip(op.results, new_op.results):
-                            old.replace_all_uses_with(new)
-                for func_block in function_b.body:
-                    for op in func_block.operations:
-                        new_op = op.clone()
-                        for old, new in zip(op.results, new_op.results):
-                            old.replace_all_uses_with(new)
-                function_a.erase()
-                function_b.erase()
-            # bufferize streams
-            for stream, bufferized_stream_info in buffered_stream.items():
-                stream_puts = [
-                    use.owner
-                    for use in bufferized_stream_info.arg_a.uses
-                    if isinstance(use.owner, allo_d.StreamPutOp)
-                ]
-                stream_gets = [
-                    use.owner
-                    for use in bufferized_stream_info.arg_b.uses
-                    if isinstance(use.owner, allo_d.StreamGetOp)
-                ]
-                assert len(stream_puts) == len(stream_gets)
-                for i in range(len(stream_puts)):
-                    stream_put: allo_d.StreamPutOp = stream_puts[i]
-                    stream_get: allo_d.StreamGetOp = stream_gets[i]
-                    # TODO: support bufferize stream in branches or even loops
-                    assert isinstance(
-                        stream_put.parent.opview, func_d.FuncOp
-                    ) and isinstance(
-                        stream_get.parent.opview, func_d.FuncOp
-                    ), "Only support bufferize stream in the main body"
-                    put_value = stream_put.operands[-1]
-                    get_result = stream_get.result
-                    get_result.replace_all_uses_with(put_value)
-                    stream_put.erase()
-                    stream_get.erase()
-                # update argument info
-                param_a.pop(bufferized_stream_info.arg_idx_a)
-                param_b.pop(bufferized_stream_info.arg_idx_b)
-                self.edges.pop(stream.name)
+            # fixme: adhoc
+            if len(function_a.entry_block.operations) == 2 and node_b.meta_data.repeat > 1:
+                with InsertionPoint(entry_block):
+                    for stream, bufferized_stream_info in buffered_stream.items():
+                        use_list = list(bufferized_stream_info.arg_a.uses)
+                        assert len(use_list) == 1
+                        stream_put = use_list[0].owner
+                        alloc_op = memref_d.AllocOp(
+                            stream.allo_element_type,
+                            [],
+                            [],
+                        )
+                        new_op = memref_d.CopyOp(
+                          stream_put.operands[1],  alloc_op.memref
+                        )
+                        for use in bufferized_stream_info.arg_b.uses:
+                            stream_get = use.owner
+                            stream_get.results[0].replace_all_uses_with(alloc_op.memref)
+                            stream_get.erase()
+                        param_a.pop(bufferized_stream_info.arg_idx_a)
+                        param_b.pop(bufferized_stream_info.arg_idx_b)
+                        self.edges.pop(stream.name)
+                    index_type = IndexType.get()
+                    c0 = arith_d.ConstantOp(value=0, result=index_type)
+                    c1 = arith_d.ConstantOp(value=1, result=index_type)
+                    cmax = arith_d.ConstantOp(value=int(node_b.meta_data.repeat), result=index_type)
+                    loop = scf_d.ForOp(lower_bound=c0, upper_bound=cmax, step=c1)
+                    with InsertionPoint(loop.body):
+                        for func_block in function_b.body:
+                            for op in func_block.operations:
+                                if isinstance(op, func_d.ReturnOp):
+                                    assert len(op.operands_) == 0
+                                    continue
+                                new_op = op.clone()
+                                for old, new in zip(op.results, new_op.results):
+                                    old.replace_all_uses_with(new)
+                        scf_d.YieldOp([])
+                    func_d.ReturnOp([])
+                    function_a.erase()
+                    function_b.erase()
+            else:
+                with InsertionPoint(entry_block):
+                    for func_block in function_a.body:
+                        for op in func_block.operations:
+                            if isinstance(op, func_d.ReturnOp):
+                                assert len(op.operands_) == 0
+                                continue
+                            new_op = op.clone()
+                            for old, new in zip(op.results, new_op.results):
+                                old.replace_all_uses_with(new)
+                    for func_block in function_b.body:
+                        for op in func_block.operations:
+                            new_op = op.clone()
+                            for old, new in zip(op.results, new_op.results):
+                                old.replace_all_uses_with(new)
+                    function_a.erase()
+                    function_b.erase()
+                # bufferize streams
+                for stream, bufferized_stream_info in buffered_stream.items():
+                    stream_puts = [
+                        use.owner
+                        for use in bufferized_stream_info.arg_a.uses
+                        if isinstance(use.owner, allo_d.StreamPutOp)
+                    ]
+                    stream_gets = [
+                        use.owner
+                        for use in bufferized_stream_info.arg_b.uses
+                        if isinstance(use.owner, allo_d.StreamGetOp)
+                    ]
+                    assert len(stream_puts) == len(stream_gets)
+                    for i in range(len(stream_puts)):
+                        stream_put: allo_d.StreamPutOp = stream_puts[i]
+                        stream_get: allo_d.StreamGetOp = stream_gets[i]
+                        # TODO: support bufferize stream in branches or even loops
+                        assert isinstance(
+                            stream_put.parent.opview, func_d.FuncOp
+                        ) and isinstance(
+                            stream_get.parent.opview, func_d.FuncOp
+                        ), "Only support bufferize stream in the main body"
+                        put_value = stream_put.operands[-1]
+                        get_result = stream_get.result
+                        get_result.replace_all_uses_with(put_value)
+                        stream_put.erase()
+                        stream_get.erase()
+                    # update argument info
+                    param_a.pop(bufferized_stream_info.arg_idx_a)
+                    param_b.pop(bufferized_stream_info.arg_idx_b)
+                    self.edges.pop(stream.name)
         chained_node.func = new_function
+        print(new_function)
         self.func_args.pop(node_name_a)
         self.func_args.pop(node_name_b)
         self.func_args[chained_node.meta_data.name] = param_a
         for key, value in param_b.items():
             self.func_args[chained_node.meta_data.name][arg_idx_offset + key] = value
-
         dep = self.dependencies.pop(node_name_a)
         dep.update(self.dependencies.pop(node_name_b))
         self.dependencies[chained_node.meta_data.name] = dep

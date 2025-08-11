@@ -275,7 +275,7 @@ class DTensor:
         )
 
     def __str__(self):
-        return f"DTensor(name={self.name}, shape={self.shape}, dtype={self.dtype}, layout={self.layout}, mapping={self.mapping}, rank={self.rank}, local_shape={self.get_local_shape()})"
+        return f"DTensor(name={self.name}, shape={self.shape}, dtype={self.dtype}, layout={self.layout}, mapping={self.mapping}, rank={self.rank}, local_shape={self.get_local_shape()}, is_input={self.is_input})"
 
     def __repr__(self):
         return f"{self.name}"

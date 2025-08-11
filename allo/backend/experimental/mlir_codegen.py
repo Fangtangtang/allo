@@ -25,7 +25,7 @@ from allo._mlir.dialects import (
     _memref_ops_gen as allo_memref_d,
 )
 
-from ..._mlir.ir import InsertionPoint, MemRefType, IntegerType
+from ..._mlir.ir import InsertionPoint, MemRefType, IntegerType, UnitAttr
 
 from ..utils import format_str
 from ...memory import (
@@ -1938,7 +1938,6 @@ class CodeGenerator:
                         self.core_func_args[func_name],
                         arg_to_fifo[func_name],
                     )
-                print(self.aie_module)
                 # runtime sequence
                 global_tensor_types: dict[
                     tuple[str, bool], tuple[RuntimeArgs, list[int]]
@@ -2155,40 +2154,40 @@ class CodeGenerator:
                                         global_dma.io_port.fifo.name
                                     ] = []
                                 # [NOTE]: Temporarily commented out to achieve better DMA task pipelining
-                                # else:
-                                #     prev_task: DMAMemcpyGroup = updated_fifo_dma_tasks[
-                                #         global_dma.io_port.fifo.name
-                                #     ][-1]
-                                # the same global tensor must be tiled in the same way
-                                # if (
-                                #     global_dma.dtensor.global_id
-                                #     == prev_task.dtensor_global_id
-                                #     and size[0] == 1
-                                # ):
-                                #     diff = [
-                                #         x - y
-                                #         for x, y in zip(
-                                #             offset,
-                                #             prev_task.dma_tasks[-1][0],
-                                #         )
-                                #     ]
-                                #     # fixme: can be relaxed
-                                #     if prev_task.diff is None and (
-                                #         all(x >= 0 for x in diff)
-                                #         and sum(1 for x in diff if x != 0) <= 1
-                                #     ):
-                                #         prev_task.dma_tasks.append(
-                                #             (offset, size, stride)
-                                #         )
-                                #         prev_task.diff = diff
-                                #         prev_task.max_task_id = tasks_idx_right
-                                #         continue
-                                #     if prev_task.diff == diff:
-                                #         prev_task.dma_tasks.append(
-                                #             (offset, size, stride)
-                                #         )
-                                #         prev_task.max_task_id = tasks_idx_right
-                                #         continue
+                                else:
+                                    prev_task: DMAMemcpyGroup = updated_fifo_dma_tasks[
+                                        global_dma.io_port.fifo.name
+                                    ][-1]
+                                    # the same global tensor must be tiled in the same way
+                                    if (
+                                        global_dma.dtensor.global_id
+                                        == prev_task.dtensor_global_id
+                                        and size[0] == 1
+                                    ):
+                                        diff = [
+                                            x - y
+                                            for x, y in zip(
+                                                offset,
+                                                prev_task.dma_tasks[-1][0],
+                                            )
+                                        ]
+                                        # fixme: can be relaxed
+                                        if prev_task.diff is None and (
+                                            all(x >= 0 for x in diff)
+                                            and sum(1 for x in diff if x != 0) <= 1
+                                        ):
+                                            prev_task.dma_tasks.append(
+                                                (offset, size, stride)
+                                            )
+                                            prev_task.diff = diff
+                                            prev_task.max_task_id = tasks_idx_right
+                                            continue
+                                        if prev_task.diff == diff:
+                                            prev_task.dma_tasks.append(
+                                                (offset, size, stride)
+                                            )
+                                            prev_task.max_task_id = tasks_idx_right
+                                            continue
 
                                 used_shim = (
                                     global_dma.io_port.fifo.src

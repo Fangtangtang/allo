@@ -560,7 +560,6 @@ class AIE_MLIRModule:
                     self.virtual_computation_graph.chain(arg_list[0], arg_list[1])
                 if primitive == "bundle":
                     self.virtual_computation_graph.bundle(arg_list)
-
         # record original allo mlir
         with open(
             os.path.join(self.project_dir, "original.mlir"), "w", encoding="utf-8"
@@ -577,7 +576,7 @@ class AIE_MLIRModule:
             mlir_pass_manager.parse(pipeline).run(self.allo_module.operation)
         # ------------------------- external kernels -------------------------
         external_info: dict[tuple[set[str], set[str]], str] = defaultdict(str)
-
+    
         for node in self.virtual_computation_graph.nodes.values():
             if (
                 len(node.meta_data.used_external_kernels)
