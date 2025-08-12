@@ -13,6 +13,7 @@ import time
 allo2c_type = {
     "float32": "float",
     "float64": "double",
+    "bfloat16": "bfloat16",
     "int1": "bool",
     "int8": "int8_t",
     "int16": "int16_t",

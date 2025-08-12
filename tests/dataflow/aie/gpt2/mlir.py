@@ -77,12 +77,7 @@ K = np.random.randn(N, D).astype(np.float32)
 V = np.random.randn(N, D).astype(np.float32)
 O = np.zeros(chunk_size * D).astype(np.float32)
 call_mlir(
-    "top.prj",
-    [float32, float32, float32, float32],
-    0,
-    [0, 1, 2],
-    [3],
-    Q, K, V, O
+    "top.prj", [float32, float32, float32, float32], 0, [0, 1, 2], [3], Q, K, V, O
 )
 
 # call_mlir("top.prj", [int16, int16, int16], 4096 * 4096, [0, 1], [2], A, B, C)

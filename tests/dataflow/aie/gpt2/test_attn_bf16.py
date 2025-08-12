@@ -1,12 +1,63 @@
 import os
 import allo
-from allo.ir.types import float32
+from allo.ir.types import bfloat16
 import allo.dataflow as df
 import numpy as np
+from ml_dtypes import bfloat16 as np_bfloat16
 from allo.memory import Layout
 from allo.backend.experimental.external_kernel import ExternalModule
 
-KERNEL_LIB_PATH = "/home/sf668/workspace/allo/tests/dataflow/aie/gpt2/"
+KERNEL_LIB_PATH = "/home/sf668/workspace/allo/tests/dataflow/aie/gpt2/kernels/"
+
+
+# ################################################################
+# Components
+# ################################################################
+def test_softmax(Q_slice=32, K_slice=32):
+    # [NOTE]: Invalid compute kernel core_0, port number exceeded.
+    softmax_kernel = ExternalModule(
+        top="online_softmax",
+        impl_path=KERNEL_LIB_PATH + "softmax.cc",
+        input_idx=[0, 1, 2],
+        output_idx=[3, 4, 5],
+    )
+
+    @df.region()
+    def top():
+        @df.kernel(mapping=[1])
+        def core(
+            attention_score: bfloat16[Q_slice, K_slice],
+            prev_max_logit: bfloat16[Q_slice],
+            prev_sum_exp: bfloat16[Q_slice],
+            attention_weight: bfloat16[Q_slice, K_slice],
+            new_max_logit: bfloat16[Q_slice],
+            new_sum_exp: bfloat16[Q_slice],
+        ):
+            softmax_kernel(
+                attention_score,
+                prev_max_logit,
+                prev_sum_exp,
+                attention_weight,
+                new_max_logit,
+                new_sum_exp,
+            )
+    
+    attention_score = np.random.randn(Q_slice, K_slice).astype(np_bfloat16)
+    prev_max_logit = np.random.randn(Q_slice).astype(np_bfloat16)
+    prev_sum_exp = np.random.randn(Q_slice).astype(np_bfloat16)
+    attention_weight = np.zeros(Q_slice* K_slice).astype(np.float32)
+    new_max_logit = np.zeros(Q_slice).astype(np.float32)
+    new_sum_exp = np.zeros(Q_slice).astype(np.float32)
+    mod = df.build(
+            top,
+            target="aie-mlir",
+            profile=False,
+    )
+    mod(attention_score, prev_max_logit, prev_sum_exp, attention_weight,new_max_logit, new_sum_exp)
+
+# ################################################################
+# Flash Attention
+# ################################################################
 
 
 def flash_attention(Q, K, V, chunk_size=32):
@@ -59,33 +110,33 @@ def gen_bundle(prefix, total):
 def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
     attn_score = ExternalModule(
         top="transpose_matmul_with_scale",
-        impl_path=KERNEL_LIB_PATH + "fa_components.cc",
+        impl_path=KERNEL_LIB_PATH + "attn_score.cc",
         input_idx=[0, 1],
         output_idx=[2],
     )
 
     init_softmax = ExternalModule(
         top="init_softmax",
-        impl_path=KERNEL_LIB_PATH + "fa_components.cc",
+        impl_path=KERNEL_LIB_PATH + "softmax.cc",
         input_idx=[],
         output_idx=[0, 1],
     )
 
     online_softmax = ExternalModule(
         top="online_softmax",
-        impl_path=KERNEL_LIB_PATH + "fa_components.cc",
+        impl_path=KERNEL_LIB_PATH + "softmax.cc",
         input_idx=[0, 1, 2],
         output_idx=[3, 4, 5],
     )
 
     scale_attn_output = ExternalModule(
         top="scale_attn_output",
-        impl_path=KERNEL_LIB_PATH + "fa_components.cc",
+        impl_path=KERNEL_LIB_PATH + "attn_out.cc",
         input_idx=[0, 1],
         output_idx=[2],
     )
 
-    Ty = float32
+    Ty = bfloat16
     Ly = Layout("S0R")
 
     @df.region()
@@ -171,21 +222,22 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
         num_iters=100,
     )
     chunk_size = 32
-    Q = np.random.randn(chunk_size, D).astype(np.float32)
-    K = np.random.randn(N, D).astype(np.float32)
-    V = np.random.randn(N, D).astype(np.float32)
-    O = np.zeros(chunk_size * D).astype(np.float32)
+    Q = np.random.randn(chunk_size, D).astype(np_bfloat16)
+    K = np.random.randn(N, D).astype(np_bfloat16)
+    V = np.random.randn(N, D).astype(np_bfloat16)
+    O = np.zeros(chunk_size * D).astype(np_bfloat16)
     mod(Q, K, V, O)
 
 
-N, D = 256, 64  # Sequence Length, Embedding Dim = 64
-chunk_size = 32
-# Q = np.random.randn(N, D).astype(np.float32)
-# K = np.random.randn(N, D).astype(np.float32)
-# V = np.random.randn(N, D).astype(np.float32)
+if __name__ == "__main__":
+    N, D = 256, 64  # Sequence Length, Embedding Dim = 64
+    chunk_size = 32
+    # Q = np.random.randn(N, D).astype(np.float32)
+    # K = np.random.randn(N, D).astype(np.float32)
+    # V = np.random.randn(N, D).astype(np.float32)
 
-# out = flash_attention(Q, K, V, chunk_size=32)
-# print(out.shape)
-# print(out)
+    # out = flash_attention(Q, K, V, chunk_size=32)
+    # print(out.shape)
+    # print(out)
 
-test_flash_attention(N, D, chunk_size)
+    test_flash_attention(N, D, chunk_size)
