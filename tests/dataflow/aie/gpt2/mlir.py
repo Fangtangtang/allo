@@ -69,7 +69,7 @@ def call_mlir(
 # fixme: update parameters as you need
 from allo.ir.types import int8, int16, int32, bfloat16, float32
 
-N = 128
+N = 256
 D = 64
 chunk_size = 32
 Q = np.random.randn(chunk_size, D).astype(np.float32)
@@ -78,7 +78,7 @@ V = np.random.randn(N, D).astype(np.float32)
 O = np.zeros(chunk_size * D).astype(np.float32)
 call_mlir(
     "top.prj",
-    [float32, float32, float32],
+    [float32, float32, float32, float32],
     0,
     [0, 1, 2],
     [3],

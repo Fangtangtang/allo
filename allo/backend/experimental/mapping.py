@@ -709,6 +709,7 @@ class ComputationGraph:
                                     assert len(op.operands_) == 0
                                     continue
                                 new_op = op.clone()
+                                new_op.attributes["constructed"] = UnitAttr.get()
                                 for old, new in zip(op.results, new_op.results):
                                     old.replace_all_uses_with(new)
                         scf_d.YieldOp([])

@@ -568,7 +568,7 @@ class CodeGenerator:
                     #         argument.replace_all_uses_with(acquired)
                         # ##############################################
                     # fixme: argument.uses is unordered??
-                    if len(list(argument.uses)) == 1:
+                    if len(list(argument.uses)) == 1 and "constructed" in list(argument.uses)[0].owner.attributes:
                         op = list(argument.uses)[0].owner
                         print("!", op)
                         if isinstance(op.parent.opview, aie_scf_d.ForOp):
