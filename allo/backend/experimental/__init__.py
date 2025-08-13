@@ -409,7 +409,6 @@ class AIE_MLIRModule:
                     excuse_operands.add(op.operands[0])
                     return
                 if op.name == "allo.transform_layout":
-                    print("!", op.operands[0].owner, "\n")
                     if op.operands[0] in excuse_operands:
                         op.result.replace_all_uses_with(op.operands[0])
                         excuse_operands.remove(op.operands[0])

@@ -277,7 +277,6 @@ class LiveDTensorTileGroup:
         for dtensor_groups in self.dtensor_groups.values():
             dtensor_groups.sort(key=lambda x: x.first_use)
             idx = 0
-            print(dtensor_groups)
             while idx < len(dtensor_groups) - 1:
                 # assert (
                 #     dtensor_groups[idx].last_use <= dtensor_groups[idx + 1].first_use
@@ -776,7 +775,6 @@ class ComputationGraph:
                     param_b.pop(bufferized_stream_info.arg_idx_b)
                     self.edges.pop(stream.name)
         chained_node.func = new_function
-        print(new_function)
         self.func_args.pop(node_name_a)
         self.func_args.pop(node_name_b)
         self.func_args[chained_node.meta_data.name] = param_a

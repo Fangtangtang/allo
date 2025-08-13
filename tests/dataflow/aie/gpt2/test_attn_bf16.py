@@ -8,6 +8,7 @@ from allo.memory import Layout
 from allo.backend.experimental.external_kernel import ExternalModule
 
 KERNEL_LIB_PATH = "/home/sf668/workspace/allo/tests/dataflow/aie/gpt2/kernels/"
+np.random.seed(42)
 
 
 # ################################################################
@@ -80,7 +81,7 @@ def flash_attention(Q, K, V, chunk_size=32):
     Returns:
         Output: (N, D)
     """
-    N, D = Q.shape
+    N, D = K.shape
     output = np.zeros((N, D), dtype=Q.dtype)
 
     for q_start in range(0, N, chunk_size):
@@ -104,8 +105,8 @@ def flash_attention(Q, K, V, chunk_size=32):
             V_chunk = V[k_start:k_end, :]  # (ck, D)
             sum_exp += exp_logits.sum(axis=1, keepdims=True)
             acc += exp_logits @ V_chunk
-
         output[q_start:q_end, :] = acc / sum_exp
+        break
 
     return output
 
@@ -173,7 +174,6 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
 
         @df.kernel(mapping=[1])
         def send_q(Q: Ty[chunk_size, HEAD_DIM]):
-            # with allo.meta_for(SEQ_LEN // chunk_size) as i:
             for i in range(SEQ_LEN // chunk_size):
                 q_pipe[i].put(Q)
 
@@ -190,7 +190,6 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
             sum_exp: Ty[chunk_size]
             init_softmax(max_logit, sum_exp)
             # softmax
-            # with allo.meta_for(SEQ_LEN // chunk_size) as i:
             for i in range(SEQ_LEN // chunk_size):
                 attn_weight: Ty[chunk_size, chunk_size]
                 online_softmax(
@@ -212,7 +211,6 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
         @df.kernel(mapping=[1])
         def acc(O: Ty[chunk_size, HEAD_DIM]):
             attn_output: Ty[chunk_size, HEAD_DIM] = 0
-            # with allo.meta_for(SEQ_LEN // chunk_size) as i:
             for i in range(SEQ_LEN // chunk_size):
                 attn_output[:, :] = allo.add(attn_output, o_pipe[i].get())
             scale_attn_output(attn_output, exp_sum_pipe.get(), O)
@@ -230,22 +228,20 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
         num_iters=100,
         device_type="npu1_2col",
     )
-    chunk_size = 32
     Q = np.random.randn(chunk_size, D).astype(np_bfloat16)
     K = np.random.randn(N, D).astype(np_bfloat16)
     V = np.random.randn(N, D).astype(np_bfloat16)
     O = np.zeros(chunk_size * D).astype(np_bfloat16)
     mod(Q, K, V, O)
+    out = flash_attention(Q, K, V, chunk_size=32)
+    # print(out[:chunk_size])
+    O = O.astype(np.float32).reshape(chunk_size, D)
+    # print(O)
 
 
 if __name__ == "__main__":
     N, D = 2048, 64  # Sequence Length, Embedding Dim = 64
     chunk_size = 32
-    # Q = np.random.randn(N, D).astype(np.float32)
-    # K = np.random.randn(N, D).astype(np.float32)
-    # V = np.random.randn(N, D).astype(np.float32)
-
-    # out = flash_attention(Q, K, V, chunk_size=32)
     # print(out.shape)
     # print(out)
 

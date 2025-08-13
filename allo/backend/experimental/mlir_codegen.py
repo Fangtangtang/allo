@@ -1925,7 +1925,6 @@ class CodeGenerator:
                         strides = stream.transform_layout[2]
                         for size, stride in zip(sizes, strides):
                             dimensions_to_stream.append((size, stride))
-                        print(dimensions_to_stream)
                         stream_src = aie_d.object_fifo(
                             stream_name + "_src",
                             self.tile_map[stream.src],

@@ -74,13 +74,13 @@ void online_softmax(bfloat16 attention_score[32][32],
     }
     new_max_logit[r] = row_max;
     // exp logit
-    bfloat16 exp_sum = 0.0f;
+    bfloat16 exp_sum = prev_sum_exp[r];
     for (int i = 0; i < 32; i++) {
       bfloat16 exp_result = get_exp(attention_score[r][i] - row_max);
       attention_weight[r][i] = exp_result;
       exp_sum += exp_result;
     }
-    new_sum_exp[r] = prev_sum_exp[r] + exp_sum;
+    new_sum_exp[r] = exp_sum;
   }
 }
 
