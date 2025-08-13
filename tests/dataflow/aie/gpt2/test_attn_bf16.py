@@ -223,7 +223,7 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
             gen_bundle("attn", SEQ_LEN // chunk_size),
             ("chain", ["send_q_0", "cal_attn_score_0"]),
         ],
-        profile=False,
+        profile=True,
         warmup=20,
         num_iters=100,
         device_type="npu1_2col",
@@ -239,6 +239,145 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
     # print(O)
 
 
+def test_temporal_attention(SEQ_LEN, HEAD_DIM, chunk_size):
+    Q = np.random.randn(chunk_size, D).astype(np_bfloat16)
+    K = np.random.randn(N, D).astype(np_bfloat16)
+    V = np.random.randn(N, D).astype(np_bfloat16)
+    O = np.zeros(chunk_size * D).astype(np_bfloat16)
+
+    Ty = bfloat16
+
+    # attn score
+    attn_score = ExternalModule(
+        top="transpose_matmul_with_scale",
+        impl_path=KERNEL_LIB_PATH + "attn_score.cc",
+        input_idx=[0, 1],
+        output_idx=[2],
+    )
+    ATTN_P0 = 1
+    ATTN_P1 = 8
+    ATTN_SCORE_M_TILE = ATTN_P0 * 32
+    ATTN_SCORE_N_TILE = ATTN_P1 * 32
+    ATTN_SCORE_LyA = Layout("S0R")
+    ATTN_SCORE_LyB = Layout("S1R")
+    ATTN_SCORE_LyC = Layout("S0S1")
+
+    @df.region()
+    def attn_score_kernel():
+        @df.kernel(mapping=[ATTN_P1, ATTN_P0])
+        def core(
+            A: Ty[ATTN_SCORE_M_TILE, HEAD_DIM] @ ATTN_SCORE_LyA,
+            B: Ty[ATTN_SCORE_N_TILE, HEAD_DIM] @ ATTN_SCORE_LyB,
+            C: Ty[ATTN_SCORE_M_TILE, ATTN_SCORE_N_TILE] @ ATTN_SCORE_LyC,
+        ):
+            attn_score(A, B, C)
+
+    attn_score_mod = df.build(
+        attn_score_kernel, target="aie-mlir", project="attn_score.prj"
+    )
+    attention_score = np.empty((chunk_size, SEQ_LEN), dtype=np_bfloat16)
+    for i in range(chunk_size // ATTN_SCORE_M_TILE):
+        for j in range(SEQ_LEN // ATTN_SCORE_N_TILE):
+            attn_score_mod(
+                Q[
+                    i * ATTN_SCORE_M_TILE : (i + 1) * ATTN_SCORE_M_TILE,
+                    :,
+                ],
+                K[
+                    j * ATTN_SCORE_N_TILE : (j + 1) * ATTN_SCORE_N_TILE,
+                    :,
+                ],
+                attention_score[
+                    i * ATTN_SCORE_M_TILE : (i + 1) * ATTN_SCORE_M_TILE,
+                    j * ATTN_SCORE_N_TILE : (j + 1) * ATTN_SCORE_N_TILE,
+                ],
+            )
+    # softmax
+    softmax = ExternalModule(
+        top="softmax_bfloat16",
+        impl_path=KERNEL_LIB_PATH + "full_softmax.cc",
+        input_idx=[0],
+        output_idx=[1],
+    )
+    SOFTMAX_P0 = 4
+    SOFTMAX_SEQ_TILE = 2 * SOFTMAX_P0
+    SOFTMAX_Ly = Layout("S0R")
+
+    @df.region()
+    def softmax_kernel():
+        @df.kernel(mapping=[SOFTMAX_P0])
+        def core(
+            input_x: Ty[SOFTMAX_SEQ_TILE, SEQ_LEN] @ SOFTMAX_Ly,
+            output_x: Ty[SOFTMAX_SEQ_TILE, SEQ_LEN] @ SOFTMAX_Ly,
+        ):
+            softmax(input_x, output_x)
+
+    softmax_mod = df.build(softmax_kernel, target="aie-mlir", project="softmax.prj")
+    attn_weight = np.zeros((chunk_size, SEQ_LEN)).astype(np_bfloat16)
+    for i in range(chunk_size // SOFTMAX_SEQ_TILE):
+        softmax_mod(
+            attention_score[i * SOFTMAX_SEQ_TILE : (i + 1) * SOFTMAX_SEQ_TILE, :],
+            attn_weight[i * SOFTMAX_SEQ_TILE : (i + 1) * SOFTMAX_SEQ_TILE, :],
+        )
+    # PV
+    attn_value = np.zeros((chunk_size, HEAD_DIM)).astype(np_bfloat16)
+    LINEAR_M, LINEAR_N, LINEAR_K = 32, 64, 64
+    linear_A_layout = Layout("S0R")
+    linear_B_layout = Layout("RS1")
+    linear_C_layout = Layout("S0S1")
+
+    @df.region()
+    def linear_matmul_kernel():
+        @df.kernel(mapping=[4, 2])
+        def gemm(
+            A: Ty[LINEAR_M, LINEAR_K] @ linear_A_layout,
+            B: Ty[LINEAR_K, LINEAR_N] @ linear_B_layout,
+            C: Ty[LINEAR_M, LINEAR_N] @ linear_C_layout,
+        ):
+            C[:, :] = allo.matmul(A, B)
+
+    @df.region()
+    def linear_accumulate_kernel():
+        @df.kernel(mapping=[2, 4])
+        def core(
+            A: Ty[LINEAR_M, LINEAR_N] @ linear_C_layout,
+            B: Ty[LINEAR_M, LINEAR_N] @ linear_C_layout,
+            C: Ty[LINEAR_M, LINEAR_N] @ linear_C_layout,
+        ):
+            C[:, :] = allo.add(A, B)
+
+    linear_matmul_mod = df.build(
+        linear_matmul_kernel, target="aie-mlir", project="linear_matmul.prj"
+    )
+    linear_accumulate_mod = df.build(
+        linear_accumulate_kernel, target="aie-mlir", project="linear_accumulate.prj"
+    )
+    for j in range(HEAD_DIM // LINEAR_N):
+        C_tmp = np.zeros((LINEAR_M, LINEAR_N)).astype(np_bfloat16)
+        for k in range(SEQ_LEN // LINEAR_K):
+            tile_A = attn_weight[
+                :,
+                k * LINEAR_K : (k + 1) * LINEAR_K,
+            ]
+            tile_B = V[
+                k * LINEAR_K : (k + 1) * LINEAR_K,
+                j * LINEAR_N : (j + 1) * LINEAR_N,
+            ]
+            linear_matmul_mod(tile_A, tile_B, C_tmp)
+            linear_accumulate_mod(
+                attn_value[
+                    :,
+                    j * LINEAR_N : (j + 1) * LINEAR_N,
+                ],
+                C_tmp,
+                attn_value[
+                    :,
+                    j * LINEAR_N : (j + 1) * LINEAR_N,
+                ],
+            )
+    return attn_value
+
+
 if __name__ == "__main__":
     N, D = 2048, 64  # Sequence Length, Embedding Dim = 64
     chunk_size = 32
@@ -246,3 +385,4 @@ if __name__ == "__main__":
     # print(out)
 
     test_flash_attention(N, D, chunk_size)
+    # test_temporal_attention(N, D, chunk_size)
