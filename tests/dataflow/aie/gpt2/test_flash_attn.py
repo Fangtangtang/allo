@@ -166,7 +166,7 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
             gen_bundle("attn", SEQ_LEN // chunk_size),
             ("chain", ["send_q_0", "cal_attn_score_0"]),
         ],
-        profile=False,
+        profile=True,
         warmup=20,
         num_iters=100,
     )
@@ -178,7 +178,7 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
     mod(Q, K, V, O)
 
 
-N, D = 256, 64  # Sequence Length, Embedding Dim = 64
+N, D = 128, 64  # Sequence Length, Embedding Dim = 64
 chunk_size = 32
 # Q = np.random.randn(N, D).astype(np.float32)
 # K = np.random.randn(N, D).astype(np.float32)

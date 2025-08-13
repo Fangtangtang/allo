@@ -230,7 +230,7 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
 
 
 if __name__ == "__main__":
-    N, D = 256, 64  # Sequence Length, Embedding Dim = 64
+    N, D = 64, 64  # Sequence Length, Embedding Dim = 64
     chunk_size = 32
     # Q = np.random.randn(N, D).astype(np.float32)
     # K = np.random.randn(N, D).astype(np.float32)

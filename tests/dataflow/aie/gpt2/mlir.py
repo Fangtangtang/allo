@@ -69,15 +69,15 @@ def call_mlir(
 # fixme: update parameters as you need
 from allo.ir.types import int8, int16, int32, bfloat16, float32
 
-N = 256
+N = 64
 D = 64
 chunk_size = 32
-Q = np.random.randn(chunk_size, D).astype(np.float32)
-K = np.random.randn(N, D).astype(np.float32)
-V = np.random.randn(N, D).astype(np.float32)
-O = np.zeros(chunk_size * D).astype(np.float32)
+Q = np.random.randn(chunk_size, D).astype(np_bfloat16)
+K = np.random.randn(N, D).astype(np_bfloat16)
+V = np.random.randn(N, D).astype(np_bfloat16)
+O = np.zeros(chunk_size * D).astype(np_bfloat16)
 call_mlir(
-    "top.prj", [float32, float32, float32, float32], 0, [0, 1, 2], [3], Q, K, V, O
+    "top.prj", [bfloat16, bfloat16, bfloat16, bfloat16], 0, [0, 1, 2], [3], Q, K, V, O
 )
 
 # call_mlir("top.prj", [int16, int16, int16], 4096 * 4096, [0, 1], [2], A, B, C)
