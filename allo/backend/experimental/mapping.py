@@ -6,7 +6,13 @@ from dataclasses import dataclass
 from collections import defaultdict, Counter
 import allo._mlir._mlir_libs._mlir as allo_ir
 from allo._mlir.ir import InsertionPoint, FunctionType, Value, UnitAttr, IndexType
-from allo._mlir.dialects import func as func_d, allo as allo_d, arith as arith_d, scf as scf_d, memref as memref_d
+from allo._mlir.dialects import (
+    func as func_d,
+    allo as allo_d,
+    arith as arith_d,
+    scf as scf_d,
+    memref as memref_d,
+)
 from .utils import (
     Argument,
     parse_kernel_name,
@@ -676,7 +682,10 @@ class ComputationGraph:
                     bufferized_stream_info.arg_idx_b + arg_idx_offset
                 ]
             # fixme: adhoc
-            if len(function_a.entry_block.operations) == 2 and node_b.meta_data.repeat > 1:
+            if (
+                len(function_a.entry_block.operations) == 2
+                and node_b.meta_data.repeat > 1
+            ):
                 with InsertionPoint(entry_block):
                     for stream, bufferized_stream_info in buffered_stream.items():
                         use_list = list(bufferized_stream_info.arg_a.uses)
@@ -688,7 +697,7 @@ class ComputationGraph:
                             [],
                         )
                         new_op = memref_d.CopyOp(
-                          stream_put.operands[1],  alloc_op.memref
+                            stream_put.operands[1], alloc_op.memref
                         )
                         for use in bufferized_stream_info.arg_b.uses:
                             stream_get = use.owner
@@ -700,7 +709,9 @@ class ComputationGraph:
                     index_type = IndexType.get()
                     c0 = arith_d.ConstantOp(value=0, result=index_type)
                     c1 = arith_d.ConstantOp(value=1, result=index_type)
-                    cmax = arith_d.ConstantOp(value=int(node_b.meta_data.repeat), result=index_type)
+                    cmax = arith_d.ConstantOp(
+                        value=int(node_b.meta_data.repeat), result=index_type
+                    )
                     loop = scf_d.ForOp(lower_bound=c0, upper_bound=cmax, step=c1)
                     with InsertionPoint(loop.body):
                         for func_block in function_b.body:

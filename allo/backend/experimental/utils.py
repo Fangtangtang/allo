@@ -109,6 +109,7 @@ class Stream:
 
         self.src: str = None  # source tile of the stream
         self.dst: str = None  # destination tile of the stream
+        self.transform_layout: tuple[list[int], list[int], list[int]] = None
 
     def set_element_type(self, type_str: str, context: Context):
         """

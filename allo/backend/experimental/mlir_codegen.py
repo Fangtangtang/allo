@@ -514,7 +514,6 @@ class CodeGenerator:
             - func_args (dict): Maps argument indices to (Argument, is_output) tuples.
         """
         func_string = self.preporocess_dumped_core_func(original_func, func_args)
-        print(func_string)
         original_module = aie_ir.Module.parse(func_string)
         parsed_function: aie_func_d.FuncOp = None
         for func in original_module.body.operations:
@@ -566,11 +565,13 @@ class CodeGenerator:
                     #         )
                     #         # incorrect
                     #         argument.replace_all_uses_with(acquired)
-                        # ##############################################
+                    # ##############################################
                     # fixme: argument.uses is unordered??
-                    if len(list(argument.uses)) == 1 and "constructed" in list(argument.uses)[0].owner.attributes:
+                    if (
+                        len(list(argument.uses)) == 1
+                        and "constructed" in list(argument.uses)[0].owner.attributes
+                    ):
                         op = list(argument.uses)[0].owner
-                        print("!", op)
                         if isinstance(op.parent.opview, aie_scf_d.ForOp):
                             parent_body = op.parent.opview.body
                         elif isinstance(op.parent.opview, aie_func_d.FuncOp):
@@ -611,7 +612,6 @@ class CodeGenerator:
                     fifo = self.fifo_map[stream.name]
                     for use_ in argument.uses:
                         op = use_.owner
-                        print("!", op, use_)
                         if isinstance(op.parent.opview, aie_scf_d.ForOp):
                             parent_body = op.parent.opview.body
                         elif isinstance(op.parent.opview, aie_func_d.FuncOp):
@@ -620,12 +620,16 @@ class CodeGenerator:
                         if op.name == "memref.store" or (
                             op.name == "memref.copy" and argument == op.operands[1]
                         ):  # allo.stream_put
-                            with aie_ir.InsertionPoint.at_block_begin(parent_body):
+                            if isinstance(fifo, tuple):
+                                fifo = fifo[0]
+                            with aie_ir.InsertionPoint(op):
                                 acquired = fifo.acquire(0, 1)
                                 op.operands[1] = acquired
                             with aie_ir.InsertionPoint.at_block_terminator(parent_body):
                                 fifo.release(0, 1)
                         elif op.name == "memref.load":  # allo.stream_get, non-tensor
+                            if isinstance(fifo, tuple):
+                                fifo = fifo[1]
                             with aie_ir.InsertionPoint.at_block_begin(parent_body):
                                 acquired = fifo.acquire(1, 1)
                             op.results[0].replace_all_uses_with(acquired)
@@ -633,7 +637,9 @@ class CodeGenerator:
                                 fifo.release(1, 1)
                             op.erase()
                         elif op.name == "memref.copy":  # allo.stream_get, tensor
-                            with aie_ir.InsertionPoint.at_block_begin(parent_body):
+                            if isinstance(fifo, tuple):
+                                fifo = fifo[1]
+                            with aie_ir.InsertionPoint(op):
                                 acquired = fifo.acquire(1, 1)
                             op.operands[1].replace_all_uses_with(acquired)
                             with aie_ir.InsertionPoint.at_block_terminator(parent_body):
@@ -1913,16 +1919,47 @@ class CodeGenerator:
                 # define fifos
                 # - stream fifos: compute <-> compute
                 for stream_name, stream in self.streams.items():
-                    self.fifo_map[stream_name] = aie_d.object_fifo(
-                        stream_name,
-                        self.tile_map[stream.src],
-                        self.tile_map[stream.dst],
-                        depth=stream.type.depth,
-                        datatype=aie_ir.MemRefType.get(
-                            stream.type.shape,
-                            get_element_type(str(stream.type.dtype)),
-                        ),
-                    )
+                    dimensions_to_stream = []
+                    if stream.transform_layout is not None:
+                        sizes = stream.transform_layout[1]
+                        strides = stream.transform_layout[2]
+                        for size, stride in zip(sizes, strides):
+                            dimensions_to_stream.append((size, stride))
+                        print(dimensions_to_stream)
+                        stream_src = aie_d.object_fifo(
+                            stream_name + "_src",
+                            self.tile_map[stream.src],
+                            self.tile_map[self.used_mem_tiles[0].name],
+                            depth=stream.type.depth,
+                            datatype=aie_ir.MemRefType.get(
+                                stream.type.shape,
+                                get_element_type(str(stream.type.dtype)),
+                            ),
+                        )
+                        stream_dst = aie_d.object_fifo(
+                            stream_name + "_dst",
+                            self.tile_map[self.used_mem_tiles[0].name],
+                            self.tile_map[stream.dst],
+                            depth=stream.type.depth,
+                            datatype=aie_ir.MemRefType.get(
+                                stream.type.shape,
+                                get_element_type(str(stream.type.dtype)),
+                            ),
+                            dimensionsToStream=dimensions_to_stream,
+                        )
+                        self.fifo_map[stream_name] = (stream_src, stream_dst)
+                        aie_d.object_fifo_link([stream_src], [stream_dst], [], [])
+                    else:
+                        self.fifo_map[stream_name] = aie_d.object_fifo(
+                            stream_name,
+                            self.tile_map[stream.src],
+                            self.tile_map[stream.dst],
+                            depth=stream.type.depth,
+                            datatype=aie_ir.MemRefType.get(
+                                stream.type.shape,
+                                get_element_type(str(stream.type.dtype)),
+                            ),
+                        )
                 # - io fifos: shim <-> mem <-> compute
                 for dma_fifo in self.fifo_manager.fifos:
                     self.fifo_map[dma_fifo.name] = aie_d.object_fifo(

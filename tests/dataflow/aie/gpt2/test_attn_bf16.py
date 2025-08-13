@@ -41,19 +41,27 @@ def test_softmax(Q_slice=32, K_slice=32):
                 new_max_logit,
                 new_sum_exp,
             )
-    
+
     attention_score = np.random.randn(Q_slice, K_slice).astype(np_bfloat16)
     prev_max_logit = np.random.randn(Q_slice).astype(np_bfloat16)
     prev_sum_exp = np.random.randn(Q_slice).astype(np_bfloat16)
-    attention_weight = np.zeros(Q_slice* K_slice).astype(np.float32)
+    attention_weight = np.zeros(Q_slice * K_slice).astype(np.float32)
     new_max_logit = np.zeros(Q_slice).astype(np.float32)
     new_sum_exp = np.zeros(Q_slice).astype(np.float32)
     mod = df.build(
-            top,
-            target="aie-mlir",
-            profile=False,
+        top,
+        target="aie-mlir",
+        profile=False,
     )
-    mod(attention_score, prev_max_logit, prev_sum_exp, attention_weight,new_max_logit, new_sum_exp)
+    mod(
+        attention_score,
+        prev_max_logit,
+        prev_sum_exp,
+        attention_weight,
+        new_max_logit,
+        new_sum_exp,
+    )
+
 
 # ################################################################
 # Flash Attention
@@ -220,6 +228,7 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
         profile=False,
         warmup=20,
         num_iters=100,
+        device_type="npu1_2col",
     )
     chunk_size = 32
     Q = np.random.randn(chunk_size, D).astype(np_bfloat16)
@@ -230,7 +239,7 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
 
 
 if __name__ == "__main__":
-    N, D = 64, 64  # Sequence Length, Embedding Dim = 64
+    N, D = 2048, 64  # Sequence Length, Embedding Dim = 64
     chunk_size = 32
     # Q = np.random.randn(N, D).astype(np.float32)
     # K = np.random.randn(N, D).astype(np.float32)

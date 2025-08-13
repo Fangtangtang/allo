@@ -409,6 +409,7 @@ class AIE_MLIRModule:
                     excuse_operands.add(op.operands[0])
                     return
                 if op.name == "allo.transform_layout":
+                    print("!", op.operands[0].owner, "\n")
                     if op.operands[0] in excuse_operands:
                         op.result.replace_all_uses_with(op.operands[0])
                         excuse_operands.remove(op.operands[0])
@@ -434,6 +435,40 @@ class AIE_MLIRModule:
                                 op.result.replace_all_uses_with(arg)
                                 dead_ops.append(op)
                                 return
+                    if op.operands[0].owner.name == "allo.stream_get":
+                        arg = BlockArgument(op.operands[0].owner.operands[0])
+                        arg_info = self.func_args[func.attributes["sym_name"].value][
+                            arg.arg_number
+                        ]
+                        arg_info.stream.transform_layout = (
+                            list(op.attributes["offsets"]),
+                            list(op.attributes["sizes"]),
+                            list(op.attributes["strides"]),
+                        )
+                        op.result.replace_all_uses_with(op.operands[0].owner.results[0])
+                        dead_ops.append(op)
+                        return
+
+                    if (
+                        len(list(op.results[0].uses)) == 1
+                        and list(op.results[0].uses)[0].owner.name == "memref.copy"
+                    ):
+                        cp_op = list(op.results[0].uses)[0].owner
+                        last_use = list(cp_op.operands[1].uses)[-1].owner
+                        if last_use.name == "allo.stream_put":
+                            arg = BlockArgument(last_use.operands[0])
+                            arg_info = self.func_args[
+                                func.attributes["sym_name"].value
+                            ][arg.arg_number]
+                            arg_info.stream.transform_layout = (
+                                list(op.attributes["offsets"]),
+                                list(op.attributes["sizes"]),
+                                list(op.attributes["strides"]),
+                            )
+                            dead_ops.append(cp_op)
+                            dead_ops.append(op)
+                            return
+
                     if "layout_hint" in op.attributes:
                         layout_hint = op.attributes["layout_hint"].value
                         parts = re.findall(r"[^_]+", layout_hint)
@@ -481,7 +516,7 @@ class AIE_MLIRModule:
             if isinstance(func, allo_func_d.FuncOp) and "df.kernel" in func.attributes:
                 simplify_matmul_accumulate(func)
                 allo_d.copy_on_write_on_function(func)
-                # vectorize_matmul(func)
+                vectorize_matmul(func)
                 optimize_layout_transformation(func)
 
         pipeline = "builtin.module(canonicalize)"
@@ -576,7 +611,7 @@ class AIE_MLIRModule:
             mlir_pass_manager.parse(pipeline).run(self.allo_module.operation)
         # ------------------------- external kernels -------------------------
         external_info: dict[tuple[set[str], set[str]], str] = defaultdict(str)
-    
+
         for node in self.virtual_computation_graph.nodes.values():
             if (
                 len(node.meta_data.used_external_kernels)
