@@ -181,9 +181,14 @@ def aie_move_stream_to_interface(s, with_stream_type: bool = False):
             else:
                 raise ValueError("Stream is not used correctly.")
             if "hint" in op.attributes:
-                shape_tuple = tuple(
+                hint = op.attributes["hint"].value
+                parts = hint.split("-")
+                length = int(parts[1])
+                parts = parts[0].split("_")
+                prefix = "_".join(map(str, parts[:len(parts)-length]))
+                shape_tuple = list(
                     map(int, construct_op.attributes["total"].value.split("x"))
-                )
+                )[-length:]
                 parts = stream_name.split("_")
                 i = len(parts)
                 while i > 0 and parts[i - 1].isdigit():
@@ -191,7 +196,7 @@ def aie_move_stream_to_interface(s, with_stream_type: bool = False):
                 name_prefix = "_".join(parts[:i])
                 for dim in np.ndindex(*shape_tuple):
                     stream_info[func_name].append(
-                        (f"{name_prefix}_{"_".join(map(str, dim))}", direction)
+                        (f"{name_prefix}_{prefix}_{"_".join(map(str, dim))}", direction)
                     )
             else:
                 stream_info[func_name].append((stream_name, direction))
@@ -458,6 +463,7 @@ def build(
         stream_info, stream_types_dict = aie_move_stream_to_interface(
             s, with_stream_type=True
         )
+        print(stream_info)
         parameter_list, s = _build_top(
             s, stream_info, target="aie", get_parameter_list=True
         )

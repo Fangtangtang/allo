@@ -1892,14 +1892,28 @@ class ASTTransformer(ASTBuilder):
                     hint = None
                     if isinstance(node.func.value, ast.Subscript):
                         # pylint: disable=redefined-builtin
-                        try:
-                            slice = eval(
-                                ast.unparse(node.func.value.slice), ctx.global_vars
-                            )
-                        except NameError as e:
-                            print(ast.dump(node.func.value.slice))
-                            hint = "iter_all"
-                            slice = 0
+                        iter_all_slice = []
+                        if isinstance(node.func.value.slice, ast.Tuple):
+                            slice = []
+                            try:
+                                for elt in node.func.value.slice.elts:
+                                    value = eval(ast.unparse(elt), ctx.global_vars)
+                                    slice.append(value)
+                            except NameError as e:
+                                print(ast.dump(node.func.value.slice))
+                                iter_all_slice.append(0)
+                                slice.append(0)
+                        else:
+                            try:
+                                slice = eval(
+                                    ast.unparse(node.func.value.slice), ctx.global_vars
+                                )
+                            except NameError as e:
+                                print(ast.dump(node.func.value.slice))
+                                iter_all_slice.append(0)
+                                slice.append(0)
+                        if len(iter_all_slice) > 0:
+                            hint = "_".join(map(str, slice)) + "-" + str(len(iter_all_slice))
                         if isinstance(slice, int):
                             slice = tuple([slice])
                         else:
@@ -1943,14 +1957,29 @@ class ASTTransformer(ASTBuilder):
                     )
                     hint = None
                     if isinstance(node.func.value, ast.Subscript):
-                        try:
-                            slice = eval(
-                                ast.unparse(node.func.value.slice), ctx.global_vars
-                            )
-                        except NameError as e:
-                            print(ast.dump(node.func.value.slice))
-                            hint = "iter_all"
-                            slice = 0
+                        # pylint: disable=redefined-builtin
+                        iter_all_slice = []
+                        if isinstance(node.func.value.slice, ast.Tuple):
+                            slice = []
+                            try:
+                                for elt in node.func.value.slice.elts:
+                                    value = eval(ast.unparse(elt), ctx.global_vars)
+                                    slice.append(value)
+                            except NameError as e:
+                                print(ast.dump(node.func.value.slice))
+                                iter_all_slice.append(0)
+                                slice.append(0)
+                        else:
+                            try:
+                                slice = eval(
+                                    ast.unparse(node.func.value.slice), ctx.global_vars
+                                )
+                            except NameError as e:
+                                print(ast.dump(node.func.value.slice))
+                                iter_all_slice.append(0)
+                                slice.append(0)
+                        if len(iter_all_slice) > 0:
+                            hint = "_".join(map(str, slice)) + "-" + str(len(iter_all_slice))
                         if isinstance(slice, int):
                             slice = tuple([slice])
                         else:
