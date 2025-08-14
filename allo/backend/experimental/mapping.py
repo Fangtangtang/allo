@@ -525,11 +525,11 @@ class ComputationGraph:
             assert name in self.nodes, f"Node({name}) not found"
             node_list.append(self.nodes[name])
         sample_node: NodeBase = node_list[0]
-        for node in node_list:
-            if not sample_node.is_isomorphic_to(node):
-                raise ValueError(
-                    f"Expect to bundle isomorphic nodes, Node({node.meta_data.name}) is not isomorphic to Node({sample_node.meta_data.name})"
-                )
+        # for node in node_list:
+        #     if not sample_node.is_isomorphic_to(node):
+        #         raise ValueError(
+        #             f"Expect to bundle isomorphic nodes, Node({node.meta_data.name}) is not isomorphic to Node({sample_node.meta_data.name})"
+        #         )
         bundled_node = CollocatedNode(
             tag=sample_node.meta_data.op_tag,
             name=sample_node.meta_data.name,

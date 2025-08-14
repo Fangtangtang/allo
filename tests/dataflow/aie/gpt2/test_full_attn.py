@@ -63,7 +63,7 @@ def gen_bundle(prefix, idx, total):
 
 
 def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
-    iteration = 4
+    iteration = SEQ_LEN // chunk_size
     Q_LEN = chunk_size * iteration
     attn_score = ExternalModule(
         top="transpose_matmul_with_scale",
@@ -179,12 +179,47 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
         mapping_primitives_.append(
             ("chain", [f"send_q_{idx}_0", f"cal_attn_score_{idx}_0"])
         )
+    if iteration // 4 > 1:
+        for i_ in range(4):
+            mapping_primitives_.append(
+                (
+                    "bundle",
+                    [
+                        f"send_q_{idx*4+i_}_0-cal_attn_score_{idx*4+i_}_0"
+                        for idx in range(iteration // 4)
+                    ],
+                )
+            )
+            mapping_primitives_.append(
+                (
+                    "bundle",
+                    [f"cal_softmax_{idx*4+i_}_0" for idx in range(iteration // 4)],
+                )
+            )
+            mapping_primitives_.append(
+                ("bundle", [f"attn_{idx*4+i_}_0" for idx in range(iteration // 4)])
+            )
+            mapping_primitives_.append(
+                ("bundle", [f"acc_{idx*4+i_}_0" for idx in range(iteration // 4)])
+            )
 
     # print(mapping_primitives)
     mod = df.build(
         top,
         target="aie-mlir",
-        mapping_primitives= mapping_primitives_,
+        mapping_primitives=mapping_primitives_,
+        # mapping_primitives=[
+        #     gen_bundle("cal_attn_score",0, SEQ_LEN // chunk_size),
+        #     gen_bundle("attn",0, SEQ_LEN // chunk_size),
+        #     ("chain", ["send_q_0_0", "cal_attn_score_0_0"]),
+        #      gen_bundle("cal_attn_score",1, SEQ_LEN // chunk_size),
+        #     gen_bundle("attn",1, SEQ_LEN // chunk_size),
+        #     ("chain", ["send_q_1_0", "cal_attn_score_1_0"]),
+        #     # ("bundle", ["send_q_0_0-cal_attn_score_0_0", "send_q_1_0-cal_attn_score_1_0"]),
+        #     # ("bundle", ["cal_softmax_0_0", "cal_softmax_1_0"]),
+        #     # ("bundle", ["attn_0_0", "attn_1_0"]),
+        #     # ("bundle", ["acc_0_0", "acc_1_0"]),
+        # ],
         profile=False,
         warmup=20,
         num_iters=100,
@@ -202,7 +237,7 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
 
 
 if __name__ == "__main__":
-    N, D = 2048, 64  # Sequence Length, Embedding Dim = 64
+    N, D = 256, 64  # Sequence Length, Embedding Dim = 64
     chunk_size = 32
     # print(out.shape)
     # print(out)
