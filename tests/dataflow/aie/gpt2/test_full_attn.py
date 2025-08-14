@@ -52,7 +52,6 @@ def flash_attention(Q, K, V, chunk_size=32):
             sum_exp += exp_logits.sum(axis=1, keepdims=True)
             acc += exp_logits @ V_chunk
         output[q_start:q_end, :] = acc / sum_exp
-        break
 
     return output
 
@@ -64,7 +63,6 @@ def gen_bundle(prefix, idx, total):
 
 def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
     iteration = SEQ_LEN // chunk_size
-    Q_LEN = chunk_size * iteration
     attn_score = ExternalModule(
         top="transpose_matmul_with_scale",
         impl_path=KERNEL_LIB_PATH + "attn_score.cc",
@@ -101,43 +99,43 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
     def top():
         q_pipe = df.array(
             df.pipe(dtype=Ty, shape=(chunk_size, HEAD_DIM), depth=2),
-            shape=(Q_LEN // chunk_size, SEQ_LEN // chunk_size),
+            shape=(SEQ_LEN // chunk_size, SEQ_LEN // chunk_size),
         )
 
         score_pipe = df.array(
             df.pipe(dtype=Ty, shape=(chunk_size, chunk_size), depth=2),
-            shape=(Q_LEN // chunk_size, SEQ_LEN // chunk_size),
+            shape=(SEQ_LEN // chunk_size, SEQ_LEN // chunk_size),
         )
 
         weight_pipe = df.array(
             df.pipe(dtype=Ty, shape=(chunk_size, chunk_size), depth=2),
-            shape=(Q_LEN // chunk_size, SEQ_LEN // chunk_size),
+            shape=(SEQ_LEN // chunk_size, SEQ_LEN // chunk_size),
         )
 
         o_pipe = df.array(
             df.pipe(dtype=Ty, shape=(chunk_size, HEAD_DIM), depth=2),
-            shape=(Q_LEN // chunk_size, SEQ_LEN // chunk_size),
+            shape=(SEQ_LEN // chunk_size, SEQ_LEN // chunk_size),
         )
 
         exp_sum_pipe = df.array(
             df.pipe(dtype=Ty, shape=(chunk_size,), depth=2),
-            shape=(Q_LEN // chunk_size,),
+            shape=(SEQ_LEN // chunk_size,),
         )
 
-        @df.kernel(mapping=[Q_LEN // chunk_size, 1])
-        def send_q(Q: Ty[Q_LEN, HEAD_DIM] @ Ly_outer):
+        @df.kernel(mapping=[SEQ_LEN // chunk_size, 1])
+        def send_q(Q: Ty[SEQ_LEN, HEAD_DIM] @ Ly_outer):
             po, _ = df.get_pid()
             for i in range(SEQ_LEN // chunk_size):
                 q_pipe[po, i].put(Q)
 
-        @df.kernel(mapping=[Q_LEN // chunk_size, SEQ_LEN // chunk_size])
+        @df.kernel(mapping=[SEQ_LEN // chunk_size, SEQ_LEN // chunk_size])
         def cal_attn_score(K: Ty[SEQ_LEN, HEAD_DIM] @ Ly_inner):
             score: Ty[chunk_size, chunk_size]
             po, pi = df.get_pid()
             attn_score(q_pipe[po, pi].get(), K, score)
             score_pipe[po, pi].put(score)
 
-        @df.kernel(mapping=[Q_LEN // chunk_size, 1])
+        @df.kernel(mapping=[SEQ_LEN // chunk_size, 1])
         def cal_softmax():
             po, _ = df.get_pid()
             max_logit: Ty[chunk_size]
@@ -157,13 +155,13 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
                 weight_pipe[po, i].put(attn_weight)
             exp_sum_pipe[po].put(sum_exp)
 
-        @df.kernel(mapping=[Q_LEN // chunk_size, SEQ_LEN // chunk_size])
+        @df.kernel(mapping=[SEQ_LEN // chunk_size, SEQ_LEN // chunk_size])
         def attn(V: Ty[SEQ_LEN, HEAD_DIM] @ Ly_inner):
             po, pi = df.get_pid()
             o_pipe[po, pi].put(allo.matmul(weight_pipe[po, pi].get(), V))
 
-        @df.kernel(mapping=[Q_LEN // chunk_size, 1])
-        def acc(O: Ty[Q_LEN, HEAD_DIM] @ Ly_outer):
+        @df.kernel(mapping=[SEQ_LEN // chunk_size, 1])
+        def acc(O: Ty[SEQ_LEN, HEAD_DIM] @ Ly_outer):
             attn_output: Ty[chunk_size, HEAD_DIM] = 0
             po, _ = df.get_pid()
             for i in range(SEQ_LEN // chunk_size):
@@ -225,15 +223,16 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
         num_iters=100,
         # device_type="npu1_2col",
     )
-    Q = np.random.randn(chunk_size, D).astype(np_bfloat16)
+    Q = np.random.randn(N, D).astype(np_bfloat16)
     K = np.random.randn(N, D).astype(np_bfloat16)
     V = np.random.randn(N, D).astype(np_bfloat16)
-    O = np.zeros(Q_LEN * D).astype(np_bfloat16)
+    O = np.zeros(N * D).astype(np_bfloat16)
     mod(Q, K, V, O)
+    np.set_printoptions(threshold=np.inf)
     out = flash_attention(Q, K, V, chunk_size=32)
-    # print(out[:chunk_size])
-    O = O.astype(np.float32).reshape(Q_LEN, D)
-    # print(O)
+    print(out)
+    O = O.astype(np.float32).reshape(N, D)
+    print(O)
 
 
 if __name__ == "__main__":

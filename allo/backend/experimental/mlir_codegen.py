@@ -1928,7 +1928,11 @@ class CodeGenerator:
                         stream_src = aie_d.object_fifo(
                             stream_name + "_src",
                             self.tile_map[stream.src],
-                            self.tile_map[self.used_mem_tiles[core_function_mapping[stream.src][1]].name],
+                            self.tile_map[
+                                self.used_mem_tiles[
+                                    core_function_mapping[stream.src][1]
+                                ].name
+                            ],
                             depth=stream.type.depth,
                             datatype=aie_ir.MemRefType.get(
                                 stream.type.shape,
@@ -1937,7 +1941,11 @@ class CodeGenerator:
                         )
                         stream_dst = aie_d.object_fifo(
                             stream_name + "_dst",
-                            self.tile_map[self.used_mem_tiles[core_function_mapping[stream.src][1]].name],
+                            self.tile_map[
+                                self.used_mem_tiles[
+                                    core_function_mapping[stream.src][1]
+                                ].name
+                            ],
                             self.tile_map[stream.dst],
                             depth=stream.type.depth,
                             datatype=aie_ir.MemRefType.get(
@@ -2202,6 +2210,7 @@ class CodeGenerator:
                         dtensor_global_id: bool
                         used_shim: str
                         max_task_id: int
+                        repeat: int
 
                     guards = {}
                     async_dma_tasks: list[DMAMemcpyGroup] = []
@@ -2282,6 +2291,52 @@ class CodeGenerator:
                                 ):
                                     overload_flag = True
                                     break
+                                # HACK: clean up
+                                if (
+                                    len(
+                                        updated_fifo_dma_tasks[
+                                            global_dma.io_port.fifo.name
+                                        ]
+                                    )
+                                    > 1
+                                ):
+                                    prev_1 = updated_fifo_dma_tasks[
+                                        global_dma.io_port.fifo.name
+                                    ][-1]
+                                    prev_2 = updated_fifo_dma_tasks[
+                                        global_dma.io_port.fifo.name
+                                    ][-2]
+                                    if (
+                                        prev_1.dtensor_global_id
+                                        == prev_2.dtensor_global_id
+                                        and prev_1.dma_tasks == prev_2.dma_tasks
+                                    ):
+                                        prev_2.repeat += 1
+                                        updated_fifo_dma_tasks[
+                                            global_dma.io_port.fifo.name
+                                        ].pop(
+                                            len(
+                                                updated_fifo_dma_tasks[
+                                                    global_dma.io_port.fifo.name
+                                                ]
+                                            )
+                                            - 1
+                                        )
+                                        print("lalala")
+                                        updated_fifo_dma_tasks[
+                                            global_dma.io_port.fifo.name
+                                        ].append(
+                                            DMAMemcpyGroup(
+                                                [(offset, size, stride)],
+                                                None,
+                                                prev_1.bd_id,
+                                                global_dma.dtensor.global_id,
+                                                used_shim,
+                                                tasks_idx_right,
+                                                1,
+                                            )
+                                        )
+                                        continue
                                 bd_id = dma_bd_workload[used_shim].pop()
                                 occupied_bd_id[used_shim].add(bd_id)
                                 updated_fifo_dma_tasks[
@@ -2294,6 +2349,7 @@ class CodeGenerator:
                                         global_dma.dtensor.global_id,
                                         used_shim,
                                         tasks_idx_right,
+                                        1,
                                     )
                                 )
                             if overload_flag:
@@ -2329,6 +2385,14 @@ class CodeGenerator:
                                         fifo_info.dtensor_global_id
                                     ][1]
                                 )
+                                if size[0] > 1 and size[1] == 1:
+                                    size[0], size[1] = size[1], size[0]
+                                    offset[0], offset[1] = offset[1], offset[0]
+                                    stride[0], stride[1] = stride[1], stride[0]
+                                if fifo_info.repeat > 1:
+                                    assert size[0] == 1
+                                    size[0] = fifo_info.repeat
+                                    stride[0] = 0
                                 aiex_d.NpuDmaMemcpyNd(
                                     metadata=self.fifo_map[fifo_name],
                                     bd_id=fifo_info.bd_id,
