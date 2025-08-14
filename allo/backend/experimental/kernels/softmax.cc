@@ -32,11 +32,11 @@ bfloat16 get_exp(bfloat16 input_x) {
 
 extern "C" {
 
-void softmax_bfloat16(bfloat16 attention_score[8][128],
-                      bfloat16 attention_weight[8][128]) {
+void softmax_bfloat16(bfloat16 attention_score[8][512],
+                      bfloat16 attention_weight[8][512]) {
   // Define constants for tile dimensions and vectorization
   constexpr int TILE_ROWS = 8;
-  constexpr int SEQ_LEN = 128;
+  constexpr int SEQ_LEN = 512;
   constexpr int vec_factor = 256 / (sizeof(bfloat16) * 8);
   const int F = SEQ_LEN / vec_factor;
   // Define negative infinity constant

@@ -15,80 +15,7 @@ np.random.seed(42)
 
 Ty = bfloat16
 
-
-def gen_pingpong_gemm_mapping_primitive(Pm, Pn, Pk, col_num=4, row_num=4):
-    # chain on k dimension
-    mapping_primitives = []
-    bases: list[list[str]] = []
-    for i in range(Pm):
-        bases.append([])
-        for j in range(Pn):
-            base = f"gemm_0_{i}_{j}"
-            for k in range(1, Pk):
-                mapping_primitives.append(("chain", [base, f"gemm_{k}_{i}_{j}"]))
-                base += f"-gemm_{k}_{i}_{j}"
-            bases[i].append(base)
-
-    if Pn // col_num < 1 or Pm // row_num < 1:
-        col_num, row_num = row_num, col_num
-
-    if Pn // col_num > 1 or Pm // row_num > 1:
-        for i in range(row_num):
-            for j in range(col_num):
-                bundle_list = []
-                for p in range(Pm // row_num):
-                    for q in range(Pn // col_num):
-                        bundle_list.append(bases[i + row_num * p][j + col_num * q])
-                mapping_primitives.append(("bundle", bundle_list))
-
-    return mapping_primitives
-
-
-def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, A, B, C):
-    Mt, Nt = M // Pm, N // Pn
-
-    LyA = Layout("S1S2")
-    LyB = Layout("S2S0")
-    LyC = Layout("S1S0")
-
-    @df.region()
-    def top():
-        pipe = df.array(
-            df.pipe(dtype=Ty, shape=(Mt, Nt), depth=2), shape=(Pk - 1, Pm, Pn)
-        )
-
-        @df.kernel(mapping=[Pk, Pm, Pn])
-        def gemm(A: Ty[M, K] @ LyA, B: Ty[K, N] @ LyB, C: Ty[M, N] @ LyC):
-            pk, pm, pn = df.get_pid()
-            with allo.meta_if(pk > 0):
-                C_in: Ty[Mt, Nt] = pipe[pk - 1, pm, pn].get()
-            with allo.meta_else():
-                C_in: Ty[Mt, Nt] = 0
-            C_out: Ty[Mt, Nt] = allo.add(allo.matmul(A, B), C_in)
-            with allo.meta_if(pk < Pk - 1):
-                pipe[pk, pm, pn].put(C_out)
-            with allo.meta_elif(pk == Pk - 1):
-                C[:, :] = C_out
-
-    mapping_primitives = gen_pingpong_gemm_mapping_primitive(
-        Pm,
-        Pn,
-        Pk,
-    )
-
-    mod = df.build(
-        top,
-        project="top.prj",
-        target="aie-mlir",
-        mapping_primitives=mapping_primitives,
-        profile=True,
-        warmup=200,
-        num_iters=1000,
-    )
-    mod(A, B, C)
-
-
-N = 128
+N = 512
 D = 64
 
 Q = np.random.randn(N, D).astype(np_bfloat16)
@@ -154,19 +81,26 @@ attn_score_mod = df.build(
     profile=True,
 )
 
-SOFTMAX_P0 = 16
+
+SOFTMAX_P0 = N // 8
 SOFTMAX_TILE = SOFTMAX_P0 * 8
 SOFTMAX_Ly = Layout("S0R")
 
 
 def gen_softmax_primitives():
+    SOFTMAX_ROW = 16
     primitives = []
     for row in range(SOFTMAX_ROW):
         if SOFTMAX_P0 // SOFTMAX_ROW > 1:
             primitives.append(
-                ("bundle", [f"core_{SOFTMAX_ROW*i_+row}" for i_ in range(SOFTMAX_P0 // SOFTMAX_ROW)])
+                (
+                    "bundle",
+                    [
+                        f"core_{SOFTMAX_ROW*i_+row}"
+                        for i_ in range(SOFTMAX_P0 // SOFTMAX_ROW)
+                    ],
+                )
             )
-    print(primitives)
     return primitives
 
 
@@ -180,46 +114,76 @@ def softmax_kernel():
         softmax(input_x, output_x)
 
 
-softmax_mod = df.build(softmax_kernel, target="aie-mlir", project="softmax.prj")
+softmax_mod = df.build(
+    softmax_kernel,
+    target="aie-mlir",
+    project="softmax.prj",
+    mapping_primitives=gen_softmax_primitives(),
+)
 
-# Pm, Pn, Pk = 2, 2, 2
-# Mt, Nt = N // Pm, D // Pn
+Mt, Nt = 64, 64
+Pk, Pm, Pn = N // 64, N // 64, D // 64
+LyA = Layout("S1S2")
+LyB = Layout("S2S0")
+LyC = Layout("S1S0")
 
-# LyA = Layout("S1S2")
-# LyB = Layout("S2S0")
-# LyC = Layout("S1S0")
 
-# @df.region()
-# def top():
-#     pipe = df.array(
-#         df.pipe(dtype=Ty, shape=(Mt, Nt), depth=2), shape=(Pk - 1, Pm, Pn)
-#     )
+@df.region()
+def top():
+    pipe = df.array(df.pipe(dtype=Ty, shape=(Mt, Nt), depth=2), shape=(Pk - 1, Pm, Pn))
 
-#     @df.kernel(mapping=[Pk, Pm, Pn])
-#     def gemm(A: Ty[N, N] @ LyA, B: Ty[N, D] @ LyB, C: Ty[N, D] @ LyC):
-#         pk, pm, pn = df.get_pid()
-#         with allo.meta_if(pk > 0):
-#             C_in: Ty[Mt, Nt] = pipe[pk - 1, pm, pn].get()
-#         with allo.meta_else():
-#             C_in: Ty[Mt, Nt] = 0
-#         C_out: Ty[Mt, Nt] = allo.add(allo.matmul(A, B), C_in)
-#         with allo.meta_if(pk < Pk - 1):
-#             pipe[pk, pm, pn].put(C_out)
-#         with allo.meta_elif(pk == Pk - 1):
-#             C[:, :] = C_out
+    @df.kernel(mapping=[Pk, Pm, Pn])
+    def gemm(A: Ty[N, N] @ LyA, B: Ty[N, D] @ LyB, C: Ty[N, D] @ LyC):
+        pk, pm, pn = df.get_pid()
+        with allo.meta_if(pk > 0):
+            C_in: Ty[Mt, Nt] = pipe[pk - 1, pm, pn].get()
+        with allo.meta_else():
+            C_in: Ty[Mt, Nt] = 0
+        C_out: Ty[Mt, Nt] = allo.add(allo.matmul(A, B), C_in)
+        with allo.meta_if(pk < Pk - 1):
+            pipe[pk, pm, pn].put(C_out)
+        with allo.meta_elif(pk == Pk - 1):
+            C[:, :] = C_out
 
-# gemm_mod = df.build(top, target="aie-mlir", project= "gemm.prj", profile=True)
+
+def gen_gemm_primitive():
+    ROW = 16
+    # chain on k dimension
+    mapping_primitives = []
+    bases: list[list[str]] = []
+    for i in range(Pm):
+        bases.append([])
+        for j in range(Pn):
+            base = f"gemm_0_{i}_{j}"
+            for k in range(1, Pk):
+                mapping_primitives.append(("chain", [base, f"gemm_{k}_{i}_{j}"]))
+                base += f"-gemm_{k}_{i}_{j}"
+            bases[i].append(base)
+
+    if Pm // ROW > 1:
+        for i in range(ROW):
+            bundle_list = []
+            for p in range(Pm // ROW):
+                bundle_list.append(bases[i + ROW * p][0])
+            # print(bundle_list)
+            mapping_primitives.append(("bundle", bundle_list))
+
+    return mapping_primitives
+
+
+gemm_mod = df.build(
+    top,
+    project="gemm.prj",
+    target="aie-mlir",
+    mapping_primitives=gen_gemm_primitive(),
+    profile=True,
+    warmup=200,
+    num_iters=1000,
+)
 
 attention_score = np.empty((N, N), dtype=np_bfloat16)
 attn_score_mod(Q, K, attention_score)
 attn_weight = np.zeros((N, N)).astype(np_bfloat16)
 softmax_mod(attention_score, attn_weight)
-# for i in range(N // SOFTMAX_TILE):
-#     softmax_mod(
-#         attention_score[i * SOFTMAX_TILE : (i + 1) * SOFTMAX_TILE, :],
-#         attn_weight[i * SOFTMAX_TILE : (i + 1) * SOFTMAX_TILE, :],
-#     )
-
-# x = np.zeros((N, D)).astype(np_bfloat16)
-# gemm_mod(attn_weight, V, x)
-# # _test_pingpong_gemm(N, D, N, 2, 2, 2, attn_weight, V ,x)
+x = np.zeros((N, D)).astype(np_bfloat16)
+gemm_mod(attn_weight, V, x)
