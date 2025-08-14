@@ -171,36 +171,21 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
             scale_attn_output(attn_output, exp_sum_pipe[po].get(), O)
 
     mapping_primitives_ = []
-    for i in range(iteration):
+    for idx in range(iteration):
+        nodes = [f"cal_attn_score_{idx}_{i}" for i in range(SEQ_LEN // chunk_size)]
+        mapping_primitives_.append(("bundle", nodes))
+        nodes = [f"attn_{idx}_{i}" for i in range(SEQ_LEN // chunk_size)]
+        mapping_primitives_.append(("bundle", nodes))
         mapping_primitives_.append(
-            gen_bundle("cal_attn_score", i, SEQ_LEN // chunk_size)
-        )
-        mapping_primitives_.append(gen_bundle("attn", i, SEQ_LEN // chunk_size))
-        mapping_primitives_.append(
-            ("chain", [f"send_q_{i}_0", f"cal_attn_score_{i}_0"])
+            ("chain", [f"send_q_{idx}_0", f"cal_attn_score_{idx}_0"])
         )
 
     # print(mapping_primitives)
     mod = df.build(
         top,
         target="aie-mlir",
-        mapping_primitives=
-        # mapping_primitives_,
-        [
-            gen_bundle("cal_attn_score", 0, SEQ_LEN // chunk_size),
-            gen_bundle("attn", 0, SEQ_LEN // chunk_size),
-            ("chain", ["send_q_0_0", "cal_attn_score_0_0"]),
-            gen_bundle("cal_attn_score", 1, SEQ_LEN // chunk_size),
-            gen_bundle("attn", 1, SEQ_LEN // chunk_size),
-            ("chain", ["send_q_1_0", "cal_attn_score_1_0"]),
-            gen_bundle("cal_attn_score", 2, SEQ_LEN // chunk_size),
-            gen_bundle("attn", 2, SEQ_LEN // chunk_size),
-            ("chain", ["send_q_2_0", "cal_attn_score_2_0"]),
-            gen_bundle("cal_attn_score", 3, SEQ_LEN // chunk_size),
-            gen_bundle("attn", 3, SEQ_LEN // chunk_size),
-            ("chain", ["send_q_3_0", "cal_attn_score_3_0"]),
-        ],
-        profile=True,
+        mapping_primitives= mapping_primitives_,
+        profile=False,
         warmup=20,
         num_iters=100,
         # device_type="npu1_2col",
