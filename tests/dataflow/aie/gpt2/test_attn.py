@@ -44,7 +44,7 @@ def gen_pingpong_gemm_mapping_primitive(Pm, Pn, Pk, col_num=4, row_num=4):
     return mapping_primitives
 
 
-def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, A, B ,C):
+def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, A, B, C):
     Mt, Nt = M // Pm, N // Pn
 
     LyA = Layout("S1S2")
@@ -87,6 +87,7 @@ def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, A, B ,C):
     )
     mod(A, B, C)
 
+
 N = 128
 D = 64
 
@@ -94,6 +95,7 @@ Q = np.random.randn(N, D).astype(np_bfloat16)
 K = np.random.randn(N, D).astype(np_bfloat16)
 V = np.random.randn(N, D).astype(np_bfloat16)
 O = np.zeros(N * D).astype(np_bfloat16)
+
 attn_score = ExternalModule(
     top="transpose_matmul_with_scale_bfloat16",
     impl_path=KERNEL_LIB_PATH + "transpose_matmul_with_scale.cc",
@@ -107,8 +109,9 @@ softmax = ExternalModule(
     output_idx=[1],
 )
 
-ATTN_P0 = 4
-ATTN_P1 = 4
+
+ATTN_P0 = N // 32
+ATTN_P1 = N // 32
 ATTN_SCORE_M_TILE = ATTN_P0 * 32
 ATTN_SCORE_N_TILE = ATTN_P1 * 32
 ATTN_SCORE_LyA = Layout("S0R")
@@ -116,24 +119,55 @@ ATTN_SCORE_LyB = Layout("S1R")
 ATTN_SCORE_LyC = Layout("S0S1")
 
 
+def gen_attn_score_primitives():
+    ROW = 4
+    COL = 4
+    primitives = []
+    for row in range(ROW):
+        for col in range(COL):
+            nodes = []
+            for j_ in range(ATTN_P0 // COL):
+                nodes.extend(
+                    [f"core_{ROW*i_+row}_{COL*j_+col}" for i_ in range(ATTN_P1 // ROW)]
+                )
+            if len(nodes) > 1:
+                primitives.append(("bundle", nodes))
+    return primitives
+
+
 @df.region()
 def attn_score_kernel():
     @df.kernel(mapping=[ATTN_P0, ATTN_P1])
     def core(
-        A: Ty[ATTN_SCORE_M_TILE, D] @ ATTN_SCORE_LyA,
-        B: Ty[ATTN_SCORE_N_TILE, D] @ ATTN_SCORE_LyB,
-        C: Ty[ATTN_SCORE_M_TILE, ATTN_SCORE_N_TILE] @ ATTN_SCORE_LyC,
+        A: Ty[N, D] @ ATTN_SCORE_LyA,
+        B: Ty[N, D] @ ATTN_SCORE_LyB,
+        C: Ty[N, N] @ ATTN_SCORE_LyC,
     ):
         attn_score(A, B, C)
 
 
 attn_score_mod = df.build(
-    attn_score_kernel, target="aie-mlir", project="attn_score.prj"
+    attn_score_kernel,
+    target="aie-mlir",
+    project="attn_score.prj",
+    mapping_primitives=gen_attn_score_primitives(),
+    profile=True,
 )
 
 SOFTMAX_P0 = 16
 SOFTMAX_TILE = SOFTMAX_P0 * 8
 SOFTMAX_Ly = Layout("S0R")
+
+
+def gen_softmax_primitives():
+    primitives = []
+    for row in range(SOFTMAX_ROW):
+        if SOFTMAX_P0 // SOFTMAX_ROW > 1:
+            primitives.append(
+                ("bundle", [f"core_{SOFTMAX_ROW*i_+row}" for i_ in range(SOFTMAX_P0 // SOFTMAX_ROW)])
+            )
+    print(primitives)
+    return primitives
 
 
 @df.region()
@@ -148,60 +182,44 @@ def softmax_kernel():
 
 softmax_mod = df.build(softmax_kernel, target="aie-mlir", project="softmax.prj")
 
-Pm, Pn, Pk = 2, 2, 2
-Mt, Nt = N // Pm, D // Pn
+# Pm, Pn, Pk = 2, 2, 2
+# Mt, Nt = N // Pm, D // Pn
 
-LyA = Layout("S1S2")
-LyB = Layout("S2S0")
-LyC = Layout("S1S0")
+# LyA = Layout("S1S2")
+# LyB = Layout("S2S0")
+# LyC = Layout("S1S0")
 
-@df.region()
-def top():
-    pipe = df.array(
-        df.pipe(dtype=Ty, shape=(Mt, Nt), depth=2), shape=(Pk - 1, Pm, Pn)
-    )
+# @df.region()
+# def top():
+#     pipe = df.array(
+#         df.pipe(dtype=Ty, shape=(Mt, Nt), depth=2), shape=(Pk - 1, Pm, Pn)
+#     )
 
-    @df.kernel(mapping=[Pk, Pm, Pn])
-    def gemm(A: Ty[N, N] @ LyA, B: Ty[N, D] @ LyB, C: Ty[N, D] @ LyC):
-        pk, pm, pn = df.get_pid()
-        with allo.meta_if(pk > 0):
-            C_in: Ty[Mt, Nt] = pipe[pk - 1, pm, pn].get()
-        with allo.meta_else():
-            C_in: Ty[Mt, Nt] = 0
-        C_out: Ty[Mt, Nt] = allo.add(allo.matmul(A, B), C_in)
-        with allo.meta_if(pk < Pk - 1):
-            pipe[pk, pm, pn].put(C_out)
-        with allo.meta_elif(pk == Pk - 1):
-            C[:, :] = C_out
+#     @df.kernel(mapping=[Pk, Pm, Pn])
+#     def gemm(A: Ty[N, N] @ LyA, B: Ty[N, D] @ LyB, C: Ty[N, D] @ LyC):
+#         pk, pm, pn = df.get_pid()
+#         with allo.meta_if(pk > 0):
+#             C_in: Ty[Mt, Nt] = pipe[pk - 1, pm, pn].get()
+#         with allo.meta_else():
+#             C_in: Ty[Mt, Nt] = 0
+#         C_out: Ty[Mt, Nt] = allo.add(allo.matmul(A, B), C_in)
+#         with allo.meta_if(pk < Pk - 1):
+#             pipe[pk, pm, pn].put(C_out)
+#         with allo.meta_elif(pk == Pk - 1):
+#             C[:, :] = C_out
 
-gemm_mod = df.build(top, target="aie-mlir", project= "gemm.prj", profile=True)
+# gemm_mod = df.build(top, target="aie-mlir", project= "gemm.prj", profile=True)
 
 attention_score = np.empty((N, N), dtype=np_bfloat16)
-for i in range(N // ATTN_SCORE_M_TILE):
-    for j in range(N // ATTN_SCORE_N_TILE):
-        attn_score_mod(
-            Q[
-                i * ATTN_SCORE_M_TILE : (i + 1) * ATTN_SCORE_M_TILE,
-                :,
-            ],
-            K[
-                j * ATTN_SCORE_N_TILE : (j + 1) * ATTN_SCORE_N_TILE,
-                :,
-            ],
-            attention_score[
-                i * ATTN_SCORE_M_TILE : (i + 1) * ATTN_SCORE_M_TILE,
-                j * ATTN_SCORE_N_TILE : (j + 1) * ATTN_SCORE_N_TILE,
-            ],
-        )
-
+attn_score_mod(Q, K, attention_score)
 attn_weight = np.zeros((N, N)).astype(np_bfloat16)
+softmax_mod(attention_score, attn_weight)
+# for i in range(N // SOFTMAX_TILE):
+#     softmax_mod(
+#         attention_score[i * SOFTMAX_TILE : (i + 1) * SOFTMAX_TILE, :],
+#         attn_weight[i * SOFTMAX_TILE : (i + 1) * SOFTMAX_TILE, :],
+#     )
 
-for i in range(N // SOFTMAX_TILE):
-    softmax_mod(
-        attention_score[i * SOFTMAX_TILE : (i + 1) * SOFTMAX_TILE, :],
-        attn_weight[i * SOFTMAX_TILE : (i + 1) * SOFTMAX_TILE, :],
-    )
-
-x = np.zeros((N, D)).astype(np_bfloat16)
-gemm_mod(attn_weight, V, x)
-# _test_pingpong_gemm(N, D, N, 2, 2, 2, attn_weight, V ,x)
+# x = np.zeros((N, D)).astype(np_bfloat16)
+# gemm_mod(attn_weight, V, x)
+# # _test_pingpong_gemm(N, D, N, 2, 2, 2, attn_weight, V ,x)
