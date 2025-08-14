@@ -34,7 +34,17 @@ def call_mlir(
     *args,
 ):
     # generate insts.txt
-    cmd = f"cd {project} && aiecc.py --alloc-scheme=basic-sequential --aie-generate-xclbin --no-compile-host --xclbin-name=build/final.xclbin --no-xchesscc --no-xbridge --peano ${{PEANO_INSTALL_DIR}} --aie-generate-npu-insts --npu-insts-name=insts.txt top.mlir"
+    cmd = f"cd {project} && aiecc.py --alloc-scheme=basic-sequential --aie-generate-xclbin --no-compile-host --xclbin-name=build/final.xclbin --no-xchesscc --no-xbridge --peano ${{PEANO_INSTALL_DIR}} --aie-generate-npu-insts --npu-insts-name=attn.txt attn.mlir"
+    with subprocess.Popen(cmd, shell=True) as process:
+        process.wait()
+    if process.returncode != 0:
+        raise RuntimeError("Failed to compile the MLIR-AIE code")
+    cmd = f"cd {project} && aiecc.py --alloc-scheme=basic-sequential --aie-generate-xclbin --no-compile-host --xclbin-name=build/final.xclbin --no-xchesscc --no-xbridge --peano ${{PEANO_INSTALL_DIR}} --aie-generate-npu-insts --npu-insts-name=gemm.txt gemm.mlir"
+    with subprocess.Popen(cmd, shell=True) as process:
+        process.wait()
+    if process.returncode != 0:
+        raise RuntimeError("Failed to compile the MLIR-AIE code")
+    cmd = f"cd {project} && aiecc.py --alloc-scheme=basic-sequential --aie-generate-xclbin --no-compile-host --xclbin-name=build/final.xclbin --no-xchesscc --no-xbridge --peano ${{PEANO_INSTALL_DIR}} --aie-generate-npu-insts --npu-insts-name=softmax.txt softmax.mlir"
     with subprocess.Popen(cmd, shell=True) as process:
         process.wait()
     if process.returncode != 0:
@@ -52,55 +62,23 @@ def call_mlir(
         ) as f:
             f.write("\n".join([str(i) for i in arg.flatten()]))
     # cmd = f"cd {project} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE --trace_sz {trace_size}"
-    cmd = f"cd {project} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE -p false --warmup 200 --test_iter 1000"
+    cmd = f"cd {project} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE -p true --warmup 200 --test_iter 1000"
     with subprocess.Popen(cmd, shell=True) as process:
         process.wait()
     if process.returncode != 0:
         raise RuntimeError("Failed to execute AIE code.")
-    for idx in output_idx:
-        result = read_tensor_from_file(
-            dtype_list[idx],
-            args[idx].shape,
-            f"{project}/output{idx}.data",
-        )
-        args[idx][:] = result
 
 
 # fixme: update parameters as you need
-from allo.ir.types import int8, int16, int32, bfloat16
+from allo.ir.types import int8, int16, int32, bfloat16, float32
 
-M, N, K = 32, 32, 64
-# A = np.random.random((M, K)).astype(np_bfloat16)
-# B = np.random.random((K, N)).astype(np_bfloat16)
-
-# C = np.zeros((M, N)).astype(np_bfloat16)
-# call_mlir("top.prj", bfloat16, 0, A, B, C)
-# print(C)
-# np.testing.assert_allclose(C.astype(np.float32), (A @ B).astype(np.float32), atol=1e-2)
-
-# A = np.random.randint(-8, 8, (M, K)).astype(np.int16)
-# B = np.random.randint(-8, 8, (K, N)).astype(np.int16)
-# C = np.zeros((M, N)).astype(np.int16)
-
-# A = np.random.randint(0, 64, (M, K)).astype(np.int16)
-# B = np.random.randint(0, 64, (K, N)).astype(np.int16)
-# C = np.zeros((M, N)).astype(np.int16)
-# F = np.zeros((M, N)).astype(np.int16)
-A = np.random.randint(-8, 8, (M, K)).astype(np.int16)
-B = np.random.randint(-8, 8, (K, N)).astype(np.int16)
-C = np.zeros((M, N)).astype(np.int16)
+N = 2048
+D = 64
+chunk_size = 32
+Q = np.random.randn(N, D).astype(np_bfloat16)
+K = np.random.randn(N, D).astype(np_bfloat16)
+V = np.random.randn(N, D).astype(np_bfloat16)
+O = np.zeros(N * D).astype(np_bfloat16)
 call_mlir(
-    "top.prj",
-    [int16, int16, int16],
-    0,
-    [0, 1],
-    [2],
-    A,
-    B,
-    C,
+    "compose", [bfloat16, bfloat16, bfloat16, bfloat16], 0, [0, 1, 2], [3], Q, K, V, O
 )
-
-# call_mlir("top.prj", [int16, int16, int16], 4096 * 4096, [0, 1], [2], A, B, C)
-
-np.testing.assert_allclose(C, A @ B, atol=1e-5)
-print("PASSED!")
