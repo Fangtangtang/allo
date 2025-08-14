@@ -79,16 +79,17 @@ attn_score_mod = df.build(
     project="attn_score.prj",
     mapping_primitives=gen_attn_score_primitives(),
     profile=True,
+    warmup=200,
+    num_iters=1000,
 )
 
 
 SOFTMAX_P0 = N // 8
-SOFTMAX_TILE = SOFTMAX_P0 * 8
 SOFTMAX_Ly = Layout("S0R")
 
 
 def gen_softmax_primitives():
-    SOFTMAX_ROW = 16
+    SOFTMAX_ROW = 4
     primitives = []
     for row in range(SOFTMAX_ROW):
         if SOFTMAX_P0 // SOFTMAX_ROW > 1:
@@ -108,8 +109,8 @@ def gen_softmax_primitives():
 def softmax_kernel():
     @df.kernel(mapping=[SOFTMAX_P0])
     def core(
-        input_x: Ty[SOFTMAX_TILE, N] @ SOFTMAX_Ly,
-        output_x: Ty[SOFTMAX_TILE, N] @ SOFTMAX_Ly,
+        input_x: Ty[N, N] @ SOFTMAX_Ly,
+        output_x: Ty[N, N] @ SOFTMAX_Ly,
     ):
         softmax(input_x, output_x)
 
@@ -119,6 +120,9 @@ softmax_mod = df.build(
     target="aie-mlir",
     project="softmax.prj",
     mapping_primitives=gen_softmax_primitives(),
+    profile=True,
+    warmup=200,
+    num_iters=1000,
 )
 
 Mt, Nt = 64, 64
@@ -147,7 +151,7 @@ def top():
 
 
 def gen_gemm_primitive():
-    ROW = 16
+    ROW = 4
     # chain on k dimension
     mapping_primitives = []
     bases: list[list[str]] = []
