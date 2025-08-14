@@ -52,24 +52,24 @@ def call_mlir(
         ) as f:
             f.write("\n".join([str(i) for i in arg.flatten()]))
     # cmd = f"cd {project} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE --trace_sz {trace_size}"
-    cmd = f"cd {project} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE -p true --warmup 200 --test_iter 1000"
+    cmd = f"cd {project} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE -p true --warmup 20 --test_iter 100"
     with subprocess.Popen(cmd, shell=True) as process:
         process.wait()
     if process.returncode != 0:
         raise RuntimeError("Failed to execute AIE code.")
-    for idx in output_idx:
-        result = read_tensor_from_file(
-            dtype_list[idx],
-            args[idx].shape,
-            f"{project}/output{idx}.data",
-        )
-        args[idx][:] = result
+    # for idx in output_idx:
+    #     result = read_tensor_from_file(
+    #         dtype_list[idx],
+    #         args[idx].shape,
+    #         f"{project}/output{idx}.data",
+    #     )
+    #     args[idx][:] = result
 
 
 # fixme: update parameters as you need
 from allo.ir.types import int8, int16, int32, bfloat16, float32
 
-N = 2048
+N = 256
 D = 64
 chunk_size = 32
 Q = np.random.randn(N, D).astype(np_bfloat16)
