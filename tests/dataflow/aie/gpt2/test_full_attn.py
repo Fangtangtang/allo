@@ -63,7 +63,8 @@ def gen_bundle(prefix, idx, total):
 
 
 def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
-    Q_LEN = chunk_size * 2
+    iteration = 4
+    Q_LEN = chunk_size * iteration
     attn_score = ExternalModule(
         top="transpose_matmul_with_scale",
         impl_path=KERNEL_LIB_PATH + "attn_score.cc",
@@ -133,8 +134,8 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
         def cal_attn_score(K: Ty[SEQ_LEN, HEAD_DIM] @ Ly_inner):
             score: Ty[chunk_size, chunk_size]
             po, pi = df.get_pid()
-            attn_score(q_pipe[po,pi].get(), K, score)
-            score_pipe[po,pi].put(score)
+            attn_score(q_pipe[po, pi].get(), K, score)
+            score_pipe[po, pi].put(score)
 
         @df.kernel(mapping=[Q_LEN // chunk_size, 1])
         def cal_softmax():
@@ -146,43 +147,58 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, chunk_size):
             for i in range(SEQ_LEN // chunk_size):
                 attn_weight: Ty[chunk_size, chunk_size]
                 online_softmax(
-                    score_pipe[po,i].get(),
+                    score_pipe[po, i].get(),
                     max_logit,
                     sum_exp,
                     attn_weight,
                     max_logit,
                     sum_exp,
                 )
-                weight_pipe[po,i].put(attn_weight)
+                weight_pipe[po, i].put(attn_weight)
             exp_sum_pipe[po].put(sum_exp)
 
         @df.kernel(mapping=[Q_LEN // chunk_size, SEQ_LEN // chunk_size])
         def attn(V: Ty[SEQ_LEN, HEAD_DIM] @ Ly_inner):
             po, pi = df.get_pid()
-            o_pipe[po, pi].put(
-                allo.matmul(weight_pipe[po,pi].get(), V)
-            )
+            o_pipe[po, pi].put(allo.matmul(weight_pipe[po, pi].get(), V))
 
         @df.kernel(mapping=[Q_LEN // chunk_size, 1])
         def acc(O: Ty[Q_LEN, HEAD_DIM] @ Ly_outer):
             attn_output: Ty[chunk_size, HEAD_DIM] = 0
             po, _ = df.get_pid()
             for i in range(SEQ_LEN // chunk_size):
-                attn_output[:, :] = allo.add(
-                    attn_output, o_pipe[po,i].get()
-                )
+                attn_output[:, :] = allo.add(attn_output, o_pipe[po, i].get())
             scale_attn_output(attn_output, exp_sum_pipe[po].get(), O)
 
+    mapping_primitives_ = []
+    for i in range(iteration):
+        mapping_primitives_.append(
+            gen_bundle("cal_attn_score", i, SEQ_LEN // chunk_size)
+        )
+        mapping_primitives_.append(gen_bundle("attn", i, SEQ_LEN // chunk_size))
+        mapping_primitives_.append(
+            ("chain", [f"send_q_{i}_0", f"cal_attn_score_{i}_0"])
+        )
+
+    # print(mapping_primitives)
     mod = df.build(
         top,
         target="aie-mlir",
-        mapping_primitives=[
-            gen_bundle("cal_attn_score",0, SEQ_LEN // chunk_size),
+        mapping_primitives=
+        # mapping_primitives_,
+        [
+            gen_bundle("cal_attn_score", 0, SEQ_LEN // chunk_size),
             gen_bundle("attn", 0, SEQ_LEN // chunk_size),
             ("chain", ["send_q_0_0", "cal_attn_score_0_0"]),
-            gen_bundle("cal_attn_score",1, SEQ_LEN // chunk_size),
+            gen_bundle("cal_attn_score", 1, SEQ_LEN // chunk_size),
             gen_bundle("attn", 1, SEQ_LEN // chunk_size),
             ("chain", ["send_q_1_0", "cal_attn_score_1_0"]),
+            gen_bundle("cal_attn_score", 2, SEQ_LEN // chunk_size),
+            gen_bundle("attn", 2, SEQ_LEN // chunk_size),
+            ("chain", ["send_q_2_0", "cal_attn_score_2_0"]),
+            gen_bundle("cal_attn_score", 3, SEQ_LEN // chunk_size),
+            gen_bundle("attn", 3, SEQ_LEN // chunk_size),
+            ("chain", ["send_q_3_0", "cal_attn_score_3_0"]),
         ],
         profile=True,
         warmup=20,

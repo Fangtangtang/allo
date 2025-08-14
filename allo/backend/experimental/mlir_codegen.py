@@ -1928,7 +1928,7 @@ class CodeGenerator:
                         stream_src = aie_d.object_fifo(
                             stream_name + "_src",
                             self.tile_map[stream.src],
-                            self.tile_map[self.used_mem_tiles[0].name],
+                            self.tile_map[self.used_mem_tiles[core_function_mapping[stream.src][1]].name],
                             depth=stream.type.depth,
                             datatype=aie_ir.MemRefType.get(
                                 stream.type.shape,
@@ -1937,7 +1937,7 @@ class CodeGenerator:
                         )
                         stream_dst = aie_d.object_fifo(
                             stream_name + "_dst",
-                            self.tile_map[self.used_mem_tiles[0].name],
+                            self.tile_map[self.used_mem_tiles[core_function_mapping[stream.src][1]].name],
                             self.tile_map[stream.dst],
                             depth=stream.type.depth,
                             datatype=aie_ir.MemRefType.get(

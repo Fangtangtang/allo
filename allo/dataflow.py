@@ -463,7 +463,6 @@ def build(
         stream_info, stream_types_dict = aie_move_stream_to_interface(
             s, with_stream_type=True
         )
-        print(stream_info)
         parameter_list, s = _build_top(
             s, stream_info, target="aie", get_parameter_list=True
         )
