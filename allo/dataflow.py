@@ -16,7 +16,7 @@ from ._mlir.ir import (
     Type,
 )
 from ._mlir.exceptions import APIWarning
-from ._mlir.dialects import func as func_d, allo as allo_d
+from ._mlir.dialects import func as func_d, allo as allo_d, linalg as linalg_d
 from ._mlir.passmanager import PassManager as mlir_pass_manager
 from .customize import customize as _customize
 from .ir.utils import get_global_vars, get_all_df_kernels
@@ -149,6 +149,7 @@ def aie_move_stream_to_interface(s, with_stream_type: bool = False):
     for func in funcs:
         func_name = func.attributes["sym_name"].value
         func_stream_ops = []
+        func_transpose_ops = []
         stream_types = []
         stream_signed = ""
         stream_info[func_name] = []
@@ -156,6 +157,23 @@ def aie_move_stream_to_interface(s, with_stream_type: bool = False):
         out_types = func.attributes["function_type"].value.results
         s_type_str = "_" * len(in_types)
         new_args = new_func_args[func_name].copy()
+        def collect_transpose_op(op_):
+            if isinstance(op_,  linalg_d.TransposeOp):
+                func_transpose_ops.append(op_)
+                return
+            for region in op_.regions:
+                for block in region.blocks:
+                    for inner_op in block.operations:
+                        collect_transpose_op(inner_op)
+        
+        collect_transpose_op(func)
+        for op in func_transpose_ops:
+            if op.operands[0] in func.arguments and len(list(op.operands[0].uses)) ==1:
+                idx = list(func.arguments).index(op.operands[0])
+                arg_info = new_args[idx]
+                print(arg_info)
+
+                print(op.operands[0])
 
         # fixme: very weak
         def collect_stream_op(op_):
