@@ -62,7 +62,7 @@ def gen_bundle(prefix, idx, total):
 
 
 def test_flash_attention(SEQ_LEN, HEAD_DIM, q_chunk_size=32, kv_chunk_size=32):
-    COL = 4
+    COL = 2
     iteration = SEQ_LEN // q_chunk_size
     attn_score = ExternalModule(
         top="transpose_matmul_with_scale",
@@ -154,6 +154,7 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, q_chunk_size=32, kv_chunk_size=32):
             # softmax
             for i in range(SEQ_LEN // kv_chunk_size):
                 attn_weight: Ty[q_chunk_size, kv_chunk_size]
+                # FIXME: / sqrt(HEAD_DIM) somewhere (maybe the best choice is to do that in QK external kernel)
                 online_softmax(
                     score_pipe[po, i].get(),
                     max_logit,
@@ -234,7 +235,7 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, q_chunk_size=32, kv_chunk_size=32):
 
 
 if __name__ == "__main__":
-    N, D = 1024, 64  # Sequence Length, Embedding Dim = 64
+    N, D = 128, 64  # Sequence Length, Embedding Dim = 64
     chunk_size = 32
     # print(out.shape)
     # print(out)
