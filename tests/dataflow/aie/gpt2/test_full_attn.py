@@ -95,6 +95,7 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, q_chunk_size=32, kv_chunk_size=32):
     Ty = bfloat16
     Ly_outer = Layout("S1R")
     Ly_inner = Layout("S0R")
+    Ly_K = Layout("RS0")
 
     @df.region()
     def top():
@@ -129,11 +130,19 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, q_chunk_size=32, kv_chunk_size=32):
             for i in range(SEQ_LEN // kv_chunk_size):
                 q_pipe[po, i].put(Q)
 
+        # @df.kernel(mapping=[SEQ_LEN // q_chunk_size, SEQ_LEN // kv_chunk_size])
+        # def cal_attn_score(K: Ty[SEQ_LEN, HEAD_DIM] @ Ly_inner):
+        #     score: Ty[q_chunk_size, kv_chunk_size]
+        #     po, pi = df.get_pid()
+        #     attn_score(q_pipe[po, pi].get(), K, score)
+        #     score_pipe[po, pi].put(score)
+
         @df.kernel(mapping=[SEQ_LEN // q_chunk_size, SEQ_LEN // kv_chunk_size])
-        def cal_attn_score(K: Ty[SEQ_LEN, HEAD_DIM] @ Ly_inner):
-            score: Ty[q_chunk_size, kv_chunk_size]
+        def cal_attn_score(K: Ty[HEAD_DIM, SEQ_LEN] @ Ly_K):
             po, pi = df.get_pid()
-            attn_score(q_pipe[po, pi].get(), K, score)
+            score: Ty[q_chunk_size, kv_chunk_size] = allo.matmul(
+                q_pipe[po, pi].get(), K
+            )
             score_pipe[po, pi].put(score)
 
         @df.kernel(mapping=[SEQ_LEN // q_chunk_size, 1])
@@ -207,7 +216,7 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, q_chunk_size=32, kv_chunk_size=32):
         top,
         target="aie-mlir",
         mapping_primitives=mapping_primitives_,
-        profile=False,
+        profile=True,
         warmup=20,
         num_iters=100,
         # device_type="npu1_2col",
@@ -216,16 +225,16 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, q_chunk_size=32, kv_chunk_size=32):
     K = np.random.randn(N, D).astype(np_bfloat16)
     V = np.random.randn(N, D).astype(np_bfloat16)
     O = np.zeros(N * D).astype(np_bfloat16)
-    mod(Q, K, V, O)
-    np.set_printoptions(threshold=np.inf)
-    out = flash_attention(Q, K, V, chunk_size=32)
-    print(out)
-    O = O.astype(np.float32).reshape(N, D)
-    print(O)
+    mod(Q, K.T, V, O)
+    # np.set_printoptions(threshold=np.inf)
+    # out = flash_attention(Q, K, V, chunk_size=32)
+    # print(out)
+    # O = O.astype(np.float32).reshape(N, D)
+    # print(O)
 
 
 if __name__ == "__main__":
-    N, D = 256, 64  # Sequence Length, Embedding Dim = 64
+    N, D = 1024, 64  # Sequence Length, Embedding Dim = 64
     chunk_size = 32
     # print(out.shape)
     # print(out)

@@ -436,9 +436,9 @@ class AIE_MLIRModule:
                                 return
                     if op.operands[0].owner.name == "allo.stream_get":
                         arg = BlockArgument(op.operands[0].owner.operands[0])
-                        arg_info = self.func_args[func.attributes["sym_name"].value][
-                            arg.arg_number
-                        ]
+                        arg_info = self.core_func_args[
+                            func.attributes["sym_name"].value
+                        ][arg.arg_number][0]
                         arg_info.stream.transform_layout = (
                             list(op.attributes["offsets"]),
                             list(op.attributes["sizes"]),
@@ -448,17 +448,41 @@ class AIE_MLIRModule:
                         dead_ops.append(op)
                         return
 
+                    memcpy_op = None
+                    for use in op.operands[0].uses:
+                        if use.owner.name == "memref.copy":
+                            memcpy_op = use.owner
+                    if (
+                        memcpy_op is not None
+                        and memcpy_op.operands[0] in func.arguments
+                    ):
+                        arg = BlockArgument(memcpy_op.operands[0])
+                        if arg.arg_number in node.global_interfaces:
+                            node.interface_layout[arg.arg_number] = (
+                                list(op.attributes["offsets"]),
+                                list(op.attributes["sizes"]),
+                                list(op.attributes["strides"]),
+                            )
+                            op.result.replace_all_uses_with(op.operands[0])
+                            dead_ops.append(op)
+                            return
+
                     if (
                         len(list(op.results[0].uses)) == 1
                         and list(op.results[0].uses)[0].owner.name == "memref.copy"
-                    ):
+                    ):  # put
                         cp_op = list(op.results[0].uses)[0].owner
-                        last_use = list(cp_op.operands[1].uses)[-1].owner
-                        if last_use.name == "allo.stream_put":
+                        last_use = None
+                        for use in cp_op.operands[1].uses:
+                            if use.owner.name == "allo.stream_put":
+                                last_use = use.owner
+                                break
+                        if last_use is not None:
                             arg = BlockArgument(last_use.operands[0])
-                            arg_info = self.func_args[
-                                func.attributes["sym_name"].value
-                            ][arg.arg_number]
+                            # print(self.func_args)
+                            arg_info = self.core_func_args[
+                                str(func.attributes["sym_name"].value)
+                            ][arg.arg_number][0]
                             arg_info.stream.transform_layout = (
                                 list(op.attributes["offsets"]),
                                 list(op.attributes["sizes"]),

@@ -1925,14 +1925,25 @@ class CodeGenerator:
                         strides = stream.transform_layout[2]
                         for size, stride in zip(sizes, strides):
                             dimensions_to_stream.append((size, stride))
+                        switch_mem = self.used_mem_tiles[
+                            core_function_mapping[stream.src][1]
+                        ]
+                        if (
+                            len(switch_mem.recv_ports) == switch_mem.max_recv
+                            or len(switch_mem.send_ports) == switch_mem.max_send
+                        ):
+                            switch_mem = None
+                            for mem_tile in self.used_mem_tiles:
+                                if (
+                                    len(mem_tile.recv_ports) < mem_tile.max_recv
+                                    and len(mem_tile.send_ports) <= mem_tile.max_send
+                                ):
+                                    switch_mem = mem_tile
+                                    break
                         stream_src = aie_d.object_fifo(
                             stream_name + "_src",
                             self.tile_map[stream.src],
-                            self.tile_map[
-                                self.used_mem_tiles[
-                                    core_function_mapping[stream.src][1]
-                                ].name
-                            ],
+                            self.tile_map[switch_mem.name],
                             depth=stream.type.depth,
                             datatype=aie_ir.MemRefType.get(
                                 stream.type.shape,
@@ -1941,11 +1952,7 @@ class CodeGenerator:
                         )
                         stream_dst = aie_d.object_fifo(
                             stream_name + "_dst",
-                            self.tile_map[
-                                self.used_mem_tiles[
-                                    core_function_mapping[stream.src][1]
-                                ].name
-                            ],
+                            self.tile_map[switch_mem.name],
                             self.tile_map[stream.dst],
                             depth=stream.type.depth,
                             datatype=aie_ir.MemRefType.get(
@@ -1954,6 +1961,8 @@ class CodeGenerator:
                             ),
                             dimensionsToStream=dimensions_to_stream,
                         )
+                        switch_mem.send_ports.append(None)
+                        switch_mem.recv_ports.append(None)
                         self.fifo_map[stream_name] = (stream_src, stream_dst)
                         aie_d.object_fifo_link([stream_src], [stream_dst], [], [])
                     else:

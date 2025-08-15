@@ -32,5 +32,6 @@ def _test_gemm_1D():
     np.testing.assert_allclose(C, A @ B, atol=1e-5)
     print("PASSED!")
 
+
 if __name__ == "__main__":
     _test_gemm_1D()

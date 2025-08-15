@@ -555,7 +555,9 @@ def codegen_external_kernels(
         if "mm.cc" in src:  # this file is too large to be included
             path = os.environ.get("MY_KERNEL_PATH")
             if path is None:
-                path = os.path.expandvars(f"$MLIR_AIE_EXTERNAL_KERNEL_DIR/{lib_dir}/mm.cc")
+                path = os.path.expandvars(
+                    f"$MLIR_AIE_EXTERNAL_KERNEL_DIR/{lib_dir}/mm.cc"
+                )
             with open(
                 path,
                 "r",
