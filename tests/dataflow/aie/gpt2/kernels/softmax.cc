@@ -85,43 +85,43 @@ void online_softmax(bfloat16 attention_score[32][32],
   }
 }
 
-void online_softmax2(bfloat16 attention_score[32][32],
-                     bfloat16 prev_max_logit[32], bfloat16 prev_sum_exp[32],
-                     bfloat16 attention_weight[32][32],
-                     bfloat16 new_max_logit[32], bfloat16 new_sum_exp[32]) {
-  constexpr int vec_factor = 256 / (sizeof(bfloat16) * 8);
-  const int F = 32 / vec_factor;
-  for (int r = 0; r < 32; ++r) {
-    bfloat16 *score_row_ptr = &attention_score[r][0];
-    // row max
-    bfloat16 row_max = prev_max_logit[r];
-    for (int i = 0; i < F; i++) {
-      aie::vector<bfloat16, vec_factor> scores =
-          aie::load_v<vec_factor>(score_row_ptr);
-      row_max = std::max(row_max, aie::reduce_max(scores));
-      score_row_ptr += vec_factor;
-    }
-    new_max_logit[r] = row_max;
-    // exp logit
-    bfloat16 exp_sum = prev_sum_exp[r];
-    aie::vector<bfloat16, vec_factor> log2e_vec =
-        aie::broadcast<bfloat16, vec_factor>(log2e);
-    for (int i = 0; i < F; i++) {
-      bfloat16 *score_row_ptr = &attention_score[r][0];
-      bfloat16 *weight_row_ptr = &attention_weight[r][0];
-      aie::vector<bfloat16, vec_factor> scores =
-          aie::load_v<vec_factor>(score_row_ptr);
-      aie::accum<accfloat, vec_factor> exp_in =
-          aie::mul(aie::sub(scores, row_max), log2e_vec);
-      aie::vector<bfloat16, vec_factor> exp_val =
-          aie::exp2<bfloat16>(exp_in.to_vector<float>());
-      aie::store_v(weight_row_ptr, exp_val);
-      exp_sum += aie::reduce_add(exp_val);
-      score_row_ptr += vec_factor;
-      weight_row_ptr += vec_factor;
-    }
-    new_sum_exp[r] = exp_sum;
-  }
-}
+// void online_softmax2(bfloat16 attention_score[32][32],
+//                      bfloat16 prev_max_logit[32], bfloat16 prev_sum_exp[32],
+//                      bfloat16 attention_weight[32][32],
+//                      bfloat16 new_max_logit[32], bfloat16 new_sum_exp[32]) {
+//   constexpr int vec_factor = 256 / (sizeof(bfloat16) * 8);
+//   const int F = 32 / vec_factor;
+//   for (int r = 0; r < 32; ++r) {
+//     bfloat16 *score_row_ptr = &attention_score[r][0];
+//     // row max
+//     bfloat16 row_max = prev_max_logit[r];
+//     for (int i = 0; i < F; i++) {
+//       aie::vector<bfloat16, vec_factor> scores =
+//           aie::load_v<vec_factor>(score_row_ptr);
+//       row_max = std::max(row_max, aie::reduce_max(scores));
+//       score_row_ptr += vec_factor;
+//     }
+//     new_max_logit[r] = row_max;
+//     // exp logit
+//     bfloat16 exp_sum = prev_sum_exp[r];
+//     aie::vector<bfloat16, vec_factor> log2e_vec =
+//         aie::broadcast<bfloat16, vec_factor>(log2e);
+//     for (int i = 0; i < F; i++) {
+//       bfloat16 *score_row_ptr = &attention_score[r][0];
+//       bfloat16 *weight_row_ptr = &attention_weight[r][0];
+//       aie::vector<bfloat16, vec_factor> scores =
+//           aie::load_v<vec_factor>(score_row_ptr);
+//       aie::accum<accfloat, vec_factor> exp_in =
+//           aie::mul(aie::sub(scores, row_max), log2e_vec);
+//       aie::vector<bfloat16, vec_factor> exp_val =
+//           aie::exp2<bfloat16>(exp_in.to_vector<float>());
+//       aie::store_v(weight_row_ptr, exp_val);
+//       exp_sum += aie::reduce_add(exp_val);
+//       score_row_ptr += vec_factor;
+//       weight_row_ptr += vec_factor;
+//     }
+//     new_sum_exp[r] = exp_sum;
+//   }
+// }
 
 } // extern "C"

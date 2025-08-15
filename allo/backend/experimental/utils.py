@@ -374,7 +374,7 @@ def inject_external_kernels(
                     input_idx.extend([0, 1])
                     output_idx.append(2)
                     call_builtin = True
-                    kernel_name = f"matmul_scalar_{dtype}_{out_dtype}"
+                    kernel_name = f"matmul_scalar_{dtype}_{out_dtype}_{M}x{K}x{N}"
                     used_include_src[df_function_name].add('#include "mm.cc"\n')
                     operands = [
                         op.inputs[0],
@@ -553,8 +553,11 @@ def codegen_external_kernels(
     kernel_file_code = ""
     for src in include_src:
         if "mm.cc" in src:  # this file is too large to be included
+            path = os.environ.get("MY_KERNEL_PATH")
+            if path is None:
+                path = os.path.expandvars(f"$MLIR_AIE_EXTERNAL_KERNEL_DIR/{lib_dir}/mm.cc")
             with open(
-                os.path.expandvars(f"$MLIR_AIE_EXTERNAL_KERNEL_DIR/{lib_dir}/mm.cc"),
+                path,
                 "r",
                 encoding="utf-8",
             ) as f:
