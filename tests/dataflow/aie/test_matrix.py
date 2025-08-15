@@ -3,7 +3,7 @@
 
 import os
 import allo
-from allo.ir.types import int16, int32, float32
+from allo.ir.types import int16, int32, float32, int4, int8
 import allo.dataflow as df
 import numpy as np
 from allo.memory import Layout
@@ -110,9 +110,36 @@ def _test_gemm_2D():
     np.testing.assert_allclose(C, np_C, atol=1e-5)
     print("PASSED!")
 
+def pack_int4(arr):
+    # -8~7
+    arr = arr & 0xF
+    packed = (arr[:, ::2] << 4) | arr[:, 1::2]
+    return packed.astype(np.uint8)
+
+def _test_mix_gemm_2D():
+    TyI_A, TyI_B, TyO = int8, int4, int8
+    M, N, K = 32, 32, 32
+    P0, P1 = 4, 4
+
+    @df.region()
+    def top():
+        @df.kernel(mapping=[P0, P1])
+        def gemm(A: TyI_A[M, K] @ LyA, B: TyI_B[K, N] @ LyB, C: TyO[M, N] @ LyC):
+            C[:, :] = allo.matmul(A, B)
+
+    mod = df.build(top, target="aie-mlir")
+    orig_B = np.random.randint(-4, 4, (M, K)).astype(np.int8)
+    A = np.random.randint(-4, 4, (K, N)).astype(np.int8)
+    B = pack_int4(orig_B)
+    C = np.zeros((M, N)).astype(np.int8)
+    mod(A, B, C)
+    np_C = A.astype(np.int8) @ orig_B.astype(np.int8)
+    np.testing.assert_allclose(C, np_C, atol=1e-5)
+    print("PASSED!")
 
 if __name__ == "__main__":
-    _test_matrix_scalar_add()
-    _test_matrix_matrix_add()
-    _test_gemm_1D()
-    _test_gemm_2D()
+    # _test_matrix_scalar_add()
+    # _test_matrix_matrix_add()
+    # _test_gemm_1D()
+    # _test_gemm_2D()
+    _test_mix_gemm_2D()

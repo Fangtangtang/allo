@@ -589,7 +589,9 @@ class AIE_MLIRModule:
                     frozenset(node.meta_data.used_include_src or []),
                 )
                 if key not in external_info:
-                    external_info[key] = f"{self.project_dir[0]}_external{len(external_info)}"
+                    external_info[key] = (
+                        f"{self.project_dir[0]}_external{len(external_info)}"
+                    )
                 node.meta_data.external_kernel_file = external_info[key]
 
         # ------------------------- mlir-aie code generation -------------------------
@@ -835,7 +837,9 @@ class AIE_MLIRModule:
                         frozenset(used_include_src[func_name] or []),
                     )
                     if key not in external_info:
-                        external_info[key] = f"{self.project_dir[0]}_external{len(external_info)}"
+                        external_info[key] = (
+                            f"{self.project_dir[0]}_external{len(external_info)}"
+                        )
                     external_kernel_files[func_name] = external_info[key]
 
         code_generator = CodeGenerator(

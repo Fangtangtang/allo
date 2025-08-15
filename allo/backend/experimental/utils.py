@@ -337,7 +337,9 @@ def inject_external_kernels(
                     output_idx.append(0)
                     operands = [op.outputs[0]]
             # vec add/mul
-            elif op.operation.name in {"linalg.add", "linalg.mul"}:
+            elif op.operation.name in {"linalg.add", "linalg.mul"} and str(
+                op.inputs[0].type.element_type
+            ) == str(op.inputs[1].type.element_type):
                 op_name = op.operation.name.split(".")[1]
                 dtype = str(op.inputs[0].type.element_type)
                 ctype = aie_external_kernel_ctype_map[dtype]
@@ -363,23 +365,31 @@ def inject_external_kernels(
             elif op.operation.name == "linalg.matmul":
                 M, K = MemRefType(op.inputs[0].type).shape
                 _, N = MemRefType(op.inputs[1].type).shape
-                dtype = str(op.inputs[0].type.element_type)
+                dtype_A = str(op.inputs[0].type.element_type)
+                dtype_B = str(op.inputs[1].type.element_type)
                 out_dtype = str(op.outputs[0].type.element_type)
-                if (dtype, out_dtype) in matmul_external_kernel_config_map:
+                if (
+                    dtype_A == dtype_B
+                    and (dtype_A, out_dtype) in matmul_external_kernel_config_map
+                ):
                     kernel_header += f"#define DIM_M {M}\n"
                     kernel_header += f"#define DIM_N {N}\n"
                     kernel_header += f"#define DIM_K {K}\n"
-                    kernel_header += f"#define {dtype}_{out_dtype}_ONLY\n"
+                    kernel_header += f"#define {dtype_A}_{out_dtype}_ONLY\n"
                     input_idx.extend([0, 1])
                     output_idx.append(2)
                     call_builtin = True
-                    kernel_name = f"matmul_scalar_{dtype}_{out_dtype}"
+                    kernel_name = f"matmul_scalar_{dtype_A}_{out_dtype}"
                     used_include_src[df_function_name].add('#include "mm.cc"\n')
                     operands = [
                         op.inputs[0],
                         op.inputs[1],
                         op.outputs[0],
                     ]
+                elif dtype_A == "i8" and dtype_B == "i4" and out_dtype == "i8":
+                    # TODO: inject mixed precision matmul kernel
+                    pass
+
             if call_builtin:
                 used_external_kernels[df_function_name].add(kernel_name)
                 # replace operation
@@ -523,6 +533,8 @@ def get_element_type(dtype_str: str) -> aie_ir.Type:
         return aie_ir.IntegerType.get_signless(16)
     if dtype_str == "i8":
         return aie_ir.IntegerType.get_signless(8)
+    if dtype_str == "i4":
+        return aie_ir.IntegerType.get_signless(4)
     if dtype_str == "f32":
         return aie_ir.F32Type.get()
     if dtype_str == "f16":
