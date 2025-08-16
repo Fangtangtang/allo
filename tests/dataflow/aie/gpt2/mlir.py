@@ -51,7 +51,7 @@ def call_mlir(
             os.path.join(project, f"input{idx}.data"), "w", encoding="utf-8"
         ) as f:
             f.write("\n".join([str(i) for i in arg.flatten()]))
-    cmd = f"cd {project} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE -p true --warmup 200 --test_iter 1000"
+    cmd = f"cd {project} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE -p false --warmup 200 --test_iter 1000"
     with subprocess.Popen(cmd, shell=True) as process:
         process.wait()
     if process.returncode != 0:
@@ -68,7 +68,7 @@ def call_mlir(
 # fixme: update parameters as you need
 from allo.ir.types import int8, int16, int32, bfloat16
 
-N = 512
+N = 1024
 D = 64
 
 Q = np.random.randn(N, D).astype(np_bfloat16)

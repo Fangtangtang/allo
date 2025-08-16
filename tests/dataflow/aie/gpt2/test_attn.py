@@ -15,7 +15,7 @@ np.random.seed(42)
 
 Ty = bfloat16
 
-N = 512
+N = 1024
 D = 64
 
 Q = np.random.randn(N, D).astype(np_bfloat16)
@@ -30,7 +30,7 @@ attn_score = ExternalModule(
     output_idx=[2],
 )
 softmax = ExternalModule(
-    top="softmax_bfloat16",
+    top="softmax_bf16",
     impl_path=KERNEL_LIB_PATH + "softmax.cc",
     input_idx=[0],
     output_idx=[1],
@@ -46,32 +46,58 @@ ATTN_SCORE_LyB = Layout("S1R")
 ATTN_SCORE_LyC = Layout("S0S1")
 
 
-def gen_attn_score_primitives():
-    ROW = 4
-    COL = 4
-    primitives = []
-    for row in range(ROW):
-        for col in range(COL):
-            nodes = []
-            for j_ in range(ATTN_P0 // COL):
-                nodes.extend(
-                    [f"core_{ROW*i_+row}_{COL*j_+col}" for i_ in range(ATTN_P1 // ROW)]
-                )
-            if len(nodes) > 1:
-                primitives.append(("bundle", nodes))
-    return primitives
 
+Mt, Nt = 64, 64
+Pk, Pm, Pn = D // 64, N // 64, N // 64
+LyA = Layout("S1S2")
+LyB = Layout("S2S0")
+LyC = Layout("S1S0")
+
+def gen_attn_score_primitives():
+    col_num=4
+    row_num=4
+    # chain on k dimension
+    mapping_primitives = []
+    bases: list[list[str]] = []
+    for i in range(Pm):
+        bases.append([])
+        for j in range(Pn):
+            base = f"gemm_0_{i}_{j}"
+            for k in range(1, Pk):
+                mapping_primitives.append(("chain", [base, f"gemm_{k}_{i}_{j}"]))
+                base += f"-gemm_{k}_{i}_{j}"
+            bases[i].append(base)
+
+    if Pn // col_num < 1 or Pm // row_num < 1:
+        col_num, row_num = row_num, col_num
+
+    if Pn // col_num > 1 or Pm // row_num > 1:
+        for i in range(row_num):
+            for j in range(col_num):
+                bundle_list = []
+                for p in range(Pm // row_num):
+                    for q in range(Pn // col_num):
+                        bundle_list.append(bases[i + row_num * p][j + col_num * q])
+                mapping_primitives.append(("bundle", bundle_list))
+
+    return mapping_primitives
 
 @df.region()
 def attn_score_kernel():
-    @df.kernel(mapping=[ATTN_P0, ATTN_P1])
-    def core(
-        A: Ty[N, D] @ ATTN_SCORE_LyA,
-        B: Ty[N, D] @ ATTN_SCORE_LyB,
-        C: Ty[N, N] @ ATTN_SCORE_LyC,
-    ):
-        attn_score(A, B, C)
+    pipe = df.array(df.pipe(dtype=Ty, shape=(Mt, Nt), depth=2), shape=(Pk - 1, Pm, Pn))
 
+    @df.kernel(mapping=[Pk, Pm, Pn])
+    def gemm(A: Ty[N, D] @ LyA, B: Ty[D, N] @ LyB, C: Ty[N, N] @ LyC):
+        pk, pm, pn = df.get_pid()
+        with allo.meta_if(pk > 0):
+            C_in: Ty[Mt, Nt] = pipe[pk - 1, pm, pn].get()
+        with allo.meta_else():
+            C_in: Ty[Mt, Nt] = 0
+        C_out: Ty[Mt, Nt] = allo.add(allo.matmul(A, B), C_in)
+        with allo.meta_if(pk < Pk - 1):
+            pipe[pk, pm, pn].put(C_out)
+        with allo.meta_elif(pk == Pk - 1):
+            C[:, :] = C_out
 
 attn_score_mod = df.build(
     attn_score_kernel,
@@ -84,12 +110,12 @@ attn_score_mod = df.build(
 )
 
 
-SOFTMAX_P0 = N // 8
+SOFTMAX_P0 = N // 4
 SOFTMAX_Ly = Layout("S0R")
 
 
 def gen_softmax_primitives():
-    SOFTMAX_ROW = 4
+    SOFTMAX_ROW = 16
     primitives = []
     for row in range(SOFTMAX_ROW):
         if SOFTMAX_P0 // SOFTMAX_ROW > 1:
@@ -151,7 +177,7 @@ def top():
 
 
 def gen_gemm_primitive():
-    ROW = 4
+    ROW = 16
     # chain on k dimension
     mapping_primitives = []
     bases: list[list[str]] = []
@@ -175,7 +201,7 @@ def gen_gemm_primitive():
     return mapping_primitives
 
 
-gemm_mod = df.build(
+gemm2_mod = df.build(
     top,
     project="gemm.prj",
     target="aie-mlir",
@@ -186,8 +212,8 @@ gemm_mod = df.build(
 )
 
 attention_score = np.empty((N, N), dtype=np_bfloat16)
-attn_score_mod(Q, K, attention_score)
+attn_score_mod(Q, K.T, attention_score)
 attn_weight = np.zeros((N, N)).astype(np_bfloat16)
 softmax_mod(attention_score, attn_weight)
 x = np.zeros((N, D)).astype(np_bfloat16)
-gemm_mod(attn_weight, V, x)
+gemm2_mod(attn_weight, V, x)
