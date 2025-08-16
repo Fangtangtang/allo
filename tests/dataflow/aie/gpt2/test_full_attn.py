@@ -62,25 +62,19 @@ def gen_bundle(prefix, idx, total):
 
 
 def test_flash_attention(SEQ_LEN, HEAD_DIM, q_chunk_size=32, kv_chunk_size=32):
-    COL = 2
+    COL = 4
     iteration = SEQ_LEN // q_chunk_size
-    attn_score = ExternalModule(
-        top="transpose_matmul_with_scale",
-        impl_path=KERNEL_LIB_PATH + "attn_score.cc",
-        input_idx=[0, 1],
-        output_idx=[2],
-    )
 
     init_softmax = ExternalModule(
         top="init_softmax",
-        impl_path=KERNEL_LIB_PATH + "softmax.cc",
+        impl_path=KERNEL_LIB_PATH + "lut_softmax.cc",
         input_idx=[],
         output_idx=[0, 1],
     )
 
     online_softmax = ExternalModule(
         top="online_softmax",
-        impl_path=KERNEL_LIB_PATH + "softmax.cc",
+        impl_path=KERNEL_LIB_PATH + "lut_softmax.cc",
         input_idx=[0, 1, 2],
         output_idx=[3, 4, 5],
     )
@@ -235,7 +229,7 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, q_chunk_size=32, kv_chunk_size=32):
 
 
 if __name__ == "__main__":
-    N, D = 128, 64  # Sequence Length, Embedding Dim = 64
+    N, D = 2048, 64  # Sequence Length, Embedding Dim = 64
     chunk_size = 32
     # print(out.shape)
     # print(out)

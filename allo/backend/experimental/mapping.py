@@ -690,17 +690,9 @@ class ComputationGraph:
                         use_list = list(bufferized_stream_info.arg_a.uses)
                         assert len(use_list) == 1
                         stream_put = use_list[0].owner
-                        alloc_op = memref_d.AllocOp(
-                            stream.allo_element_type,
-                            [],
-                            [],
-                        )
-                        new_op = memref_d.CopyOp(
-                            stream_put.operands[1], alloc_op.memref
-                        )
                         for use in bufferized_stream_info.arg_b.uses:
                             stream_get = use.owner
-                            stream_get.results[0].replace_all_uses_with(alloc_op.memref)
+                            stream_get.results[0].replace_all_uses_with(stream_put.operands[1])
                             stream_get.erase()
                         param_a.pop(bufferized_stream_info.arg_idx_a)
                         param_b.pop(bufferized_stream_info.arg_idx_b)

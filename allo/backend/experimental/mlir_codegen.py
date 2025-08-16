@@ -622,15 +622,16 @@ class CodeGenerator:
                         ):  # allo.stream_put
                             if isinstance(fifo, tuple):
                                 fifo = fifo[0]
-                            with aie_ir.InsertionPoint(op):
+                            with aie_ir.InsertionPoint.at_block_begin(parent_body):
                                 acquired = fifo.acquire(0, 1)
-                                op.operands[1] = acquired
+                            op.operands[0].replace_all_uses_with(acquired)
                             with aie_ir.InsertionPoint.at_block_terminator(parent_body):
                                 fifo.release(0, 1)
+                            op.erase()
                         elif op.name == "memref.load":  # allo.stream_get, non-tensor
                             if isinstance(fifo, tuple):
                                 fifo = fifo[1]
-                            with aie_ir.InsertionPoint.at_block_begin(parent_body):
+                            with aie_ir.InsertionPoint(op):
                                 acquired = fifo.acquire(1, 1)
                             op.results[0].replace_all_uses_with(acquired)
                             with aie_ir.InsertionPoint.at_block_terminator(parent_body):
