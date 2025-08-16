@@ -449,9 +449,7 @@ float exp_bf16(int num_elems, VecIteratorIn &in, VecIteratorOut &out) {
   aie::accum<accfloat, VecLen> exp_val_accum_shift;
   exp_val_accum = aie::zeros<accfloat, VecLen>();
   // Maximum value computation
-  bfloat16 max_value;
-  aie::vector<bfloat16, VecLen> max_bfloat16;
-  aie::accum<accfloat, VecLen> acc0, acc1, acc_res;
+  aie::accum<accfloat, VecLen> acc0;
   aie::vector<int16, VecLen> input;
   aie::vector<int16, 2 * VecLen> input0;
 
@@ -463,28 +461,12 @@ float exp_bf16(int num_elems, VecIteratorIn &in, VecIteratorOut &out) {
       lookup_f(lut_f, step_f);
   aie::accum<accfloat, VecLen> exp_val;
 
-  auto input_max = in;
-  uint16 neg_infinity = (uint16)0xff80;
-  bfloat16 *bf_neg_infinity = (bfloat16 *)&neg_infinity;
-  aie::vector<bfloat16, VecLen> max_vec =
-      aie::broadcast<bfloat16, VecLen>((*bf_neg_infinity));
-  aie::vector<bfloat16, VecLen> temp;
-  for (int i = 0; i < elem_iters; i++)
-    chess_prepare_for_pipelining chess_loop_range(4, ) {
-      temp = aie::load_v<VecLen>(input_max);
-      max_vec = aie::max(max_vec, temp);
-    }
-  max_value = aie::reduce_max(max_vec);
-  max_bfloat16 = aie::broadcast<bfloat16, VecLen>(max_value);
-
   for (int i = 0; i < elem_iters; i++)
     chess_prepare_for_pipelining chess_loop_range(4, ) {
       aie::vector<bfloat16, VecLen> input_org = aie::load_v<VecLen>(in);
       in += VecLen;
       acc0.from_vector(input_org, 0);
-      acc1.from_vector(max_bfloat16, 0);
-      acc_res = sub(acc0, acc1);
-      input_bf16 = to_v16bfloat16(acc_res);
+      input_bf16 = to_v16bfloat16(acc0);
       input0 = v32int16(bfloat16_to_int(input_bf16, SM_SCALE_FAC));
 #ifndef SM_USE_MSB
       input = filter_even(input0);
