@@ -82,10 +82,10 @@ def _test_batched_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
                 F[:, :] = F_out
 
     mapping_primitives = gen_pingpong_gemm_mapping_primitive(
-        "gemma", Pm, Pn, Pk, col_num=2, row_num=2
+        "gemma", Pm, Pn, Pk, col_num=2, row_num=4
     )
     mapping_primitives.extend(
-        gen_pingpong_gemm_mapping_primitive("gemmb", Pm, Pn, Pk, col_num=2, row_num=2)
+        gen_pingpong_gemm_mapping_primitive("gemmb", Pm, Pn, Pk, col_num=2, row_num=4)
     )
     mod = df.build(
         top,
@@ -95,7 +95,7 @@ def _test_batched_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
         profile=True,
         warmup=200,
         num_iters=1000,
-        device_type="npu1_2col",
+        # device_type="npu1_2col",
     )
     if TyI is bfloat16:
         A = np.random.random((M, K)).astype(np_bfloat16)
@@ -128,6 +128,8 @@ def _test_batched_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
 
 
 if __name__ == "__main__":
-    # _test_batched_gemm(1024, 1024, 1024, 16, 16, 16, int16, int16)
-    _test_batched_gemm(512, 512, 512, 8, 8, 8, bfloat16, bfloat16)
+    _test_batched_gemm(2048, 3072, 768, 2048//64, 3072//64, 768//64, bfloat16, bfloat16)
+    # _test_batched_gemm(512, 512, 512, 8, 8, 8, bfloat16, bfloat16)
     # _test_batched_gemm(512, 512, 1024, 8, 8, 16, int16, int16)
+# https://huggingface.co/JackFram/llama-68m/blob/main/config.json: 768/3072
+# https://huggingface.co/meta-llama/Llama-3.2-1B/blob/main/config.json: 2048/8192

@@ -40,7 +40,7 @@ def gen_pingpong_gemm_mapping_primitive(Pm, Pn, Pk, col_num=4, row_num=4):
     return mapping_primitives
 
 
-def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
+def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO, project):
     assert TyI == TyO
     Mt, Nt = M // Pm, N // Pn
 
@@ -71,20 +71,16 @@ def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
         Pm,
         Pn,
         Pk,
-        # col_num=2, row_num=2
+        col_num=2, row_num=2
     )
 
     mod = df.build(
         top,
-        project=(
-            f"gemm_{M}x{N}x{K}_{TyI}.prj"
-            if TyI is not bfloat16
-            else f"gemm_{M}x{N}x{K}.prj"
-        ),
+        project=project,
         target="aie-mlir",
         mapping_primitives=mapping_primitives,
         profile=False,
-        device_type="npu1_4col",
+        device_type="npu1_1col",
     )
     if TyI is bfloat16:
         A = np.random.random((M, K)).astype(np_bfloat16)
@@ -113,23 +109,23 @@ def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
 if __name__ == "__main__":
     enable_skipping = True
     K_list = [256, 512, 1024, 2048]
-    M_list = [256, 512, 1024, 2048, 4096]
-    N_list = [256, 512, 1024, 2048, 4096]
+    M_list = [256, 512, 1024, 2048]
+    N_list = [256, 512, 1024, 2048]
     TyI = bfloat16
     for M_ in M_list:
         for N_ in N_list:
             for K_ in K_list:
                 project_dir = (
-                    f"gemm_{M_}x{N_}x{K_}_{TyI}.prj"
+                    f"gemm_1col_{M_}x{N_}x{K_}_{TyI}.prj"
                     if TyI is not bfloat16
-                    else f"gemm_{M_}x{N_}x{K_}.prj"
+                    else f"gemm_1col_{M_}x{N_}x{K_}.prj"
                 )
                 if enable_skipping and os.path.isdir(project_dir):
                     continue
                 try:
                     print(f"M={M_},N={N_},K={K_}")
                     _test_pingpong_gemm(
-                        M_, N_, K_, M_ // 64, N_ // 64, K_ // 64, TyI, TyI
+                        M_, N_, K_, M_ // 64, N_ // 64, K_ // 64, TyI, TyI, project_dir
                     )
                 except:
                     print("[NOTE]: have accuracy issue")
