@@ -71,7 +71,7 @@ def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO, project):
         Pm,
         Pn,
         Pk,
-        col_num=2, row_num=2
+        col_num=2, row_num=4
     )
 
     mod = df.build(
@@ -80,7 +80,7 @@ def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO, project):
         target="aie-mlir",
         mapping_primitives=mapping_primitives,
         profile=False,
-        device_type="npu1_1col",
+        device_type="npu1_2col",
     )
     if TyI is bfloat16:
         A = np.random.random((M, K)).astype(np_bfloat16)
@@ -107,7 +107,7 @@ def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO, project):
 
 
 if __name__ == "__main__":
-    enable_skipping = True
+    enable_skipping = False
     K_list = [256, 512, 1024, 2048]
     M_list = [256, 512, 1024, 2048]
     N_list = [256, 512, 1024, 2048]
@@ -116,9 +116,9 @@ if __name__ == "__main__":
         for N_ in N_list:
             for K_ in K_list:
                 project_dir = (
-                    f"gemm_1col_{M_}x{N_}x{K_}_{TyI}.prj"
+                    f"gemm_2col_{M_}x{N_}x{K_}_{TyI}.prj"
                     if TyI is not bfloat16
-                    else f"gemm_1col_{M_}x{N_}x{K_}.prj"
+                    else f"gemm_2col_{M_}x{N_}x{K_}.prj"
                 )
                 if enable_skipping and os.path.isdir(project_dir):
                     continue
