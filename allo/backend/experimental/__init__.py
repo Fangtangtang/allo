@@ -47,6 +47,7 @@ from .utils import (
     collect_lib_func_call,
     read_tensor_from_file,
     codegen_host,
+    codegen_profile_host,
     RuntimeArgs,
 )
 from .mapping import ComputationGraph
@@ -658,7 +659,7 @@ class AIE_MLIRModule:
                 runtime_arg.global_tensors.append(idx)
                 runtime_arg.current_size += np.prod(dtensor.shape)
                 self.module_runtime_args.append(runtime_arg)
-        host_code = codegen_host(self.global_tensors, self.module_runtime_args)
+        host_code = codegen_profile_host(self.global_tensors, self.module_runtime_args)
         with open(
             os.path.join(self.project_dir, "test.cpp"), "w", encoding="utf-8"
         ) as f:
