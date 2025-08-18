@@ -372,6 +372,7 @@ def inject_external_kernels(
                     kernel_header += f"#define DIM_M {M}\n"
                     kernel_header += f"#define DIM_N {N}\n"
                     kernel_header += f"#define DIM_K {K}\n"
+                    kernel_header += f"#define {dtype_1}_{out_dtype}_ONLY\n"
                     input_idx.extend([0, 1])
                     output_idx.append(2)
                     call_builtin = True

@@ -7,45 +7,17 @@ import allo
 from allo.ir.types import int4, int8, int16
 import allo.dataflow as df
 from allo.memory import Layout
-from ml_dtypes import bfloat16 as np_bfloat16
-
-seq_len = 4
-d_model = 768
-hidden = 3072
-
-# X = np.random.randn(seq_len, d_model)
-# W1 = np.random.randn(d_model, hidden)
-# W2 = np.random.randn(hidden, d_model)
-# Y2 = np.zeros((seq_len, d_model))
-
-# tile_x = 64
-# tile_w1 = 32
-# tile_w2 = 32
-
-# for i in range(0, d_model, tile_w2):
-#     for j in range(0, hidden, tile_w1):
-#         t_w2 = W2[j : j + tile_w1, i : i + tile_w2]
-#         for k in range(0, d_model, tile_x):
-#             t_x = X[:, k : k + tile_x]
-#             t_w1 = W1[k : k + tile_x, j : j + tile_w1]
-#             tile1_out = t_x @ t_w1
-#             Y2[:, i : i + tile_w2] += tile1_out @ t_w2
-
-# # print(Y2)
-# # print((X @ W1) @ W2)
-# # np.testing.assert_allclose(Y2, (X @ W1) @ W2, rtol=1e-5)
 
 
 def _test_gemm_1D():
     Ty = int8
     Ty_l = int4
-    M, N, K = 16, 16, 32
-    P0 = 1
-    
+    M, N, K = 64, 64, 64
+    P0 = 2
+
     LyA = Layout("S0R")
     LyB = Layout("RS1")
     LyC = Layout("S0S1")
-
 
     @df.region()
     def top():
@@ -60,4 +32,115 @@ def _test_gemm_1D():
     mod(A, B, C)
     np.testing.assert_allclose(C, A @ B, atol=1e-5)
     print("PASSED!")
-_test_gemm_1D()
+
+
+def _test_gemm_2D():
+    Ty = int8
+    Ty_l = int4
+    M, N, K = 64, 64, 64
+    P0, P1 = 2, 2
+    LyA = Layout("S0R")
+    LyB = Layout("RS1")
+    LyC = Layout("S0S1")
+
+    @df.region()
+    def top():
+        @df.kernel(mapping=[P0, P1])
+        def gemm(A: Ty[M, K] @ LyA, B: Ty_l[K, N] @ LyB, C: Ty[M, N] @ LyC):
+            C[:, :] = allo.matmul(A, B)
+
+    mod = df.build(top, target="aie-mlir")
+    A = np.random.randint(-4, 4, (M, K)).astype(np.int8)
+    B = np.random.randint(-4, 4, (K, N)).astype(np.int8)
+    C = np.zeros((M, N)).astype(np.int8)
+    mod(A, B, C)
+    np_C = A.astype(np.int8) @ B.astype(np.int8)
+    np.testing.assert_allclose(C, np_C, atol=1e-5)
+    print("PASSED!")
+
+
+def gen_pingpong_gemm_mapping_primitive(Pm, Pn, Pk, col_num=4, row_num=4):
+    # chain on k dimension
+    mapping_primitives = []
+    bases: list[list[str]] = []
+    for i in range(Pm):
+        bases.append([])
+        for j in range(Pn):
+            base = f"gemm_0_{i}_{j}"
+            for k in range(1, Pk):
+                mapping_primitives.append(("chain", [base, f"gemm_{k}_{i}_{j}"]))
+                base += f"-gemm_{k}_{i}_{j}"
+            bases[i].append(base)
+
+    if Pn // col_num < 1 or Pm // row_num < 1:
+        col_num, row_num = row_num, col_num
+
+    if Pn // col_num > 1 or Pm // row_num > 1:
+        for i in range(row_num):
+            for j in range(col_num):
+                bundle_list = []
+                for p in range(Pm // row_num):
+                    for q in range(Pn // col_num):
+                        bundle_list.append(bases[i + row_num * p][j + col_num * q])
+                mapping_primitives.append(("bundle", bundle_list))
+
+    return mapping_primitives
+
+
+def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk):
+    TyI = int8
+    TyI_l = int4
+    TyO = int8
+    Mt, Nt = M // Pm, N // Pn
+
+    LyA = Layout("S1S2")
+    LyB = Layout("S2S0")
+    LyC = Layout("S1S0")
+
+    @df.region()
+    def top():
+        pipe = df.array(
+            df.pipe(dtype=TyO, shape=(Mt, Nt), depth=2), shape=(Pk - 1, Pm, Pn)
+        )
+
+        @df.kernel(mapping=[Pk, Pm, Pn])
+        def gemm(A: TyI[M, K] @ LyA, B: TyI_l[K, N] @ LyB, C: TyO[M, N] @ LyC):
+            pk, pm, pn = df.get_pid()
+            with allo.meta_if(pk > 0):
+                C_in: TyO[Mt, Nt] = pipe[pk - 1, pm, pn].get()
+            with allo.meta_else():
+                C_in: TyO[Mt, Nt] = 0
+            C_out: TyO[Mt, Nt] = allo.add(allo.matmul(A, B), C_in)
+            with allo.meta_if(pk < Pk - 1):
+                pipe[pk, pm, pn].put(C_out)
+            with allo.meta_elif(pk == Pk - 1):
+                C[:, :] = C_out
+
+    mapping_primitives = gen_pingpong_gemm_mapping_primitive(
+        Pm,
+        Pn,
+        Pk,
+    )
+
+    mod = df.build(
+        top,
+        project="top.prj",
+        target="aie-mlir",
+        mapping_primitives=mapping_primitives,
+        profile=True,
+        warmup=200,
+        num_iters=1000,
+        device_type="npu1_4col",
+    )
+    A = np.random.randint(-4, 4, (M, K)).astype(np.int8)
+    B = np.random.randint(-4, 4, (K, N)).astype(np.int8)
+    C = np.zeros((M, N)).astype(np.int8)
+    mod(A, B, C)
+    np.testing.assert_allclose(C, A @ B, atol=1e-5)
+    print("PASSED!")
+
+
+if __name__ == "__main__":
+    # _test_gemm_1D()
+    # _test_gemm_2D()
+    _test_pingpong_gemm(512, 512, 512, 8, 8, 8)

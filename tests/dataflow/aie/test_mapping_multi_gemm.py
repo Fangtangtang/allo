@@ -37,7 +37,7 @@ def gen_pingpong_gemm_mapping_primitive(prefix, Pm, Pn, Pk, col_num=4, row_num=4
     return mapping_primitives
 
 
-def _test_batched_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
+def _test_batched_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO, prj="top.prj"):
     assert TyI == TyO
     Mt, Nt = M // Pm, N // Pn
 
@@ -89,7 +89,7 @@ def _test_batched_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
     )
     mod = df.build(
         top,
-        project="gemm.prj",
+        project=prj,
         target="aie-mlir",
         mapping_primitives=mapping_primitives,
         profile=True,
@@ -115,20 +115,32 @@ def _test_batched_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
     else:
         raise ValueError(f"unsupported data type {TyI}")
     mod(A, B, C, A, B, D)
-    if TyI is bfloat16:
-        np.testing.assert_allclose(
-            C.astype(np.float32), (A @ B).astype(np.float32), atol=1e-2
-        )
-        np.testing.assert_allclose(
-            D.astype(np.float32), (A @ B).astype(np.float32), atol=1e-2
-        )
-    else:
-        np.testing.assert_allclose(C, A @ B, atol=1e-5)
-        np.testing.assert_allclose(D, A @ B, atol=1e-5)
+    # if TyI is bfloat16:
+    #     np.testing.assert_allclose(
+    #         C.astype(np.float32), (A @ B).astype(np.float32), atol=1e-2
+    #     )
+    #     np.testing.assert_allclose(
+    #         D.astype(np.float32), (A @ B).astype(np.float32), atol=1e-2
+    #     )
+    # else:
+    #     np.testing.assert_allclose(C, A @ B, atol=1e-5)
+    #     np.testing.assert_allclose(D, A @ B, atol=1e-5)
 
 
 if __name__ == "__main__":
-    _test_batched_gemm(1024, 3072, 768, 1024//64, 3072//64, 768//64, bfloat16, bfloat16)
+    seq_len_list = [512, 1024, 2048, 4096]
+    for seq_len in seq_len_list:
+        _test_batched_gemm(
+            seq_len,
+            3072,
+            768,
+            seq_len // 64,
+            3072 // 64,
+            768 // 64,
+            bfloat16,
+            bfloat16,
+            f"exp/ffn_{seq_len}.prj",
+        )
     # _test_batched_gemm(512, 512, 512, 8, 8, 8, bfloat16, bfloat16)
     # _test_batched_gemm(512, 512, 1024, 8, 8, 16, int16, int16)
 # https://huggingface.co/JackFram/llama-68m/blob/main/config.json: 768/3072

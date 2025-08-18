@@ -618,7 +618,6 @@ class AIE_MLIRModule:
             core_funcs,
             external_funcs,
         )
-
         # TODO: opt passes on aie-mlir
         passes = [
             "func.func(affine-loop-unroll), canonicalize",
