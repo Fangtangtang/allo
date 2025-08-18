@@ -50,7 +50,7 @@ from .utils import (
     codegen_host,
     codegen_profile_host,
     RuntimeArgs,
-    pack_int4
+    pack_int4,
 )
 from .mapping import ComputationGraph
 
@@ -290,10 +290,12 @@ class AIE_MLIRModule:
                 M, K = MemRefType(input_a.type).shape
                 _, N = MemRefType(input_b.type).shape
                 dtype = str(input_a.type.element_type)
-                dtype_2 =  str(input_b.type.element_type)
+                dtype_2 = str(input_b.type.element_type)
                 out_dtype = str(output.type.element_type)
                 if dtype == dtype_2:
-                    matmul_configs = matmul_external_kernel_config_map[(dtype, out_dtype)]
+                    matmul_configs = matmul_external_kernel_config_map[
+                        (dtype, out_dtype)
+                    ]
                     if self.device == "npu1":
                         m, k, n = matmul_configs["aie2"]
                     else:
@@ -841,11 +843,9 @@ class AIE_MLIRModule:
                 if str(dtensor.dtype) == "i4":
                     arg = pack_int4(arg)
                 with open(
-                    os.path.join(self.project_dir, f"input{idx}.data"),
-                    "w",
-                    encoding="utf-8",
+                    os.path.join(self.project_dir, f"input{idx}.data"), "wb"
                 ) as f:
-                    f.write("\n".join([str(i) for i in arg.flatten()]))
+                    f.write(arg.tobytes())
         cmd = f"cd {self.project_dir} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE --trace_sz {self.trace_size} {f'-p true --warmup {self.warmup} --test_iter {self.num_iters}' if self.profile else ''}"
         with subprocess.Popen(cmd, shell=True) as process:
             process.wait()

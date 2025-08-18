@@ -363,7 +363,10 @@ def inject_external_kernels(
                 dtype_1 = str(op.inputs[0].type.element_type)
                 dtype_2 = str(op.inputs[1].type.element_type)
                 out_dtype = str(op.outputs[0].type.element_type)
-                if dtype_1 == dtype_2 and (dtype_1, out_dtype) in matmul_external_kernel_config_map:
+                if (
+                    dtype_1 == dtype_2
+                    and (dtype_1, out_dtype) in matmul_external_kernel_config_map
+                ):
                     include_src.add('#include "mm.cc"\n')
                     use_external_kernels[df_function_name] = True
                     kernel_header += f"#define DIM_M {M}\n"
@@ -674,7 +677,7 @@ def simplify_matmul_accumulate(function: allo_func_d.FuncOp):
 # Run-time Utils
 # ############################################################
 np_supported_types = {
-    "bf16": np.float32,  # numpy does not support bf16
+    "bf16": np.uint16,  # numpy does not support bf16
     "f16": np.float16,
     "f32": np.float32,
     "f64": np.float64,
@@ -709,6 +712,7 @@ class RuntimeArgs:
 
 import numpy as np
 
+
 def pack_int4(arr: np.ndarray) -> np.ndarray:
     arr_clipped = np.clip(arr, -8, 7).astype(np.int8)
     arr_u4 = (arr_clipped.astype(np.int8) & 0x0F).astype(np.uint8)
@@ -716,7 +720,7 @@ def pack_int4(arr: np.ndarray) -> np.ndarray:
         arr_u4 = np.append(arr_u4, 0)
     low = arr_u4[0::2]
     high = arr_u4[1::2] << 4
-    packed = (low | high).astype(np.int8) 
+    packed = (low | high).astype(np.int8)
     return packed
 
 
@@ -734,7 +738,10 @@ def unpack_int4(packed: np.ndarray) -> np.ndarray:
 
 
 def read_tensor_from_file(dtype, shape, file_path):
-    arr = np.fromfile(file_path, sep="\n", dtype=np_supported_types[str(dtype)])
+    arr = np.fromfile(file_path, dtype=np_supported_types[str(dtype)])
+    if str(dtype) == "bf16":
+        f32_arr = (arr.astype(np.uint32) << 16).view(np.float32)
+        return f32_arr.reshape(shape)
     return arr.reshape(shape)
 
 
@@ -1112,16 +1119,15 @@ def codegen_host(global_tensors: dict[int, DTensor], runtime_args: list[RuntimeA
                     code += format_str("  return 1;", strip=False)
                     code += format_str("}")
                     size = np.prod(global_tensors[dtensor_idx].shape)
-                    code += format_str(f"for (int i = 0; i < {size}; i++) {{")
-                    with format_code(indent=4):
-                        code += format_str(f"{dtype} num;")
-                        code += format_str(f"ifile{dtensor_idx} >> num;")
-                        if dtype == "int8_t":
-                            code += format_str(f"srcVec{idx}.push_back(static_cast<int8_t>(num));")
-                        else:
-                            code += format_str(f"srcVec{idx}.push_back(num);")
-                        code += format_str('  std::cout << static_cast<int8_t>(num) << "\\n";', strip=False)
-                    code += format_str("}")
+                    code += format_str(
+                        f"std::vector<{dtype}> vec{dtensor_idx}({size});"
+                    )
+                    code += format_str(
+                        f"ifile{dtensor_idx}.read(reinterpret_cast<char*>(vec{dtensor_idx}.data()), {size} * sizeof({dtype}));"
+                    )
+                    code += format_str(
+                        f"srcVec{idx}.insert(srcVec{idx}.end(), vec{dtensor_idx}.begin(), vec{dtensor_idx}.end());"
+                    )
                 code += format_str(
                     f"memcpy(bufIn{idx}, srcVec{idx}.data(), (srcVec{idx}.size() * sizeof({dtype})));"
                 )
@@ -1254,6 +1260,7 @@ def codegen_host(global_tensors: dict[int, DTensor], runtime_args: list[RuntimeA
                     code += format_str(f"ifile{dtensor_idx}.close();")
             else:
                 dtype = aie_ctype_map[str(arg.dtype)]
+
                 code += format_str(
                     f"\nbo_out{idx}.sync(XCL_BO_SYNC_BO_FROM_DEVICE);", strip=False
                 )
@@ -1262,28 +1269,13 @@ def codegen_host(global_tensors: dict[int, DTensor], runtime_args: list[RuntimeA
                 )
                 offset = 0
                 for dtensor_idx in arg.global_tensors:
-                    code += format_str(
-                        f'std::ofstream ofile{dtensor_idx}("output{dtensor_idx}.data");'
-                    )
-                    code += format_str(f"if (!ofile{dtensor_idx}.is_open()) {{")
-                    code += format_str(
-                        '    std::cerr << "Error: Could not open output file.\\n";'
-                    )
-                    code += format_str("    return 1;")
-                    code += format_str("}")
                     out_size = np.prod(global_tensors[dtensor_idx].shape)
-                    code += format_str(f"for (uint32_t i = 0; i < {out_size}; i++) {{")
-                    if dtype == "int8_t":
-                        code += format_str(
-                            f'  ofile{dtensor_idx} <<  static_cast<int>(*(bufOut{idx} + {offset} + i)) << "\\n";',
-                            strip=False,
-                        )
-                    else:
-                        code += format_str(
-                            f'  ofile{dtensor_idx} << *(bufOut{idx}  + {offset} + i) << "\\n";',
-                            strip=False,
-                        )
-                    code += format_str("}")
+                    code += format_str(
+                        f'std::ofstream ofile{dtensor_idx}("output{dtensor_idx}.data", std::ios::binary);'
+                    )
+                    code += format_str(
+                        f"ofile{dtensor_idx}.write(reinterpret_cast<const char*>(bufOut{idx} + {offset}), {out_size} * sizeof({dtype}));"
+                    )
                     code += format_str(f"ofile{dtensor_idx}.close();")
                     offset += out_size
 

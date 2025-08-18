@@ -38,8 +38,8 @@ hidden = 3072
 
 def _test_gemm_1D():
     Ty = int8
-    Ty_l = int8
-    M, N, K = 16, 16, 16
+    Ty_l = int4
+    M, N, K = 16, 16, 32
     P0 = 1
     
     LyA = Layout("S0R")
@@ -54,8 +54,8 @@ def _test_gemm_1D():
             C[:, :] = allo.matmul(A, B)
 
     mod = df.build(top, target="aie-mlir")
-    A = np.random.randint(0, 4, (M, K)).astype(np.int8)
-    B = np.random.randint(0, 4, (K, N)).astype(np.int8)
+    A = np.random.randint(-4, 4, (M, K)).astype(np.int8)
+    B = np.random.randint(-4, 4, (K, N)).astype(np.int8)
     C = np.zeros((M, N)).astype(np.int8)
     mod(A, B, C)
     np.testing.assert_allclose(C, A @ B, atol=1e-5)
