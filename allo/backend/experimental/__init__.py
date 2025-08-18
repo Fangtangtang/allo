@@ -14,6 +14,7 @@ try:
 except ImportError:
     pass
 
+import allo
 from allo._mlir.exceptions import APIWarning
 import allo._mlir._mlir_libs._mlir as allo_ir
 from allo._mlir.dialects import (
@@ -49,6 +50,7 @@ from .utils import (
     codegen_host,
     codegen_profile_host,
     RuntimeArgs,
+    pack_int4
 )
 from .mapping import ComputationGraph
 
@@ -288,12 +290,16 @@ class AIE_MLIRModule:
                 M, K = MemRefType(input_a.type).shape
                 _, N = MemRefType(input_b.type).shape
                 dtype = str(input_a.type.element_type)
+                dtype_2 =  str(input_b.type.element_type)
                 out_dtype = str(output.type.element_type)
-                matmul_configs = matmul_external_kernel_config_map[(dtype, out_dtype)]
-                if self.device == "npu1":
-                    m, k, n = matmul_configs["aie2"]
-                else:
-                    m, k, n = matmul_configs["aie2p"]
+                if dtype == dtype_2:
+                    matmul_configs = matmul_external_kernel_config_map[(dtype, out_dtype)]
+                    if self.device == "npu1":
+                        m, k, n = matmul_configs["aie2"]
+                    else:
+                        m, k, n = matmul_configs["aie2p"]
+                elif dtype == "i8" and dtype_2 == "i4":
+                    m, k, n = 4, 16, 8
                 with function.context, allo_ir.ir.Location.unknown():
                     new_input_0 = allo_d.transform_layout(
                         input_a.type,
@@ -576,6 +582,21 @@ class AIE_MLIRModule:
         with self.allo_module.context:
             mlir_pass_manager.parse(pipeline).run(self.allo_module.operation)
         # ------------------------- mlir-aie code generation -------------------------
+        with allo_ir.ir.Context() as ctx, allo_ir.ir.Location.unknown():
+            pattern = re.compile(r"memref<([\dx]+)xi4>")
+            module_str = str(self.allo_module)
+
+            def repl(match):
+                dims_str = match.group(1)
+                dims = list(map(int, dims_str.split("x")))
+                dims[-1] //= 2
+
+                new_dims_str = "x".join(map(str, dims))
+                return f"memref<{new_dims_str}xi8>"
+
+            module_str = pattern.sub(repl, module_str)
+            self.allo_module = allo.invoke_mlir_parser(module_str)
+
         top_func, core_funcs, external_funcs = classify_aie_functions_experimental(
             self.allo_module, self.top_func_name
         )
@@ -816,12 +837,15 @@ class AIE_MLIRModule:
     def __call__(self, *args):
         for idx, dtensor in self.global_tensors.items():
             if dtensor.is_input:
+                arg = args[idx]
+                if str(dtensor.dtype) == "i4":
+                    arg = pack_int4(arg)
                 with open(
                     os.path.join(self.project_dir, f"input{idx}.data"),
                     "w",
                     encoding="utf-8",
                 ) as f:
-                    f.write("\n".join([str(i) for i in args[idx].flatten()]))
+                    f.write("\n".join([str(i) for i in arg.flatten()]))
         cmd = f"cd {self.project_dir} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE --trace_sz {self.trace_size} {f'-p true --warmup {self.warmup} --test_iter {self.num_iters}' if self.profile else ''}"
         with subprocess.Popen(cmd, shell=True) as process:
             process.wait()

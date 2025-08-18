@@ -4,7 +4,7 @@
 import numpy as np
 import os
 import allo
-from allo.ir.types import int4, int8
+from allo.ir.types import int4, int8, int16
 import allo.dataflow as df
 from allo.memory import Layout
 from ml_dtypes import bfloat16 as np_bfloat16
@@ -38,7 +38,7 @@ hidden = 3072
 
 def _test_gemm_1D():
     Ty = int8
-    Ty_l = int4
+    Ty_l = int8
     M, N, K = 16, 16, 16
     P0 = 1
     
@@ -54,8 +54,8 @@ def _test_gemm_1D():
             C[:, :] = allo.matmul(A, B)
 
     mod = df.build(top, target="aie-mlir")
-    A = np.random.random((M, K)).astype(np.int8)
-    B = np.random.random((K, N)).astype(np.int8)
+    A = np.random.randint(0, 4, (M, K)).astype(np.int8)
+    B = np.random.randint(0, 4, (K, N)).astype(np.int8)
     C = np.zeros((M, N)).astype(np.int8)
     mod(A, B, C)
     np.testing.assert_allclose(C, A @ B, atol=1e-5)

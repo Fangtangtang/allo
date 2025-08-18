@@ -71,7 +71,7 @@ def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO, project):
         Pm,
         Pn,
         Pk,
-        col_num=2, row_num=4
+        # col_num=2, row_num=4
     )
 
     mod = df.build(
@@ -80,7 +80,7 @@ def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO, project):
         target="aie-mlir",
         mapping_primitives=mapping_primitives,
         profile=False,
-        device_type="npu1_2col",
+        device_type="npu1_4col",
     )
     if TyI is bfloat16:
         A = np.random.random((M, K)).astype(np_bfloat16)
@@ -111,21 +111,21 @@ if __name__ == "__main__":
     K_list = [256, 512, 1024, 2048]
     M_list = [256, 512, 1024, 2048]
     N_list = [256, 512, 1024, 2048]
-    TyI = bfloat16
+    TyI = int8
     for M_ in M_list:
         for N_ in N_list:
             for K_ in K_list:
                 project_dir = (
-                    f"gemm_2col_{M_}x{N_}x{K_}_{TyI}.prj"
+                    f"gemm_{M_}x{N_}x{K_}_{TyI}.prj"
                     if TyI is not bfloat16
-                    else f"gemm_2col_{M_}x{N_}x{K_}.prj"
+                    else f"gemm_{M_}x{N_}x{K_}.prj"
                 )
                 if enable_skipping and os.path.isdir(project_dir):
                     continue
                 try:
                     print(f"M={M_},N={N_},K={K_}")
                     _test_pingpong_gemm(
-                        M_, N_, K_, M_ // 64, N_ // 64, K_ // 64, TyI, TyI, project_dir
+                        M_, N_, K_, M_ // 64, N_ // 128, K_ // 64, TyI, TyI, project_dir
                     )
                 except:
                     print("[NOTE]: have accuracy issue")

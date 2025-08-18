@@ -92,7 +92,7 @@ class FIFO:
         src: str,
         dst: list[str],
         data_shape: list[int],
-        dtype: str,
+        dtype,
         depth: int = 2,
         dimensions_to_stream: tuple[list[int], list[int], list[int]] | None = None,
     ):
@@ -100,12 +100,19 @@ class FIFO:
         self.src = src
         self.dst = dst
         self.data_shape = data_shape
-        self.dtype = dtype
+        self.dtype = str(dtype)
+        if self.dtype == "i4":
+            self.dtype = "i8"
+            self.data_shape[-1] //= 2
         self.depth = depth
         self.dimensions_to_stream: list[tuple[int, int]] = []
         if dimensions_to_stream is not None and len(dimensions_to_stream) == 3:
             sizes = dimensions_to_stream[1]
             strides = dimensions_to_stream[2]
+            if str(dtype) == "i4":
+                sizes[-1] //= 2
+                for i in range(3):
+                    strides[i] //= 2
             for size, stride in zip(sizes, strides):
                 self.dimensions_to_stream.append((size, stride))
 
