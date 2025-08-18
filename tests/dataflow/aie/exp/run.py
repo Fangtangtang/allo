@@ -56,7 +56,7 @@ def call_mlir(
 from allo.ir.types import bfloat16, int16, int8
 
 
-def run(M, N, K, dtype):
+def run(M, N, K, dtype, tag = None):
     if dtype is bfloat16:
         A = np.random.random((M, K)).astype(np_bfloat16)
         B = np.random.random((K, N)).astype(np_bfloat16)
@@ -73,8 +73,12 @@ def run(M, N, K, dtype):
         raise ValueError(f"unsupported data type {dtype}")
     try:
         if dtype is bfloat16:
+            if tag is not None:
+                prj= f"gemm_{tag}_{M}x{N}x{K}.prj"
+            else:
+                prj = f"gemm_{M}x{N}x{K}.prj",
             call_mlir(
-                f"gemm_{M}x{N}x{K}.prj",
+                prj,
                 [dtype, dtype, dtype],
                 [0, 1],
                 [2],
@@ -102,5 +106,5 @@ N_list = [256, 512, 1024, 2048]
 for M_ in M_list:
     for N_ in N_list:
         for K_ in K_list:
-            run(M_, N_, K_, bfloat16)
+            run(M_, N_, K_, bfloat16, "2col")
 # run(256, 256, 256, int16)
