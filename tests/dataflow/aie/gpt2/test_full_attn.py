@@ -44,13 +44,18 @@ def flash_attention(Q, K, V, chunk_size=32):
 
             K_chunk = K[k_start:k_end, :]  # (ck, D)
             logits = Q_chunk @ K_chunk.T / np.sqrt(D)  # (cq, ck)
+
             local_max = np.max(logits, axis=1, keepdims=True)
-            max_logit = np.maximum(max_logit, local_max)
-            exp_logits = np.exp(logits - max_logit)
+            new_max = np.maximum(max_logit, local_max)
+            exp_logits = np.exp(logits - new_max)
+            scale = np.exp(max_logit - new_max)
+            sum_exp = sum_exp * scale + exp_logits.sum(axis=1, keepdims=True)
 
             V_chunk = V[k_start:k_end, :]  # (ck, D)
-            sum_exp += exp_logits.sum(axis=1, keepdims=True)
-            acc += exp_logits @ V_chunk
+            O = exp_logits @ V_chunk
+
+            acc = acc * scale + O
+            max_logit = new_max
         output[q_start:q_end, :] = acc / sum_exp
 
     return output
@@ -76,7 +81,14 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, q_chunk_size=32, kv_chunk_size=32):
         top="online_softmax",
         impl_path=KERNEL_LIB_PATH + "lut_softmax.cc",
         input_idx=[0, 1, 2],
-        output_idx=[3, 4, 5],
+        output_idx=[3, 4, 5, 6],
+    )
+
+    rescale_attn_output = ExternalModule(
+        top="rescale_attn_output",
+        impl_path=KERNEL_LIB_PATH + "attn_out.cc",
+        input_idx=[0, 1],
+        output_idx=[2],
     )
 
     scale_attn_output = ExternalModule(
@@ -118,18 +130,16 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, q_chunk_size=32, kv_chunk_size=32):
             shape=(SEQ_LEN // q_chunk_size,),
         )
 
+        exp_scale_pipe = df.array(
+            df.pipe(dtype=Ty, shape=(kv_chunk_size,), depth=2),
+            shape=(SEQ_LEN // q_chunk_size,),
+        )
+
         @df.kernel(mapping=[SEQ_LEN // q_chunk_size, 1])
         def send_q(Q: Ty[SEQ_LEN, HEAD_DIM] @ Ly_outer):
             po, _ = df.get_pid()
             for i in range(SEQ_LEN // kv_chunk_size):
                 q_pipe[po, i].put(Q)
-
-        # @df.kernel(mapping=[SEQ_LEN // q_chunk_size, SEQ_LEN // kv_chunk_size])
-        # def cal_attn_score(K: Ty[SEQ_LEN, HEAD_DIM] @ Ly_inner):
-        #     score: Ty[q_chunk_size, kv_chunk_size]
-        #     po, pi = df.get_pid()
-        #     attn_score(q_pipe[po, pi].get(), K, score)
-        #     score_pipe[po, pi].put(score)
 
         @df.kernel(mapping=[SEQ_LEN // q_chunk_size, SEQ_LEN // kv_chunk_size])
         def cal_attn_score(K: Ty[HEAD_DIM, SEQ_LEN] @ Ly_K):
@@ -148,15 +158,18 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, q_chunk_size=32, kv_chunk_size=32):
             # softmax
             for i in range(SEQ_LEN // kv_chunk_size):
                 attn_weight: Ty[q_chunk_size, kv_chunk_size]
+                scale_exp: Ty[kv_chunk_size]
                 # FIXME: / sqrt(HEAD_DIM) somewhere (maybe the best choice is to do that in QK external kernel)
                 online_softmax(
                     score_pipe[po, i].get(),
                     max_logit,
                     sum_exp,
                     attn_weight,
+                    scale_exp,
                     max_logit,
                     sum_exp,
                 )
+                exp_scale_pipe[po].put(scale_exp)
                 weight_pipe[po, i].put(attn_weight)
             exp_sum_pipe[po].put(sum_exp)
 
@@ -170,6 +183,7 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, q_chunk_size=32, kv_chunk_size=32):
             attn_output: Ty[q_chunk_size, HEAD_DIM] = 0
             po, _ = df.get_pid()
             for i in range(SEQ_LEN // kv_chunk_size):
+                rescale_attn_output(attn_output, exp_scale_pipe[po].get(), attn_output)
                 attn_output[:, :] = allo.add(attn_output, o_pipe[po, i].get())
             scale_attn_output(attn_output, exp_sum_pipe[po].get(), O)
 
@@ -229,7 +243,7 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, q_chunk_size=32, kv_chunk_size=32):
 
 
 if __name__ == "__main__":
-    N, D = 4096, 64  # Sequence Length, Embedding Dim = 64
+    N, D = 1024, 64  # Sequence Length, Embedding Dim = 64
     chunk_size = 32
     # print(out.shape)
     # print(out)

@@ -537,12 +537,13 @@ void init_softmax(bfloat16 max_logit[32], bfloat16 sum_exp[32]) {
 
 void online_softmax(bfloat16 attention_score[32][32],
                     bfloat16 prev_max_logit[32], bfloat16 prev_sum_exp[32],
-                    bfloat16 attention_weight[32][32],
+                    bfloat16 attention_weight[32][32], bfloat16 scale_exp[32],
                     bfloat16 new_max_logit[32], bfloat16 new_sum_exp[32]) {
   const int ROW = 32;
   const int CHUNK_SIZE = 32;
   constexpr int vec_factor = 256 / (sizeof(bfloat16) * 8);
   const int F = CHUNK_SIZE / vec_factor;
+  bfloat16 tmp_max_logit[32];
   for (int r = 0; r < ROW; ++r) {
     bfloat16 *score_row_ptr = &attention_score[r][0];
     // row max
@@ -553,6 +554,7 @@ void online_softmax(bfloat16 attention_score[32][32],
       row_max = std::max(row_max, bfloat16(aie::reduce_max(scores) * 0.125f));
       score_row_ptr += vec_factor;
     }
+    tmp_max_logit[r] = prev_max_logit[r] - row_max;
     new_max_logit[r] = row_max;
     score_row_ptr = &attention_score[r][0];
     for (int i = 0; i < F; i++) {
@@ -562,11 +564,15 @@ void online_softmax(bfloat16 attention_score[32][32],
       aie::store_v(score_row_ptr, scores);
       score_row_ptr += vec_factor;
     }
-    // exp
+  }
+  const bfloat16 *__restrict scaleIn = tmp_max_logit;
+  bfloat16 *__restrict scaleExp = scale_exp;
+  exp_bf16<16>(ROW, scaleIn, scaleExp);
+  for (int r = 0; r < ROW; ++r) {
     const bfloat16 *__restrict pIn = &attention_score[r][0];
     bfloat16 *__restrict pExp = &attention_weight[r][0];
     float accum_exp_val = exp_bf16<16>(CHUNK_SIZE, pIn, pExp);
-    new_sum_exp[r] += accum_exp_val;
+    new_sum_exp[r] = new_sum_exp[r] * scale_exp[r] + accum_exp_val;
   }
 }
 
