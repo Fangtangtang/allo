@@ -715,13 +715,14 @@ import numpy as np
 
 
 def pack_int4(arr: np.ndarray) -> np.ndarray:
+    arr = arr.flatten()
     arr_clipped = np.clip(arr, -8, 7).astype(np.int8)
     arr_u4 = (arr_clipped.astype(np.int8) & 0x0F).astype(np.uint8)
     if arr_u4.size % 2 != 0:
         arr_u4 = np.append(arr_u4, 0)
     low = arr_u4[0::2]
     high = arr_u4[1::2] << 4
-    packed = (low | high).astype(np.int8)
+    packed = (low | high).astype(np.uint8)
     return packed
 
 
@@ -1120,6 +1121,8 @@ def codegen_host(global_tensors: dict[int, DTensor], runtime_args: list[RuntimeA
                     code += format_str("  return 1;", strip=False)
                     code += format_str("}")
                     size = np.prod(global_tensors[dtensor_idx].shape)
+                    if str(global_tensors[dtensor_idx].dtype) == "i4":
+                        size //= 2
                     code += format_str(
                         f"std::vector<{dtype}> vec{dtensor_idx}({size});"
                     )
@@ -1271,6 +1274,8 @@ def codegen_host(global_tensors: dict[int, DTensor], runtime_args: list[RuntimeA
                 offset = 0
                 for dtensor_idx in arg.global_tensors:
                     out_size = np.prod(global_tensors[dtensor_idx].shape)
+                    if str(global_tensors[dtensor_idx].dtype) == "i4":
+                        out_size //= 2
                     code += format_str(
                         f'std::ofstream ofile{dtensor_idx}("output{dtensor_idx}.data", std::ios::binary);'
                     )

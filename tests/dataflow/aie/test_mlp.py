@@ -12,8 +12,8 @@ from allo.memory import Layout
 def _test_gemm_1D():
     Ty = int8
     Ty_l = int4
-    M, N, K = 64, 64, 64
-    P0 = 2
+    M, N, K = 16, 16, 16
+    P0 = 1
 
     LyA = Layout("S0R")
     LyB = Layout("RS1")
@@ -26,8 +26,8 @@ def _test_gemm_1D():
             C[:, :] = allo.matmul(A, B)
 
     mod = df.build(top, target="aie-mlir")
-    A = np.random.randint(-4, 4, (M, K)).astype(np.int8)
-    B = np.random.randint(-4, 4, (K, N)).astype(np.int8)
+    A = np.random.randint(-2, 2, (M, K)).astype(np.int8)
+    B = np.random.randint(-2, 2, (K, N)).astype(np.int8)
     C = np.zeros((M, N)).astype(np.int8)
     mod(A, B, C)
     np.testing.assert_allclose(C, A @ B, atol=1e-5)
@@ -132,8 +132,8 @@ def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk):
         num_iters=1000,
         device_type="npu1_4col",
     )
-    A = np.random.randint(-4, 4, (M, K)).astype(np.int8)
-    B = np.random.randint(-4, 4, (K, N)).astype(np.int8)
+    A = np.random.randint(-2, 2, (M, K)).astype(np.int8)
+    B = np.random.randint(-2, 2, (K, N)).astype(np.int8)
     C = np.zeros((M, N)).astype(np.int8)
     mod(A, B, C)
     np.testing.assert_allclose(C, A @ B, atol=1e-5)

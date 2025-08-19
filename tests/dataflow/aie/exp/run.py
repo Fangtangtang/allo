@@ -106,5 +106,5 @@ N_list = [256, 512, 1024, 2048]
 for M_ in M_list:
     for N_ in N_list:
         for K_ in K_list:
-            run(M_, N_, K_, bfloat16, "2col")
+            run(M_, N_, K_, bfloat16, "1col")
 # run(256, 256, 256, int16)
