@@ -223,17 +223,18 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, q_chunk_size=32, kv_chunk_size=32):
     # print(mapping_primitives)
     mod = df.build(
         top,
+        project=f"fa_{SEQ_LEN}.prj",
         target="aie-mlir",
         mapping_primitives=mapping_primitives_,
-        profile=True,
+        profile=False,
         warmup=20,
         num_iters=100,
         # device_type="npu1_2col",
     )
-    Q = np.random.randn(N, D).astype(np_bfloat16)
-    K = np.random.randn(N, D).astype(np_bfloat16)
-    V = np.random.randn(N, D).astype(np_bfloat16)
-    O = np.zeros(N * D).astype(np_bfloat16)
+    Q = np.random.randn(SEQ_LEN, HEAD_DIM).astype(np_bfloat16)
+    K = np.random.randn(SEQ_LEN, HEAD_DIM).astype(np_bfloat16)
+    V = np.random.randn(SEQ_LEN, HEAD_DIM).astype(np_bfloat16)
+    O = np.zeros(SEQ_LEN * HEAD_DIM).astype(np_bfloat16)
     mod(Q, K.T, V, O)
     # np.set_printoptions(threshold=np.inf)
     # out = flash_attention(Q, K, V, chunk_size=32)
@@ -243,9 +244,10 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, q_chunk_size=32, kv_chunk_size=32):
 
 
 if __name__ == "__main__":
-    N, D = 1024, 64  # Sequence Length, Embedding Dim = 64
-    chunk_size = 32
+    # N, D = 1024, 64  # Sequence Length, Embedding Dim = 64
+    # chunk_size = 32
     # print(out.shape)
     # print(out)
-
-    test_flash_attention(N, D, q_chunk_size=32, kv_chunk_size=32)
+    seq_len_list = [128,256,512,1024,2048]
+    for seq_len in seq_len_list:
+        test_flash_attention(seq_len, 64, q_chunk_size=32, kv_chunk_size=32)
