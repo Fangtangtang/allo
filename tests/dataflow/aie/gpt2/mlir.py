@@ -51,7 +51,6 @@ def call_mlir(
             os.path.join(project, f"input{idx}.data"), "w", encoding="utf-8"
         ) as f:
             f.write("\n".join([str(i) for i in arg.flatten()]))
-    # cmd = f"cd {project} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE --trace_sz {trace_size}"
     cmd = f"cd {project} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE -p false --warmup 200 --test_iter 1000"
     with subprocess.Popen(cmd, shell=True) as process:
         process.wait()
@@ -67,23 +66,20 @@ def call_mlir(
 
 
 # fixme: update parameters as you need
-from allo.ir.types import int8, int16, int32, bfloat16, int4
+from allo.ir.types import int8, int16, int32, bfloat16
 
-seq_lens = [512, 1024, 2048]
-N, K = 3072, 768
-for M in seq_lens:
-    A = np.random.random((M, K)).astype(np_bfloat16)
-    B = np.random.random((K, N)).astype(np_bfloat16)
-    C = np.zeros((M, N)).astype(np_bfloat16)
-    D = np.zeros((M, N)).astype(np_bfloat16)
+seq_lens = [1024]
+for N in seq_lens:
+    D = 64
+
+    Q = np.random.randn(N, D).astype(np_bfloat16)
+    K = np.random.randn(N, D).astype(np_bfloat16)
+    V = np.random.randn(N, D).astype(np_bfloat16)
+    O = np.zeros(N * D).astype(np_bfloat16)
+    attention_score =np.random.randn(N, N).astype(np_bfloat16)
+    attn_weight = np.random.randn(N, N).astype(np_bfloat16)
     call_mlir(
-        f"exp/ffn_{M}.prj",
-        [bfloat16, bfloat16, bfloat16, bfloat16, bfloat16, bfloat16],
-        0,
-        [0, 1, 3, 4],
-        [2, 5],
-        A, B, C, A, B, D
+        f"fa_{N}.prj",
+        [bfloat16, bfloat16, bfloat16, bfloat16], 0, [0, 1, 2], [3], Q, K, V, O
     )
-
-    # call_mlir("top.prj", [int16, int16, int16], 4096 * 4096, [0, 1], [2], A, B, C)
     # print("PASSED!")

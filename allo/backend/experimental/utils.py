@@ -382,7 +382,7 @@ def inject_external_kernels(
                         op.inputs[1],
                         op.outputs[0],
                     ]
-                elif dtype_1 == "i8" and dtype_2 == "i4":
+                elif dtype_2 == "i4":
                     include_src.add('#include "mm_mixed.cc"\n')
                     use_external_kernels[df_function_name] = True
                     kernel_header += f"#define DIM_M {M}\n"
@@ -1035,7 +1035,7 @@ def codegen_profile_host(
             "float cp_time = std::chrono::duration_cast<std::chrono::microseconds>(end_cp - start_cp).count();"
         )
         code_seg += format_str('std::cout << "Copy time: " << cp_time << "us\\n";')
-        code += format_str(f"for (uint32_t iter = 0; iter < 20; iter++) {{")
+        code += format_str(f"for (uint32_t iter = 0; iter < 100; iter++) {{")
         code += code_seg
         # run kernels
         buffers = ", ".join(buffer_list)

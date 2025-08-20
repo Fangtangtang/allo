@@ -92,7 +92,7 @@ def _test_batched_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO, prj="top.prj"):
         project=prj,
         target="aie-mlir",
         mapping_primitives=mapping_primitives,
-        profile=True,
+        profile=False,
         warmup=200,
         num_iters=1000,
         # device_type="npu1_2col",
@@ -128,7 +128,7 @@ def _test_batched_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO, prj="top.prj"):
 
 
 if __name__ == "__main__":
-    seq_len_list = [512, 1024, 2048, 4096]
+    seq_len_list = [128, 256,512,1024, 2048]
     for seq_len in seq_len_list:
         _test_batched_gemm(
             seq_len,

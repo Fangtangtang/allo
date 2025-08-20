@@ -71,7 +71,7 @@ def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO, project):
         Pm,
         Pn,
         Pk,
-        col_num=2, row_num=2
+        col_num=2, row_num=4
     )
 
     mod = df.build(
@@ -107,7 +107,7 @@ def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO, project):
 
 
 if __name__ == "__main__":
-    enable_skipping = False
+    enable_skipping = True
     K_list = [256, 512, 1024, 2048]
     M_list = [256, 512, 1024, 2048]
     N_list = [256, 512, 1024, 2048]
@@ -116,9 +116,9 @@ if __name__ == "__main__":
         for N_ in N_list:
             for K_ in K_list:
                 project_dir = (
-                    f"gemmp_1col_{M_}x{N_}x{K_}_{TyI}.prj"
+                    f"gemmp_2col_{M_}x{N_}x{K_}_{TyI}.prj"
                     if TyI is not bfloat16
-                    else f"gemmp_1col_{M_}x{N_}x{K_}.prj"
+                    else f"gemmp_2col_{M_}x{N_}x{K_}.prj"
                 )
                 if enable_skipping and os.path.isdir(project_dir):
                     continue

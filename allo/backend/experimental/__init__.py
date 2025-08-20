@@ -292,7 +292,7 @@ class AIE_MLIRModule:
                 dtype = str(input_a.type.element_type)
                 dtype_2 = str(input_b.type.element_type)
                 out_dtype = str(output.type.element_type)
-                if dtype == dtype_2:
+                if dtype == dtype_2 and (dtype, out_dtype) in matmul_external_kernel_config_map:
                     matmul_configs = matmul_external_kernel_config_map[
                         (dtype, out_dtype)
                     ]
@@ -300,7 +300,7 @@ class AIE_MLIRModule:
                         m, k, n = matmul_configs["aie2"]
                     else:
                         m, k, n = matmul_configs["aie2p"]
-                elif dtype == "i8" and dtype_2 == "i4":
+                elif dtype_2 == "i4":
                     m, k, n = 4, 16, 8
                 with function.context, allo_ir.ir.Location.unknown():
                     new_input_0 = allo_d.transform_layout(
@@ -682,6 +682,7 @@ class AIE_MLIRModule:
                 runtime_arg.current_size += np.prod(dtensor.shape)
                 self.module_runtime_args.append(runtime_arg)
         host_code = codegen_host(self.global_tensors, self.module_runtime_args)
+        # host_code = codegen_profile_host(self.global_tensors, self.module_runtime_args)
         with open(
             os.path.join(self.project_dir, "test.cpp"), "w", encoding="utf-8"
         ) as f:

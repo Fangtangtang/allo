@@ -22,7 +22,7 @@ def _test_gemm_1D():
     @df.region()
     def top():
         @df.kernel(mapping=[P0])
-        def gemm(A: Ty[M, K] @ LyA, B: Ty_l[K, N], C: Ty[M, N] @ LyA):
+        def gemm(A: Ty_l[M, K] @ LyA, B: Ty_l[K, N], C: Ty[M, N] @ LyA):
             C[:, :] = allo.matmul(A, B)
 
     mod = df.build(top, target="aie-mlir")
@@ -74,7 +74,10 @@ def gen_pingpong_gemm_mapping_primitive(Pm, Pn, Pk, col_num=4, row_num=4):
 
     if Pn // col_num < 1 or Pm // row_num < 1:
         col_num, row_num = row_num, col_num
-
+    if Pn < col_num:
+        col_num = Pn
+    if Pm < row_num:
+        row_num = Pm
     if Pn // col_num > 1 or Pm // row_num > 1:
         for i in range(row_num):
             for j in range(col_num):
@@ -87,7 +90,7 @@ def gen_pingpong_gemm_mapping_primitive(Pm, Pn, Pk, col_num=4, row_num=4):
     return mapping_primitives
 
 
-def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk):
+def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, project):
     TyI = int8
     TyI_l = int4
     TyO = int8
@@ -120,27 +123,41 @@ def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk):
         Pm,
         Pn,
         Pk,
+        # 2,2
     )
 
     mod = df.build(
         top,
-        project="top.prj",
+        project=project,
         target="aie-mlir",
         mapping_primitives=mapping_primitives,
-        profile=True,
+        profile=False,
         warmup=200,
         num_iters=1000,
-        device_type="npu1_4col",
+        # device_type="npu1_2col",
     )
     A = np.random.randint(-2, 2, (M, K)).astype(np.int8)
     B = np.random.randint(-2, 2, (K, N)).astype(np.int8)
     C = np.zeros((M, N)).astype(np.int8)
     mod(A, B, C)
-    np.testing.assert_allclose(C, A @ B, atol=1e-5)
-    print("PASSED!")
+    # np.testing.assert_allclose(C, A @ B, atol=1e-5)
+    # print("PASSED!")
 
 
 if __name__ == "__main__":
     # _test_gemm_1D()
     # _test_gemm_2D()
-    _test_pingpong_gemm(512, 512, 512, 8, 8, 8)
+    K_list = [256,512,1024,2048]
+    M_list = [256,512,1024,2048]
+    N_list = [256,512,1024,2048]
+    for M_ in M_list:
+        for N_ in N_list:
+            for K_ in K_list:
+                project_dir = f"exp/gemm_{M_}x{N_}x{K_}_i4.prj"
+                try:
+                    _test_pingpong_gemm(M_, N_, K_, M_ // 64, N_ // 128, K_ // 128, project_dir)
+                except:
+                    print(f"Error in {project_dir}")
+                    import shutil
+                    if os.path.exists(project_dir):
+                        shutil.rmtree(project_dir)

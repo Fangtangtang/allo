@@ -53,7 +53,7 @@ def call_mlir(
 
 
 # fixme: update parameters as you need
-from allo.ir.types import bfloat16, int16, int8
+from allo.ir.types import bfloat16, int16, int8, int4
 
 
 def run(M, N, K, dtype, tag = None):
@@ -61,9 +61,9 @@ def run(M, N, K, dtype, tag = None):
         A = np.random.random((M, K)).astype(np_bfloat16)
         B = np.random.random((K, N)).astype(np_bfloat16)
         C = np.zeros((M, N)).astype(np_bfloat16)
-    elif dtype is int8:
-        A = np.random.randint(-8, 8, (M, K)).astype(np.int8)
-        B = np.random.randint(-8, 8, (K, N)).astype(np.int8)
+    elif dtype is int8 or dtype is  int4:
+        A = np.random.randint(-4, 4, (M, K)).astype(np.int8)
+        B = np.random.randint(-4, 4, (K, N)).astype(np.int8)
         C = np.zeros((M, N)).astype(np.int8)
     elif dtype is int16:
         A = np.random.randint(-8, 8, (M, K)).astype(np.int16)
@@ -74,7 +74,7 @@ def run(M, N, K, dtype, tag = None):
     try:
         if dtype is bfloat16:
             if tag is not None:
-                prj= f"gemm_{tag}_{M}x{N}x{K}.prj"
+                prj= f"gemmp_{tag}_{M}x{N}x{K}.prj"
             else:
                 prj = f"gemm_{M}x{N}x{K}.prj",
             call_mlir(
@@ -86,6 +86,16 @@ def run(M, N, K, dtype, tag = None):
                 B,
                 C,
             )
+        # elif dtype is int4:
+        #     call_mlir(
+        #         f"gemm_{M}x{N}x{K}_{dtype}.prj",
+        #         [dtype, dtype, dtype],
+        #         [0, 1],
+        #         [2],
+        #         A,
+        #         B,
+        #         C,
+        #     )
         else:
             call_mlir(
                 f"gemm_{M}x{N}x{K}_{dtype}.prj",
@@ -106,5 +116,5 @@ N_list = [256, 512, 1024, 2048]
 for M_ in M_list:
     for N_ in N_list:
         for K_ in K_list:
-            run(M_, N_, K_, bfloat16, "1col")
+            run(M_, N_, K_, int4)
 # run(256, 256, 256, int16)

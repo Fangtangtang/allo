@@ -1360,7 +1360,7 @@ void matmul_i8xi4_i8(int8 *a_in, int8 *b_in, int8 *c_out) {
 }
 
 // int4xint4, both A and B are packed
-void matmul_i4_i4_packed(int8 *a_in, int8 *b_in, int8 *c_out) {
+void matmul_i4xi4_i8(int8 *a_in, int8 *b_in, int8 *c_out) {
   matmul_vectorized_4x16x8_i4_packedA_i4_packedB<DIM_M, DIM_K, DIM_N>(
       a_in, b_in, c_out);
 }
