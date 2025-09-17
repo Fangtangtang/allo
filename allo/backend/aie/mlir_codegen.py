@@ -1129,9 +1129,13 @@ class CodeGenerator:
                         dtensor.offset_map[dtensor_tile.tensor_tile_label]
                     ] = multicast_list
             # coalesced access pattern on dtensor will give a hint
+            print(unresolved_tile)
             coalesced_access_pattern, _, coalesced_multicast_interfaces = (
                 coalesce_memory_access(unresolved_tile)
             )
+            print(coalesced_access_pattern)
+            print(coalesced_multicast_interfaces)
+            print("---")
             if os.getenv("VERBOSE") == "1":
                 print("<<<<< coalesced_multicast_interfaces >>>>>")
                 print(coalesced_multicast_interfaces)
@@ -1141,6 +1145,7 @@ class CodeGenerator:
                 coalesced_interfaces: list[list[MulticastInterface]] = (
                     coalesced_multicast_interfaces[start_offset]
                 )
+                print(coalesced_interfaces)
                 left = 0
                 while left < len(coalesced_interfaces):
                     next_flag = True
@@ -1241,6 +1246,7 @@ class CodeGenerator:
         # ####################
 
         for idx, contiguous_interfaces in global_dma_tasks.items():
+            print(idx, contiguous_interfaces)
             self.mem_tile_idx = 0
             dtensor = self.global_tensors[idx]
             tile_shape = list(dtensor.size)

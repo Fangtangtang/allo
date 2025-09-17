@@ -945,6 +945,7 @@ class ComputationGraph:
 
             global_tile_io[name] = dict_
             arg_idx_to_interface[name] = idx_to_interface
+        print(arg_idx_to_interface)
         return global_tile_io, arg_idx_to_interface
 
     def get_node_dependencies(self) -> dict[str, set[str]]:
