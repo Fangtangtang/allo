@@ -225,22 +225,25 @@ def test_flash_attention(SEQ_LEN, HEAD_DIM, q_chunk_size=32, kv_chunk_size=32):
         top,
         project=f"fa_{SEQ_LEN}.prj",
         target="aie-mlir",
-        mapping_primitives=mapping_primitives_,
+        # mapping_primitives=mapping_primitives_,
         profile=False,
         warmup=20,
         num_iters=100,
         # device_type="npu1_2col",
     )
-    Q = np.random.randn(SEQ_LEN, HEAD_DIM).astype(np_bfloat16)
-    K = np.random.randn(SEQ_LEN, HEAD_DIM).astype(np_bfloat16)
-    V = np.random.randn(SEQ_LEN, HEAD_DIM).astype(np_bfloat16)
+    Q = np.random.randn(SEQ_LEN, HEAD_DIM)
+    K = np.random.randn(SEQ_LEN, HEAD_DIM)
+    V = np.random.randn(SEQ_LEN, HEAD_DIM)
+    Q_ = Q.astype(np_bfloat16)
+    K_ = K.astype(np_bfloat16)
+    V_ = V.astype(np_bfloat16)
     O = np.zeros(SEQ_LEN * HEAD_DIM).astype(np_bfloat16)
-    mod(Q, K.T, V, O)
-    # np.set_printoptions(threshold=np.inf)
-    # out = flash_attention(Q, K, V, chunk_size=32)
-    # print(out)
-    # O = O.astype(np.float32).reshape(N, D)
-    # print(O)
+    mod(Q_, K_.T, V_, O)
+    np.set_printoptions(threshold=np.inf)
+    out = flash_attention(Q_, K_, V_, chunk_size=32)
+    print(out)
+    O = O.astype(np.float32).reshape(SEQ_LEN, HEAD_DIM)
+    print(O)
 
 
 if __name__ == "__main__":
@@ -248,6 +251,7 @@ if __name__ == "__main__":
     # chunk_size = 32
     # print(out.shape)
     # print(out)
-    seq_len_list = [128,256,512,1024,2048]
+    # seq_len_list = [128,256,512,1024,2048]
+    seq_len_list = [32]
     for seq_len in seq_len_list:
         test_flash_attention(seq_len, 64, q_chunk_size=32, kv_chunk_size=32)
