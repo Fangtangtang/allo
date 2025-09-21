@@ -37,6 +37,13 @@ void removeRedundantCopy(func::FuncOp &func) {
     // llvm::errs() << *op << "\n";
     auto src = op->getOperand(0);
     auto dst = op->getOperand(1);
+
+    auto srcType = src.getType().dyn_cast<MemRefType>();
+    auto dstType = dst.getType().dyn_cast<MemRefType>();
+    if (!srcType || !dstType || srcType != dstType) {
+      continue;
+    }
+
     bool resolvable = true;
     Operation *last_user = getLastUse(src, *func);
 
