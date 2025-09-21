@@ -1077,4 +1077,57 @@ def TransformLayoutOp : Allo_Op<"transform_layout"> {
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// Distributed communication operations
+//===----------------------------------------------------------------------===//
+
+def GatherOp : Allo_Op<"gather"> {
+  let summary = "gather elements from a stream into a memref";
+  let description = [{
+    The `gather` operation extracts elements from the input `streams`
+    according to the positions specified in the `indices` attribute,
+    and stores them sequentially into the result memref.
+
+    Example:
+      %res = allo.gather(%s) {indices = [0, 2, 4]}
+          : !array<3 x !allo.stream<i32>> -> memref<3xi32>
+  }];
+
+  let arguments = (ins StreamLike:$stream, DenseI64ArrayAttr:$indices);
+  let results = (outs AnyStaticShapeMemRef:$res);
+
+  let assemblyFormat = [{
+      `(` $stream `)` attr-dict
+      `:` type($stream) `->` type($res)
+  }];  
+}
+
+def ScatterOp : Allo_Op<"scatter"> {
+  let summary = "scatter elements from a memref into streams";
+  let description = [{
+    The `scatter` operation writes elements from the input memref
+    into the positions specified by the `indices` attribute in the
+    given `streams`.
+
+    Example:
+      allo.scatter(%s, %data) {indices = [1, 3, 5]}
+          : !array<3 x !allo.stream<i32>>, memref<3xi32>
+
+    This inserts elements from `%data` into stream `%s` at positions
+    1, 3, and 5, yielding a new stream `%s2`.
+  }];
+
+  let arguments = (
+    ins StreamLike:$stream,
+        DenseI64ArrayAttr:$indices,
+        AnyStaticShapeMemRef:$values
+  );
+  let results = (outs );
+
+  let assemblyFormat = [{
+      `(` $stream `,` $values `)` attr-dict
+      `:` type($stream) `,` type($values)
+  }];
+}
+
 #endif // ALLO_OPS
