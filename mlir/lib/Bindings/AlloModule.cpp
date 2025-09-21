@@ -146,6 +146,16 @@ static bool lowerTransformLayoutOps(MlirModule &mlir_mod) {
   return applyLowerTransformLayoutOps(mod);
 }
 
+static bool lowerGatherOps(MlirModule &mlir_mod) {
+  auto mod = unwrap(mlir_mod);
+  return applyLowerGatherOps(mod);
+}
+
+static bool lowerScatterOps(MlirModule &mlir_mod) {
+  auto mod = unwrap(mlir_mod);
+  return applyLowerScatterOps(mod);
+}
+
 static bool legalizeCast(MlirModule &mlir_mod) {
   auto mod = unwrap(mlir_mod);
   return applyLegalizeCast(mod);
@@ -302,7 +312,9 @@ PYBIND11_MODULE(_allo, m) {
   // Lowering APIs.
   allo_m.def("lower_composite_type", &lowerCompositeType);
   allo_m.def("lower_bit_ops", &lowerBitOps);
-  allo_m.def("lower_transform_layout_ops", &lowerTransformLayoutOps);
+  allo_m.def("lower_transform_layout_ops", &lowerGatherOps);
+  allo_m.def("lower_gather_ops", &lowerTransformLayoutOps);
+  allo_m.def("lower_scatter_ops", &lowerScatterOps);
   allo_m.def("legalize_cast", &legalizeCast);
   allo_m.def("remove_stride_map", &removeStrideMap);
   allo_m.def("lower_print_ops", &lowerPrintOps);
