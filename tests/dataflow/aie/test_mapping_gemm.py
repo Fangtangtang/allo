@@ -1,6 +1,7 @@
 # Copyright Allo authors. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import allo
 from allo.ir.types import int16, int32
 import allo.dataflow as df
@@ -567,4 +568,7 @@ if __name__ == "__main__":
     _test_pingpong_gemm_4x4x4()
     _test_split_k_gemm_1x1x4()
     _test_split_k_gemm_2x2x4()
+    
+    os.environ["FORCE_UNROLL_INDEX"] = "1"
     _test_split_k_explicit_gather_gemm_1x1x4()
+    del os.environ["FORCE_UNROLL_INDEX"]

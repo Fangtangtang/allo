@@ -1196,7 +1196,9 @@ class ASTTransformer(ASTBuilder):
                     static_sizes.append(1)
                     static_strides.append(1)
                     continue
-                # fixme: unverified
+                if isinstance(index, MockArg):
+                    index = index.val
+                # fixme: unverified (dynamic offset is incompatible with many builtin opt passes)
                 offsets.append(index)
                 static_offsets.append(-1)
                 static_sizes.append(1)
