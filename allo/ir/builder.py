@@ -23,6 +23,7 @@ from .._mlir.ir import (
     UnitAttr,
     IntegerAttr,
     StringAttr,
+    DictAttr,
     AffineExpr,
     AffineConstantExpr,
     AffineMap,
@@ -95,12 +96,10 @@ class ASTBuilder(ASTVisitor):
 
 # pylint: disable=too-many-public-methods
 class ASTTransformer(ASTBuilder):
-    kernel_tagged_instances = {}
-
     @staticmethod
     def build_Name(ctx: ASTContext, node: ast.Name, val=None):
         if val is not None and isinstance(node.ctx, ast.Store):
-            buffer = ctx.buffers[node.id]
+            buffer = ctx.get_symbol(node.id)
             target = (
                 buffer.op.result if isinstance(buffer, MockScalar) else buffer.result
             )
@@ -118,11 +117,12 @@ class ASTTransformer(ASTBuilder):
                     ip=ctx.get_ip(),
                 )
                 # update StoreOp
-                ctx.buffers[node.id].op = store_op
+                ctx.get_symbol(node.id).op = store_op
             store_op.attributes["to"] = StringAttr.get(node.id)
             return store_op
-        if node.id in ctx.buffers:
-            return ctx.buffers[node.id]
+        ret = ctx.get_symbol(node.id, allow_missing=True)
+        if ret is not None:
+            return ret
         if node.id in ctx.global_vars:
             return MockConstant(ctx.global_vars[node.id], ctx)
         raise RuntimeError("Unsupported Name")
@@ -334,25 +334,23 @@ class ASTTransformer(ASTBuilder):
             if not isinstance(for_op, affine_d.AffineForOp):
                 is_affine = False
 
-        ivs = [loop.induction_variable for loop in for_loops]
-        for name, iv in zip(names, ivs):
-            ctx.buffers[name] = MockArg(iv, is_affine)
-        ctx.set_ip(for_loops[-1].body.operations[0])
+        with ctx.block_scope_guard():
+            ivs = [loop.induction_variable for loop in for_loops]
+            for name, iv in zip(names, ivs):
+                ctx.put_symbol(name=name, val=MockArg(iv, is_affine))
+            ctx.set_ip(for_loops[-1].body.operations[0])
 
-        # build loop body
-        build_stmts(ctx, node.body)
+            # build loop body
+            build_stmts(ctx, node.body)
 
-        # attach necessary attributes
-        if (
-            isinstance(node.iter.func, ast.Attribute)
-            and node.iter.func.attr == "reduction"
-        ):
-            for loop in for_loops:
-                loop.attributes["reduction"] = UnitAttr.get()
+            # attach necessary attributes
+            if (
+                isinstance(node.iter.func, ast.Attribute)
+                and node.iter.func.attr == "reduction"
+            ):
+                for loop in for_loops:
+                    loop.attributes["reduction"] = UnitAttr.get()
 
-        # Remove loop variables
-        for name, iv in zip(names, ivs):
-            ctx.buffers.pop(name)
         for_loops = None
         # Not sure why the for loops will not be collected if we do not call gc.collect()
         gc.collect()
@@ -836,93 +834,131 @@ class ASTTransformer(ASTBuilder):
             and isinstance(node.value.func, ast.Attribute)
             and isinstance(node.targets[0], ast.Subscript)
             and isinstance(node.targets[0].value, ast.Name)
-            and node.targets[0].value.id in ctx.buffers
-            and (
-                (
-                    isinstance(node.targets[0].slice, ast.Tuple)
-                    and all(
-                        isinstance(x, ast.Slice) and x.lower is None and x.upper is None
-                        for x in node.targets[0].slice.elts
+        ):
+            val = ctx.get_symbol(node.targets[0].value.id, allow_missing=True)
+            if (
+                val is not None
+                and (
+                    (
+                        isinstance(node.targets[0].slice, ast.Tuple)
+                        and all(
+                            isinstance(x, ast.Slice)
+                            and x.lower is None
+                            and x.upper is None
+                            for x in node.targets[0].slice.elts
+                        )
+                    )
+                    or (
+                        isinstance(node.targets[0].slice, ast.Slice)
+                        and node.targets[0].slice.lower is None
+                        and node.targets[0].slice.upper is None
                     )
                 )
-                or (
-                    isinstance(node.targets[0].slice, ast.Slice)
-                    and node.targets[0].slice.lower is None
-                    and node.targets[0].slice.upper is None
-                )
-            )
-            and node.value.func.attr
-            in {
-                "matmul",
-                "bmm",
-                "softmax",
-                "exp",
-                "abs",
-                "log",
-                "add",
-                "sub",
-                "mul",
-                "div",
-                "relu",
-                "conv2d",
-                "maxpool",
-                "sumpool",
-                "copy",
-                "transpose",
-                "linear",
-                "view",
-                "concat",
-            }
-        ):
-            lhs_name = node.targets[0].value.id
-            out_buffer = ctx.buffers[lhs_name]
-            rhs = ASTTransformer.build_Call(ctx, node.value, out_buffer)
-            return rhs
+                and node.value.func.attr
+                in {
+                    "matmul",
+                    "bmm",
+                    "softmax",
+                    "exp",
+                    "abs",
+                    "log",
+                    "add",
+                    "sub",
+                    "mul",
+                    "div",
+                    "relu",
+                    "conv2d",
+                    "maxpool",
+                    "sumpool",
+                    "copy",
+                    "transpose",
+                    "linear",
+                    "view",
+                    "concat",
+                }
+            ):
+                rhs = ASTTransformer.build_Call(ctx, node.value, val)
+                return rhs
         # Compute RHS
-        rhs = build_stmt(ctx, node.value)
-        if (
-            isinstance(node.value, ast.Call) or len(node.value.shape) > 0
-        ) and not isinstance(node.targets[0], ast.Subscript):
-            targets = []
-            if isinstance(node.targets[0], ast.Tuple):
-                targets = node.targets[0].elts
-            else:
-                targets = [node.targets[0]]
-            for idx, target in enumerate(targets):
-                if isinstance(target, ast.Name):
-                    if isinstance(rhs, list):
-                        # array of FIFOs
-                        for ele in rhs:
-                            new_name = target.id + "_" + ele.attributes["id"].value
-                            ele.attributes["name"] = StringAttr.get(new_name)
-                            ctx.buffers[new_name] = ele
-                        return rhs
-                    if hasattr(rhs, "attributes"):
-                        rhs.attributes["name"] = StringAttr.get(target.id)
-                    if target.id in ctx.buffers:
-                        raise RuntimeError(
-                            f"Variable `{target.id}` has already been defined, please use a different name"
-                        )
-                    ctx.buffers[target.id] = rhs[idx] if isinstance(rhs, tuple) else rhs
-                    if (
-                        isinstance(node.value, ast.Call)
-                        and isinstance(node.value.func, ast.Attribute)
-                        and node.value.func.attr == "get_pid"
-                    ):
-                        ctx.global_vars[ast.unparse(target)] = ctx.global_vars[
-                            f"df.p{idx}"
-                        ]
-                        ctx.symbolic[ast.unparse(target)] = f"p{idx}"
+        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, int):
+            if len(node.shape) > 0:
+                if ctx.enable_tensor:
+                    rhs = tensor_d.EmptyOp(
+                        list(node.shape), node.dtype.build(), ip=ctx.get_ip()
+                    )
                 else:
-                    store_op = build_stmt(ctx, target, val=rhs, idx=idx)
-            return rhs
-        # Store LHS
-        rhs = ASTTransformer.build_cast_op(
-            ctx, rhs, node.value.dtype, node.dtype, node.value.shape
-        )
-        rhs = ASTTransformer.build_broadcast_op(
-            ctx, rhs, node.dtype, node.value.shape, node.shape, node.dims[1]  # rhs
-        )
+                    memref_type = MemRefType.get(list(node.shape), node.dtype.build())
+                    rhs = memref_d.AllocOp(memref_type, [], [], ip=ctx.get_ip())
+                val = MockConstant(node.value.value, ctx)
+                # [NOTE]: wired bug, `ip=ctx.get_ip()` not work
+                with ctx.get_ip():
+                    fill_op = linalg_d.fill(val.result, outs=[rhs.result])
+                    if ctx.enable_tensor:
+                        rhs = fill_op.owner
+            else:
+                constant = MockConstant(node.value.value, ctx)
+                cast = ASTTransformer.build_cast_op(
+                    ctx, constant, node.value.dtype, node.dtype, node.value.shape
+                )
+                rhs = ASTTransformer.build_broadcast_op(
+                    ctx,
+                    cast,
+                    node.dtype,
+                    node.value.shape,
+                    node.shape,
+                    node.dims[1],  # rhs
+                )
+        else:
+            rhs = build_stmt(ctx, node.value)
+            if (
+                isinstance(node.value, ast.Call) or len(node.value.shape) > 0
+            ) and not isinstance(node.targets[0], ast.Subscript):
+                targets = []
+                if isinstance(node.targets[0], ast.Tuple):
+                    targets = node.targets[0].elts
+                else:
+                    targets = [node.targets[0]]
+                for idx, target in enumerate(targets):
+                    if isinstance(target, ast.Name):
+                        if isinstance(rhs, list):
+                            # array of FIFOs
+                            for ele in rhs:
+                                new_name = target.id + "_" + ele.attributes["id"].value
+                                ele.attributes["name"] = StringAttr.get(new_name)
+                                ctx.buffers[new_name] = ele
+                                ctx.put_symbol(name=new_name, val=ele)
+                            return rhs
+                        if hasattr(rhs, "attributes"):
+                            rhs.attributes["name"] = StringAttr.get(target.id)
+                        exist_target = ctx.get_symbol(target.id, allow_missing=True)
+                        if exist_target is not None:
+                            raise RuntimeError(
+                                f"Variable `{target.id}` has already been defined, please use a different name"
+                            )
+                        if (
+                            isinstance(node.value, ast.Call)
+                            and isinstance(node.value.func, ast.Attribute)
+                            and node.value.func.attr == "get_pid"
+                        ):
+                            ctx.global_vars[ast.unparse(target)] = ctx.global_vars[
+                                f"df.p{idx}"
+                            ]
+                            ctx.symbolic[ast.unparse(target)] = f"p{idx}"
+                        else:
+                            ctx.buffers[target.id] = (
+                                rhs[idx] if isinstance(rhs, tuple) else rhs
+                            )
+                            ctx.put_symbol(name=target.id, val=ctx.buffers[target.id])
+                    else:
+                        store_op = build_stmt(ctx, target, val=rhs, idx=idx)
+                return rhs
+            # Store LHS
+            rhs = ASTTransformer.build_cast_op(
+                ctx, rhs, node.value.dtype, node.dtype, node.value.shape
+            )
+            rhs = ASTTransformer.build_broadcast_op(
+                ctx, rhs, node.dtype, node.value.shape, node.shape, node.dims[1]  # rhs
+            )
         store_op = build_stmt(ctx, node.targets[0], val=rhs)
         # Since tensor operations returns a new tensor, we also need to update the buffer
         if (
@@ -931,6 +967,7 @@ class ASTTransformer(ASTBuilder):
             and isinstance(store_op.result.type, RankedTensorType)
         ):
             ctx.buffers[node.targets[0].value.id] = store_op
+            ctx.put_symbol(name=node.targets[0].value.id, val=store_op)
         return store_op
 
     @staticmethod
@@ -998,7 +1035,7 @@ class ASTTransformer(ASTBuilder):
         with ctx.affine_scope_guard():
             expr = ASTTransformer.build_affine_expr(ctx, node)
             if expr is not None:
-                variables = [ctx.buffers[x].result for x in ctx.affine_vars]
+                variables = [ctx.get_symbol(x).result for x in ctx.affine_vars]
                 affine_map = AffineMap.get(
                     dim_count=ctx.dim_count, symbol_count=0, exprs=[expr]
                 )
@@ -1011,11 +1048,12 @@ class ASTTransformer(ASTBuilder):
     @staticmethod
     def build_affine_expr(ctx: ASTContext, node: ast.AST):
         if isinstance(node, ast.Name):
+            val = ctx.get_symbol(node.id, allow_missing=True)
             if (
-                node.id in ctx.buffers
-                and isinstance(ctx.buffers[node.id], MockArg)
-                and str(ctx.buffers[node.id].result.type) == "index"
-                and ctx.buffers[node.id].is_affine
+                val is not None
+                and isinstance(val, MockArg)
+                and str(val.result.type) == "index"
+                and val.is_affine
             ):
                 ctx.dim_count += 1
                 ctx.affine_vars.append(node.id)
@@ -1029,11 +1067,11 @@ class ASTTransformer(ASTBuilder):
                 #     A[x] = 1
                 #     x = x + 1
                 ctx.nested_loops == 0
-                and node.id in ctx.buffers
-                and isinstance(ctx.buffers[node.id], MockScalar)
-                and isinstance(ctx.buffers[node.id].dtype, Index)
+                and val is not None
+                and isinstance(val, MockScalar)
+                and isinstance(val.dtype, Index)
             ):
-                return ASTTransformer.build_affine_expr(ctx, ctx.buffers[node.id].value)
+                return ASTTransformer.build_affine_expr(ctx, val.value)
             if node.id in ctx.global_vars and isinstance(ctx.global_vars[node.id], int):
                 return ASTTransformer.build_affine_expr(
                     ctx, ast.Constant(ctx.global_vars[node.id])
@@ -1362,7 +1400,7 @@ class ASTTransformer(ASTBuilder):
                     dim_count=ctx.dim_count, symbol_count=0, exprs=new_indices
                 )
                 affine_attr = AffineMapAttr.get(affine_map)
-                ivs = [ctx.buffers[x].result for x in ctx.affine_vars]
+                ivs = [ctx.get_symbol(x).result for x in ctx.affine_vars]
                 if isinstance(node.ctx, ast.Load):
                     op = affine_d.AffineLoadOp(
                         node.value.dtype.build(),
@@ -1538,6 +1576,7 @@ class ASTTransformer(ASTBuilder):
                 ctx, node, node.np_values, dtype=dtype
             )
             ctx.buffers[node.target.id] = rhs
+            ctx.put_symbol(name=node.target.id, val=rhs)
             return
         # Not constant tensor
         rhs = build_stmt(ctx, node.value)
@@ -1548,6 +1587,7 @@ class ASTTransformer(ASTBuilder):
         # Store LHS
         if isinstance(rhs, (allo_d.StreamConstructOp, allo_d.StreamGetOp)):
             ctx.buffers[node.target.id] = rhs
+            ctx.put_symbol(name=node.target.id, val=rhs)
         elif len(shape) > 0:
             alloc_op = ASTTransformer.build_array(ctx, dtype, shape)
             alloc_op.attributes["name"] = StringAttr.get(node.target.id)
@@ -1561,6 +1601,7 @@ class ASTTransformer(ASTBuilder):
             ctx.buffers[node.target.id] = (
                 linalg_op.owner if ctx.enable_tensor else alloc_op
             )
+            ctx.put_symbol(name=node.target.id, val=ctx.buffers[node.target.id])
         else:
             ctx.buffers[node.target.id] = MockScalar(
                 node.target.id,
@@ -1568,6 +1609,7 @@ class ASTTransformer(ASTBuilder):
                 ctx,
                 value=node.value,
             )
+            ctx.put_symbol(name=node.target.id, val=ctx.buffers[node.target.id])
             if rhs is not None:
                 rhs = ASTTransformer.build_broadcast_op(
                     ctx,
@@ -1591,6 +1633,7 @@ class ASTTransformer(ASTBuilder):
             ctx.set_ip(old_ctx.top_func)
             ctx.top_func_tree = node
             ctx.buffers = old_ctx.buffers.copy()
+            ctx.scopes = old_ctx.scopes
             for decorator in node.decorator_list:
                 if isinstance(decorator, ast.Call):
                     if isinstance(decorator.func, ast.Attribute):
@@ -1619,6 +1662,7 @@ class ASTTransformer(ASTBuilder):
                                 new_ctx.set_ip(old_ctx.top_func)
                                 new_ctx.top_func_tree = node
                                 new_ctx.buffers = old_ctx.buffers.copy()
+                                new_ctx.scopes = old_ctx.scopes
                                 new_ctx.global_vars = old_ctx.global_vars.copy()
                                 for axis, val in enumerate(dim):
                                     new_ctx.global_vars.update(
@@ -1701,30 +1745,34 @@ class ASTTransformer(ASTBuilder):
                 output_typehints.append(get_extra_type_hints(node.returns.dtype))
 
         # Build function
-        # pylint: disable=unexpected-keyword-arg, no-value-for-parameter
-        func_type = FunctionType.get(input_types, output_types)
-        func_op = func_d.FuncOp(name=func_name, type=func_type, ip=ctx.get_ip())
-        func_op.add_entry_block()
-        # attach type hints
-        func_op.attributes["otypes"] = StringAttr.get("".join(output_typehints))
-        func_op.attributes["itypes"] = StringAttr.get("".join(input_typehints))
-        # set context
-        ctx.top_func = func_op
-        ctx.top_func_tree = node
-        for i, (dtensor, arg) in enumerate(zip(dtensors, func_op.arguments)):
-            name = dtensor.name
-            ctx.buffers[name] = MockArg(arg, idx=i)
-        ctx.func_args[func_name] = dtensors
-        ctx.set_ip(func_op.entry_block)
-        stmts = build_stmts(ctx, node.body)
-        # node.returns is the function definition, not the actual return operation
-        if len(stmts) > 0 and not ctx.has_return:
-            if (
-                isinstance(node.returns, ast.Constant) and node.returns.value is None
-            ) or node.returns is None:
-                func_d.ReturnOp([], ip=ctx.pop_ip())
-            else:
-                raise RuntimeError("Missing return statement")
+        with ctx.block_scope_guard():
+            # pylint: disable=unexpected-keyword-arg, no-value-for-parameter
+            func_type = FunctionType.get(input_types, output_types)
+            func_op = func_d.FuncOp(name=func_name, type=func_type, ip=ctx.get_ip())
+            func_op.add_entry_block()
+            # attach type hints
+            func_op.attributes["otypes"] = StringAttr.get("".join(output_typehints))
+            func_op.attributes["itypes"] = StringAttr.get("".join(input_typehints))
+            # set context
+            ctx.top_func = func_op
+            ctx.top_func_tree = node
+            for i, (dtensor, arg) in enumerate(zip(dtensors, func_op.arguments)):
+                name = dtensor.name
+                mock_arg = MockArg(arg, idx=i)
+                ctx.buffers[name] = mock_arg
+                ctx.put_symbol(name=name, val=mock_arg)
+            ctx.func_args[func_name] = dtensors
+            ctx.set_ip(func_op.entry_block)
+            stmts = build_stmts(ctx, node.body)
+            # node.returns is the function definition, not the actual return operation
+            if len(stmts) > 0 and not ctx.has_return:
+                if (
+                    isinstance(node.returns, ast.Constant)
+                    and node.returns.value is None
+                ) or node.returns is None:
+                    func_d.ReturnOp([], ip=ctx.pop_ip())
+                else:
+                    raise RuntimeError("Missing return statement")
         # Recover the old context
         if old_ctx is not None:
             ctx = old_ctx
@@ -1806,7 +1854,7 @@ class ASTTransformer(ASTBuilder):
             eq_flags.append(True)
             if_cond_set = IntegerSet.get(1, 0, exprs, eq_flags)
             attr = allo_d.IntegerSetAttr.get(if_cond_set)
-            return attr, ctx.buffers[node.left.id]
+            return attr, ctx.get_symbol(node.left.id)
         else:
             lhs = build_stmt(ctx, node.left)
             rhs = build_stmt(ctx, node.comparators[0])
@@ -1883,20 +1931,22 @@ class ASTTransformer(ASTBuilder):
             if_op = scf_d.IfOp(cond.result, ip=ctx.get_ip(), hasElse=len(node.orelse))
             then_block = if_op.then_block
         ctx.set_ip(then_block)
-        build_stmts(ctx, node.body)
-        if is_affine:
-            affine_d.AffineYieldOp([], ip=ctx.get_ip())
-        else:
-            scf_d.YieldOp([], ip=ctx.get_ip())
-        ctx.pop_ip()
-        if len(node.orelse) > 0:
-            else_block = if_op.elseRegion.blocks[0]
-            ctx.set_ip(else_block)
-            build_stmts(ctx, node.orelse)
+        with ctx.block_scope_guard():
+            build_stmts(ctx, node.body)
             if is_affine:
                 affine_d.AffineYieldOp([], ip=ctx.get_ip())
             else:
                 scf_d.YieldOp([], ip=ctx.get_ip())
+        ctx.pop_ip()
+        if len(node.orelse) > 0:
+            else_block = if_op.elseRegion.blocks[0]
+            ctx.set_ip(else_block)
+            with ctx.block_scope_guard():
+                build_stmts(ctx, node.orelse)
+                if is_affine:
+                    affine_d.AffineYieldOp([], ip=ctx.get_ip())
+                else:
+                    scf_d.YieldOp([], ip=ctx.get_ip())
             ctx.pop_ip()
 
     @staticmethod
@@ -1928,8 +1978,9 @@ class ASTTransformer(ASTBuilder):
             scf_d.ConditionOp(cond.result, [], ip=ctx.get_ip())
             ctx.pop_ip()
             ctx.set_ip(while_op.after.blocks[0])
-            build_stmts(ctx, node.body)
-            scf_d.YieldOp([], ip=ctx.get_ip())
+            with ctx.block_scope_guard():
+                build_stmts(ctx, node.body)
+                scf_d.YieldOp([], ip=ctx.get_ip())
             ctx.pop_ip()
         return while_op
 
@@ -1994,16 +2045,25 @@ class ASTTransformer(ASTBuilder):
                         else node.func.value.value.id
                     )
                     symbolic_slice = None
+                    iterator_infos = {}
                     if isinstance(node.func.value, ast.Subscript):
                         # pylint: disable=redefined-builtin
                         slice = eval(
                             ast.unparse(node.func.value.slice), ctx.global_vars
                         )
-                        symbolic_slice = get_symbolic_expr(
+                        symbolic_slice, iterator_info = get_symbolic_expr(
                             copy.deepcopy(node.func.value.slice),
                             ctx.symbolic,
                             ctx.global_vars,
+                            ctx.get_alive_var_names(),
                         )
+                        for info in iterator_info:
+                            iterator_infos[info[0]] = ArrayAttr.get(
+                                [
+                                    IntegerAttr.get(IntegerType.get_signless(64), v)
+                                    for v in info[1]
+                                ]
+                            )
                         if isinstance(slice, int):
                             slice = tuple([slice])
                         else:
@@ -2026,11 +2086,12 @@ class ASTTransformer(ASTBuilder):
                         if op is not None
                         else InsertionPoint.at_block_begin(ctx.top_func.entry_block)
                     )
-                    stream = ctx.buffers[new_name].clone(ip=ip)
+                    stream = ctx.get_symbol(new_name).clone(ip=ip)
                     if symbolic_slice is not None:
                         stream.attributes["symbolic_slice"] = StringAttr.get(
                             symbolic_slice
                         )
+                        stream.attributes["iterators"] = DictAttr.get(iterator_infos)
                     put_op = allo_d.StreamPutOp(
                         stream.result,
                         [],
@@ -2047,15 +2108,24 @@ class ASTTransformer(ASTBuilder):
                         else node.func.value.value.id
                     )
                     symbolic_slice = None
+                    iterator_infos = {}
                     if isinstance(node.func.value, ast.Subscript):
                         slice = eval(
                             ast.unparse(node.func.value.slice), ctx.global_vars
                         )
-                        symbolic_slice = get_symbolic_expr(
+                        symbolic_slice, iterator_info = get_symbolic_expr(
                             copy.deepcopy(node.func.value.slice),
                             ctx.symbolic,
                             ctx.global_vars,
+                            ctx.get_alive_var_names(),
                         )
+                        for info in iterator_info:
+                            iterator_infos[info[0]] = ArrayAttr.get(
+                                [
+                                    IntegerAttr.get(IntegerType.get_signless(64), v)
+                                    for v in info[1]
+                                ]
+                            )
                         if isinstance(slice, int):
                             slice = tuple([slice])
                         else:
@@ -2078,11 +2148,12 @@ class ASTTransformer(ASTBuilder):
                         if op is not None
                         else InsertionPoint.at_block_begin(ctx.top_func.entry_block)
                     )
-                    stream = ctx.buffers[new_name].clone(ip=ip)
+                    stream = ctx.get_symbol(new_name).clone(ip=ip)
                     if symbolic_slice is not None:
                         stream.attributes["symbolic_slice"] = StringAttr.get(
                             symbolic_slice
                         )
+                        stream.attributes["iterators"] = DictAttr.get(iterator_infos)
                     get_op = allo_d.StreamGetOp(
                         node.func.value.dtype.build(),
                         stream.result,
@@ -2826,6 +2897,7 @@ class ASTTransformer(ASTBuilder):
             assert (
                 len(node.items[0].context_expr.args) <= 3
             ), "Only support three arguments (lower, upper bound, and step) for `allo.meta_for()`"
+            var = node.items[0].optional_vars.id
             rargs = [
                 ASTResolver.resolve_constant(node.items[0].context_expr.args[0], ctx)
             ]
@@ -2841,17 +2913,40 @@ class ASTTransformer(ASTBuilder):
                         node.items[0].context_expr.args[2], ctx
                     )
                 )
-            var = node.items[0].optional_vars.id
-            for i in range(*rargs):
-                ctx.global_vars[var] = i
-                build_stmts(ctx, node.body)
-                ctx.global_vars.pop(var)
+            if ctx.unroll or node in ctx.meta_fors_to_unroll:
+                for i in range(*rargs):
+                    with ctx.block_scope_guard():
+                        ctx.global_vars[var] = i
+                        build_stmts(ctx, node.body)
+                        ctx.global_vars.pop(var)
+            else:
+                # replace with regular for loop to reduce codesize
+                with ctx.loop_scope_guard():
+                    op_name = f"S_{var}_{str(ctx.loop_band_count)}"
+                    for_op = ASTTransformer.build_single_for(
+                        ctx, node.items[0].context_expr.args, op_name, var
+                    )
+                    ctx.global_vars[var] = 0 if len(rargs) == 1 else rargs[0]
+                    ctx.symbolic[var] = (op_name, (op_name, tuple(rargs)))
+                    is_affine = isinstance(for_op, affine_d.AffineForOp)
+                    with ctx.block_scope_guard():
+                        ctx.put_symbol(
+                            name=var,
+                            val=MockArg(for_op.induction_variable, is_affine),
+                            tag="placeholder",
+                        )
+                        ctx.set_ip(for_op.body.operations[0])
+                        build_stmts(ctx, node.body)
+                    gc.collect()
+                    ctx.pop_ip()
+                    ctx.global_vars.pop(var)
             return
         else:
             raise RuntimeError("Unsupported meta function")
         if final_cond:
             ctx.with_scope_level += 1
-            stmts = build_stmts(ctx, node.body)
+            with ctx.block_scope_guard():
+                stmts = build_stmts(ctx, node.body)
             # clear inner context
             ctx.meta_if_stack = ctx.meta_if_stack[: ctx.with_scope_level]
             ctx.with_scope_level -= 1

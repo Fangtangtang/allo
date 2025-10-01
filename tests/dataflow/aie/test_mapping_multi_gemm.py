@@ -1,6 +1,7 @@
 # Copyright Allo authors. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import allo
 from allo.ir.types import int8, int16, bfloat16
 import allo.dataflow as df
@@ -58,10 +59,11 @@ def _test_batched_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
         @df.kernel(mapping=[Pk, Pm, Pn])
         def gemma(A: TyI[M, K] @ LyA, B: TyI[K, N] @ LyB, C: TyO[M, N] @ LyC):
             pk, pm, pn = df.get_pid()
+            C_in: TyO[Mt, Nt]
             with allo.meta_if(pk > 0):
-                C_in: TyO[Mt, Nt] = pipe_a[pk - 1, pm, pn].get()
+                C_in[:, :] = pipe_a[pk - 1, pm, pn].get()
             with allo.meta_else():
-                C_in: TyO[Mt, Nt] = 0
+                C_in[:, :] = 0
             C_out: TyO[Mt, Nt] = allo.add(allo.matmul(A, B), C_in)
             with allo.meta_if(pk < Pk - 1):
                 pipe_a[pk, pm, pn].put(C_out)
@@ -75,10 +77,11 @@ def _test_batched_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
         @df.kernel(mapping=[Pk, Pm, Pn])
         def gemmb(D: TyI[M, K] @ LyA, E: TyI[K, N] @ LyB, F: TyO[M, N] @ LyC):
             pk, pm, pn = df.get_pid()
+            F_in: TyO[Mt, Nt]
             with allo.meta_if(pk > 0):
-                F_in: TyO[Mt, Nt] = pipe_b[pk - 1, pm, pn].get()
+                F_in[:, :] = pipe_b[pk - 1, pm, pn].get()
             with allo.meta_else():
-                F_in: TyO[Mt, Nt] = 0
+                F_in[:, :] = 0
             F_out: TyO[Mt, Nt] = allo.add(allo.matmul(D, E), F_in)
             with allo.meta_if(pk < Pk - 1):
                 pipe_b[pk, pm, pn].put(F_out)
@@ -132,9 +135,16 @@ def _test_batched_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
 
 
 if __name__ == "__main__":
+    dma_opt_flag = os.getenv("ENABLE_AGGRESSIVE_PORT_UTILIZATION_PATCH") == "1"
+    if dma_opt_flag:
+        os.environ["FACTOR"] = "2"
+
     _test_batched_gemm(512, 512, 512, 8, 8, 8, int16, int16)
     _test_batched_gemm(512, 512, 512, 8, 8, 8, int8, int8)
     try:
         _test_batched_gemm(512, 512, 512, 8, 8, 8, bfloat16, bfloat16)
     except:
         print("[NOTE]: bfloat16 have accuracy issue")
+
+    if dma_opt_flag:
+        del os.environ["FACTOR"]
