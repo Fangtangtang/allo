@@ -5,6 +5,7 @@
 import ast
 import copy
 import sys
+import os
 import traceback
 import inspect
 import textwrap
@@ -30,7 +31,6 @@ from .types import (
     Stream,
 )
 from .typing_rule import get_typing_rule
-from ..backend.ip import IPModule
 from ..utils import (
     is_anywidth_int_type_and_not_np,
     get_bitwidth_from_type,
@@ -42,7 +42,6 @@ from ..utils import (
 from ..memory import DTensor, Layout
 from ..logging import print_error_message
 from .utils import parse_ast, get_func_id_from_param_types, resolve_generic_types
-from ..backend.aie.external_kernel import ExternalModule
 
 
 # pylint: disable=too-many-public-methods
@@ -114,8 +113,8 @@ class TypeInferer(ASTVisitor):
 
     @staticmethod
     def visit_Name(ctx: ASTContext, node: ast.Name):
-        if node.id in ctx.buffers:
-            var = ctx.buffers[node.id]
+        var = ctx.get_symbol(node.id, allow_missing=True)
+        if var is not None:
             node.dtype = var.dtype
             node.shape = var.shape
             return node
@@ -200,19 +199,20 @@ class TypeInferer(ASTVisitor):
 
     @staticmethod
     def visit_all_for(ctx: ASTContext, node: ast.For):
-        # Set loop induction variables
-        if isinstance(node.target, ast.Tuple):
-            ivs = list(node.target.elts)
-        else:
-            ivs = [node.target]
-        for iv in ivs:
-            iv.shape = tuple()
-            iv.dtype = Index()
-            ctx.buffers[iv.id] = iv
-        visit_stmts(ctx, node.iter.args)
-        visit_stmts(ctx, node.body)
-        node.shape = None
-        node.dtype = None
+        with ctx.block_scope_guard():
+            # Set loop induction variables
+            if isinstance(node.target, ast.Tuple):
+                ivs = list(node.target.elts)
+            else:
+                ivs = [node.target]
+            for iv in ivs:
+                iv.shape = tuple()
+                iv.dtype = Index()
+                ctx.put_symbol(name=iv.id, val=iv)
+            visit_stmts(ctx, node.iter.args)
+            visit_stmts(ctx, node.body)
+            node.shape = None
+            node.dtype = None
         return node
 
     @staticmethod
@@ -334,7 +334,6 @@ class TypeInferer(ASTVisitor):
                     target.shape = (
                         rhs.shape[i] if isinstance(rhs.dtype, tuple) else rhs.shape
                     )
-                    ctx.buffers[target.id] = target
                     # update global variables for metaprogramming
                     if (
                         isinstance(node.value, ast.Call)
@@ -345,6 +344,8 @@ class TypeInferer(ASTVisitor):
                             f"df.p{i}"
                         ]
                         ctx.symbolic[ast.unparse(target)] = f"p{i}"
+                    else:
+                        ctx.put_symbol(name=target.id, val=target)
                 else:
                     lhs = visit_stmt(ctx, target)
             node.dtype = rhs.dtype
@@ -392,7 +393,7 @@ class TypeInferer(ASTVisitor):
         if isinstance(node.target, ast.Subscript):
             lhs = visit_stmt(ctx, node.target)
         elif isinstance(node.target, ast.Name):  # scalar
-            lhs = ctx.buffers[node.target.id]
+            lhs = ctx.get_symbol(node.target.id)
         else:
             raise RuntimeError("Unsupported AugAssign")
         # augment LHS
@@ -478,7 +479,7 @@ class TypeInferer(ASTVisitor):
                         upper = (
                             index[1]
                             if index[1] is not None
-                            else ctx.buffers[node.value.id].shape[dim]
+                            else ctx.get_symbol(node.value.id).shape[dim]
                         )
                         step = (
                             index[2] if (len(index) > 2 and index[2] is not None) else 1
@@ -487,7 +488,7 @@ class TypeInferer(ASTVisitor):
                         if size > 0:
                             shape.append(size)
             node.shape = tuple(shape)
-            node.dtype = ctx.buffers[node.value.id].dtype
+            node.dtype = ctx.get_symbol(node.value.id).dtype
         elif len(value.shape) == 0 and isinstance(
             value.dtype, (Int, UInt)
         ):  # bit operation
@@ -569,7 +570,7 @@ class TypeInferer(ASTVisitor):
             node.value.dtype = target_dtype
         else:
             visit_stmt(ctx, node.value)
-        ctx.buffers[node.target.id] = node
+        ctx.put_symbol(name=node.target.id, val=node)
         node.dtype = target_dtype
         node.shape = target_shape
         visit_stmt(ctx, node.target)
@@ -590,7 +591,7 @@ class TypeInferer(ASTVisitor):
             # Create a new context to avoid name collision
             old_ctx = ctx
             ctx = old_ctx.copy()
-            ctx.buffers = old_ctx.buffers.copy()
+            ctx.scopes = old_ctx.scopes
             for decorator in node.decorator_list:
                 if isinstance(decorator, ast.Call):
                     if isinstance(decorator.func, ast.Attribute):
@@ -607,7 +608,7 @@ class TypeInferer(ASTVisitor):
                                 for dim in np.ndindex(*mapping):
                                     new_ctx = old_ctx.copy()
                                     new_ctx.rank = dim
-                                    new_ctx.buffers = old_ctx.buffers.copy()
+                                    new_ctx.scopes = old_ctx.scopes
                                     new_ctx.global_vars = old_ctx.global_vars.copy()
                                     for axis, val in enumerate(dim):
                                         new_ctx.global_vars.update(
@@ -647,7 +648,7 @@ class TypeInferer(ASTVisitor):
                                 sample_dim = (0,) * len(mapping)
                                 new_ctx = old_ctx.copy()
                                 new_ctx.rank = sample_dim
-                                new_ctx.buffers = old_ctx.buffers.copy()
+                                new_ctx.scopes = old_ctx.scopes
                                 new_ctx.global_vars = old_ctx.global_vars.copy()
                                 for axis, val in enumerate(sample_dim):
                                     new_ctx.global_vars.update(
@@ -682,56 +683,59 @@ class TypeInferer(ASTVisitor):
                 )
                 ctx.global_vars[name] = call_val
 
-        # Input types
-        for arg in node.args.args:
-            arg.dtype, arg.shape, arg.spec = TypeInferer.visit_type_hint(
-                ctx, arg.annotation
-            )
-            arg.dtensor = DTensor(
-                ctx.rank, ctx.mapping, arg.shape, arg.dtype, arg.spec, name=arg.arg
-            )
-            # update shape
-            arg.shape = arg.dtensor.get_local_shape()
-            ctx.buffers[arg.arg] = arg
-
-        func_name = node.name if ctx.func_id is None else f"{node.name}_{ctx.func_id}"
-        # Return type
-        if not (
-            (isinstance(node.returns, ast.Constant) and node.returns.value is None)
-            or node.returns is None
-        ):
-            if isinstance(node.returns, ast.Tuple):
-                # Multiple return values
-                node.returns.shape = []
-                node.returns.dtype = []
-                node.returns.spec = []
-                for elt in node.returns.elts:
-                    elt.dtype, elt.shape, elt.spec = TypeInferer.visit_type_hint(
-                        ctx, elt
-                    )
-                    node.returns.dtype += [elt.dtype]
-                    node.returns.shape += [elt.shape]
-                    node.returns.spec += [elt.spec]
-            else:
-                # Single return value
-                node.returns.dtype, node.returns.shape, node.returns.spec = (
-                    TypeInferer.visit_type_hint(ctx, node.returns)
+        with ctx.block_scope_guard():
+            # Input types
+            for arg in node.args.args:
+                arg.dtype, arg.shape, arg.spec = TypeInferer.visit_type_hint(
+                    ctx, arg.annotation
                 )
-            ctx.buffers[func_name] = node
+                arg.dtensor = DTensor(
+                    ctx.rank, ctx.mapping, arg.shape, arg.dtype, arg.spec, name=arg.arg
+                )
+                # update shape
+                arg.shape = arg.dtensor.get_local_shape()
+                ctx.put_symbol(name=arg.arg, val=arg)
 
-        # set context
-        ctx.top_func = node
-        ctx.top_func_tree = node
-        visit_stmts(ctx, node.body)
-        # Note that the result type may be different from the return type
-        if node.returns is None or (
-            isinstance(node.returns, ast.Constant) and node.returns.value is None
-        ):
-            node.dtype = None
-            node.shape = None
-        else:
-            node.dtype = node.returns.dtype
-            node.shape = node.returns.shape
+            func_name = (
+                node.name if ctx.func_id is None else f"{node.name}_{ctx.func_id}"
+            )
+            # Return type
+            if not (
+                (isinstance(node.returns, ast.Constant) and node.returns.value is None)
+                or node.returns is None
+            ):
+                if isinstance(node.returns, ast.Tuple):
+                    # Multiple return values
+                    node.returns.shape = []
+                    node.returns.dtype = []
+                    node.returns.spec = []
+                    for elt in node.returns.elts:
+                        elt.dtype, elt.shape, elt.spec = TypeInferer.visit_type_hint(
+                            ctx, elt
+                        )
+                        node.returns.dtype += [elt.dtype]
+                        node.returns.shape += [elt.shape]
+                        node.returns.spec += [elt.spec]
+                else:
+                    # Single return value
+                    node.returns.dtype, node.returns.shape, node.returns.spec = (
+                        TypeInferer.visit_type_hint(ctx, node.returns)
+                    )
+                ctx.put_symbol(name=func_name, val=node)
+
+            # set context
+            ctx.top_func = node
+            ctx.top_func_tree = node
+            visit_stmts(ctx, node.body)
+            # Note that the result type may be different from the return type
+            if node.returns is None or (
+                isinstance(node.returns, ast.Constant) and node.returns.value is None
+            ):
+                node.dtype = None
+                node.shape = None
+            else:
+                node.dtype = node.returns.dtype
+                node.shape = node.returns.shape
         # Recover the old context
         if old_ctx is not None:
             ctx = old_ctx
@@ -771,9 +775,11 @@ class TypeInferer(ASTVisitor):
     @staticmethod
     def visit_If(ctx: ASTContext, node: ast.If):
         visit_stmt(ctx, node.test)
-        visit_stmts(ctx, node.body)
+        with ctx.block_scope_guard():
+            visit_stmts(ctx, node.body)
         if len(node.orelse) > 0:
-            visit_stmts(ctx, node.orelse)
+            with ctx.block_scope_guard():
+                visit_stmts(ctx, node.orelse)
         node.dtype = None
         node.shape = None
         return node
@@ -781,7 +787,8 @@ class TypeInferer(ASTVisitor):
     @staticmethod
     def visit_While(ctx: ASTContext, node: ast.While):
         visit_stmt(ctx, node.test)
-        visit_stmts(ctx, node.body)
+        with ctx.block_scope_guard():
+            visit_stmts(ctx, node.body)
         if len(node.orelse) > 0:
             raise RuntimeError(
                 "'else' clause for 'while' not supported in Allo kernels"
@@ -852,20 +859,40 @@ class TypeInferer(ASTVisitor):
                         if isinstance(node.func.value, ast.Name)
                         else node.func.value.value.id
                     )
-                    node.func.value.shape = ctx.buffers[vid].dtype.shape
-                    node.func.value.dtype = ctx.buffers[vid].dtype.dtype
+                    if isinstance(node.func.value, ast.Subscript):
+                        _, loops_to_unroll = get_symbolic_expr(
+                            copy.deepcopy(node.func.value.slice),
+                            ctx.symbolic,
+                            ctx.global_vars,
+                            ctx.get_alive_var_names(),
+                        )
+                        if os.getenv("FORCE_UNROLL_INDEX") == "1":
+                            ctx.meta_fors_to_unroll.update(loops_to_unroll)
+                    val = ctx.get_symbol(vid)
+                    node.func.value.shape = val.dtype.shape
+                    node.func.value.dtype = val.dtype.dtype
                 elif node.func.attr == "get":
                     vid = (
                         node.func.value.id
                         if isinstance(node.func.value, ast.Name)
                         else node.func.value.value.id
                     )
+                    if isinstance(node.func.value, ast.Subscript):
+                        _, loops_to_unroll = get_symbolic_expr(
+                            copy.deepcopy(node.func.value.slice),
+                            ctx.symbolic,
+                            ctx.global_vars,
+                            ctx.get_alive_var_names(),
+                        )
+                        if os.getenv("FORCE_UNROLL_INDEX") == "1":
+                            ctx.meta_fors_to_unroll.update(loops_to_unroll)
                     # return value
-                    node.shape = ctx.buffers[vid].dtype.shape
-                    node.dtype = ctx.buffers[vid].dtype.dtype
+                    val = ctx.get_symbol(vid)
+                    node.shape = val.dtype.shape
+                    node.dtype = val.dtype.dtype
                     # stream type itself
                     node.func.value.shape = tuple()
-                    node.func.value.dtype = ctx.buffers[vid].dtype
+                    node.func.value.dtype = val.dtype
                 elif node.func.attr == "bitcast":
                     visit_stmt(ctx, node.func.value)
                     # single-element operation
@@ -910,6 +937,29 @@ class TypeInferer(ASTVisitor):
                 node.shape = new_args[0].shape
             else:
                 raise RuntimeError(f"Unsupported function call {node.func.id}")
+            return node
+
+        # Local imports to avoid cyclic dependencies
+        from ..backend.ip import IPModule
+
+        try:
+            from ..backend.aie.vliw import VLIWKernelFunction
+        except ImportError:
+
+            class VLIWKernelFunction:
+                pass
+
+        try:
+            from ..backend.aie.external_kernel import ExternalModule
+        except ImportError:
+
+            class ExternalModule:
+                pass
+
+        if isinstance(obj, VLIWKernelFunction):
+            visit_stmts(ctx, node.args)
+            node.shape = None
+            node.dtype = None
             return node
 
         if (
@@ -1145,11 +1195,13 @@ class TypeInferer(ASTVisitor):
         # Compile-time comparison
         if node.items[0].context_expr.func.attr in {"meta_if", "meta_elif"}:
             cond = ASTResolver.resolve_constant(node.items[0].context_expr.args[0], ctx)
-            symbolic_cond = get_symbolic_expr(
+            symbolic_cond, loops_to_unroll = get_symbolic_expr(
                 copy.deepcopy(node.items[0].context_expr.args[0]),
                 ctx.symbolic,
                 ctx.global_vars,
+                ctx.get_alive_var_names(),
             )
+            ctx.meta_fors_to_unroll.update(loops_to_unroll)
             if node.items[0].context_expr.func.attr == "meta_if":
                 final_cond = cond
                 if len(ctx.meta_if_stack) > ctx.with_scope_level:
@@ -1195,11 +1247,31 @@ class TypeInferer(ASTVisitor):
             assert (
                 len(node.items[0].context_expr.args) <= 3
             ), "Only support three arguments (lower, upper bound, and step) for `allo.meta_for()`"
-            lb = ASTResolver.resolve_constant(node.items[0].context_expr.args[0], ctx)
+            rargs = [
+                ASTResolver.resolve_constant(node.items[0].context_expr.args[0], ctx)
+            ]
+            if len(node.items[0].context_expr.args) > 1:
+                rargs.append(
+                    ASTResolver.resolve_constant(
+                        node.items[0].context_expr.args[1], ctx
+                    )
+                )
+            if len(node.items[0].context_expr.args) > 2:
+                rargs.append(
+                    ASTResolver.resolve_constant(
+                        node.items[0].context_expr.args[2], ctx
+                    )
+                )
             var = node.items[0].optional_vars.id
-            ctx.global_vars[var] = lb
-            visit_stmts(ctx, node.body)
-            ctx.global_vars.pop(var)
+            for i in range(*rargs):
+                ctx.global_vars[var] = i
+                ctx.symbolic[var] = (i, node)
+                with ctx.block_scope_guard():
+                    visit_stmts(ctx, node.body)
+                ctx.global_vars.pop(var)
+                ctx.symbolic.pop(var)
+                if not ctx.unroll and node not in ctx.meta_fors_to_unroll:
+                    break
             node.dtype = None
             node.shape = None
             return node
@@ -1207,7 +1279,8 @@ class TypeInferer(ASTVisitor):
             raise RuntimeError("Unsupported meta function")
         if ctx.unroll and final_cond:
             ctx.with_scope_level += 1
-            visit_stmts(ctx, node.body)
+            with ctx.block_scope_guard():
+                visit_stmts(ctx, node.body)
             # clear inner context
             ctx.meta_if_stack = ctx.meta_if_stack[: ctx.with_scope_level]
             ctx.with_scope_level -= 1
@@ -1217,7 +1290,8 @@ class TypeInferer(ASTVisitor):
             ctx.predicate_stack[-1].append(tuple((symbolic_cond, [])))
             ctx.with_scope_level += 1
             ctx.predicate_stack.append(ctx.predicate_stack[-1][-1][1])
-            visit_stmts(ctx, node.body)
+            with ctx.block_scope_guard():
+                visit_stmts(ctx, node.body)
             ctx.meta_if_stack = ctx.meta_if_stack[: ctx.with_scope_level]
             ctx.predicate_stack = ctx.predicate_stack[: ctx.with_scope_level]
             ctx.with_scope_level -= 1

@@ -1,4 +1,4 @@
-# pylint: disable=import-error, no-name-in-module, c-extension-no-member, too-many-nested-blocks, consider-using-enumerate, consider-using-namedtuple-or-dataclass, too-many-branches
+# pylint: disable=import-error, no-name-in-module, c-extension-no-member, too-many-nested-blocks, consider-using-namedtuple-or-dataclass, too-many-branches, unsubscriptable-object
 # Copyright Allo authors. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -115,9 +115,13 @@ class Stream:
         self.src: str = None  # source tile of the stream
         self.dst: str = None  # destination tile of the stream
 
+        # used to 'select' the right stream in a regular for loop
+        self.src_related_iter_info = None
+        self.dst_related_iter_info = None
+
         # layout transform on stream
-        self.src_layout_transform = None
-        self.dst_layout_transform = None
+        self.src_layout_transform: tuple[list[int], list[int], list[int], str] = None
+        self.dst_layout_transform: tuple[list[int], list[int], list[int], str] = None
 
     def set_element_type(self, type_str: str, context: Context):
         """
@@ -196,31 +200,26 @@ class Stream:
                 self.dst_layout_transform = None
         if self.src_layout_transform is None and self.dst_layout_transform is None:
             return []
+        layout_transform = None
+        if self.src_layout_transform is None and self.dst_layout_transform is not None:
+            layout_transform = self.dst_layout_transform
+        elif (
+            self.src_layout_transform is not None and self.dst_layout_transform is None
+        ):
+            layout_transform = self.src_layout_transform
         else:
-            layout_transform = None
-            if (
-                self.src_layout_transform is None
-                and self.dst_layout_transform is not None
-            ):
-                layout_transform = self.dst_layout_transform
-            elif (
-                self.src_layout_transform is not None
-                and self.dst_layout_transform is None
-            ):
-                layout_transform = self.src_layout_transform
-            else:
-                raise ValueError("To be implemented.")
-            dimensions_to_stream: list[tuple[int, int]] = []
-            sizes = list(layout_transform[1])
-            strides = list(layout_transform[2])
-            assert len(sizes) == len(strides)
-            if self.type_str == "i4":
-                sizes[-1] //= 2
-                for i in range(len(sizes) - 1):
-                    strides[i] //= 2
-            for size, stride in zip(sizes, strides):
-                dimensions_to_stream.append((size, stride))
-            return dimensions_to_stream
+            raise ValueError("To be implemented.")
+        dimensions_to_stream: list[tuple[int, int]] = []
+        sizes = list(layout_transform[1])
+        strides = list(layout_transform[2])
+        assert len(sizes) == len(strides)
+        if self.type_str == "i4":
+            sizes[-1] //= 2
+            for i in range(len(sizes) - 1):
+                strides[i] //= 2
+        for size, stride in zip(sizes, strides):
+            dimensions_to_stream.append((size, stride))
+        return dimensions_to_stream
 
     def __str__(self):
         return f"Stream (name={self.name}, dtype={self.allo_element_type}, is_tensor={self.is_tensor}, src={self.src}, dst={self.dst})"
@@ -341,6 +340,7 @@ def inject_external_kernels(
             ):
                 if (
                     op.inputs[0].owner.opview.literal_value == 0
+                    and len(op.outputs[0].type.shape) > 0
                     and len(op.outputs[0].type.shape) <= 2
                 ):
                     M = (
@@ -597,7 +597,7 @@ def classify_aie_functions(
     return top_func, core_funcs, external_funcs
 
 
-def get_aie_mlir_dtype_from_str(dtype_str: str) -> aie_ir.Type:
+def get_aie_mlir_dtype_from_str(dtype_str: str):
     """
     Convert a string representing a data type into the corresponding AIE IR type.
     """
