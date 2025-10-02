@@ -4,11 +4,15 @@
 
 from dataclasses import dataclass
 from collections import defaultdict, Counter
+from graphviz import Digraph
 import allo._mlir._mlir_libs._mlir as allo_ir
 from ..._mlir.ir import (
     InsertionPoint,
     FunctionType,
+    IntegerType,
     UnitAttr,
+    IntegerAttr,
+    ArrayAttr,
     IndexType,
     StringAttr,
 )
@@ -345,13 +349,14 @@ class BufferedStream:
     dst_arg_idx: int
 
 
+# pylint: disable=too-many-instance-attributes
 class NodeMetaData:
     node_cnt = 0
 
     def __init__(
         self,
         name: str,
-        use_external_kernel: bool,
+        used_external_kernel: set[str],
         tag: str,
         in_types: list,
         out_types: list,
@@ -361,11 +366,17 @@ class NodeMetaData:
         self.id = NodeMetaData.node_cnt
         NodeMetaData.node_cnt += 1
         self.name = name
-        self.use_external_kernel = use_external_kernel
+        self.used_external_kernel: set[str] = (
+            used_external_kernel if used_external_kernel is not None else set()
+        )
         self.op_tag: str = tag
         self.df_kernels: set[str] = set()
         self.in_types: list = in_types
         self.out_types: list = out_types
+        self.in_types_nest_depth = [0] * len(in_types) if in_types is not None else []
+        self.out_types_nest_depth = (
+            [0] * len(out_types) if out_types is not None else []
+        )
         self.repeat: int = repeat  # repeat count after bundling
         self.length: int = length
         self.input_streams: list[Stream] = []
@@ -390,14 +401,14 @@ class NodeBase:
         self,
         name: str = None,
         func_sample: func_d.FuncOp = None,
-        use_external_kernel: bool = False,
+        used_external_kernel: set[str] = None,
         tag: str = None,
         repeat: int = 0,
         length: int = 1,
     ):
         self.meta_data: NodeMetaData = NodeMetaData(
             name,
-            use_external_kernel,
+            used_external_kernel,
             tag,
             in_types=(
                 func_sample.attributes["function_type"].value.inputs
@@ -446,10 +457,10 @@ class InitialNode(NodeBase):
         self,
         func_sample: func_d.FuncOp,
         func_name: str,
-        use_external_kernel: bool,
+        used_external_kernel: bool,
         tag: str,
     ):
-        super().__init__(func_name, func_sample, use_external_kernel, tag, 1)
+        super().__init__(func_name, func_sample, used_external_kernel, tag, 1)
         self.org_tags.append(tag)
         self.meta_data.df_kernels.add(func_name)
 
@@ -479,25 +490,38 @@ class CollocatedNode(NodeBase):
 
     def init_for_bundle(self, node_list: list[NodeBase]):
         sample_node: NodeBase = node_list[0]
-        self.meta_data.use_external_kernel = sample_node.meta_data.use_external_kernel
+        self.meta_data.used_external_kernel = sample_node.meta_data.used_external_kernel
         self.meta_data.in_types = sample_node.meta_data.in_types
+        for i_depth in sample_node.meta_data.in_types_nest_depth:
+            self.meta_data.in_types_nest_depth.append(i_depth + 1)
         self.meta_data.out_types = sample_node.meta_data.out_types
+        for o_depth in sample_node.meta_data.out_types_nest_depth:
+            self.meta_data.out_types_nest_depth.append(o_depth + 1)
         self.meta_data.input_streams = sample_node.meta_data.input_streams
         self.meta_data.output_streams = sample_node.meta_data.output_streams
         self.global_interfaces = {key: [] for key in sample_node.global_interfaces}
         org_tags = []
-        for node in node_list:
+        for idx, node in enumerate(node_list):
             org_tags.append(node.org_tags)
             self.meta_data.df_kernels.update(node.meta_data.df_kernels)
             self.buffered_stream.update(node.buffered_stream)
             for key, value in node.global_interfaces.items():
                 assert key in self.global_interfaces
+                for v in value:
+                    v.first_use += (
+                        idx * sample_node.meta_data.length * Config.LOCAL_CODE_OFFSET
+                    )
+                    v.last_use += (
+                        idx * sample_node.meta_data.length * Config.LOCAL_CODE_OFFSET
+                    )
                 self.global_interfaces[key].extend(value)
         self.org_tags.append(tuple(org_tags))
 
     def init_for_chain(self, node_a: NodeBase, node_b: NodeBase):
-        self.meta_data.use_external_kernel = (
-            node_a.meta_data.use_external_kernel or node_b.meta_data.use_external_kernel
+        self.meta_data.used_external_kernel = (
+            node_a.meta_data.used_external_kernel.union(
+                node_b.meta_data.used_external_kernel
+            )
         )
         in_types_a: list = node_a.meta_data.in_types
         arg_idx_offset = len(in_types_a)
@@ -505,7 +529,14 @@ class CollocatedNode(NodeBase):
         out_types_a = node_a.meta_data.out_types
         out_types_b = node_b.meta_data.out_types
         self.meta_data.in_types = in_types_a + in_types_b
+        self.meta_data.in_types_nest_depth = (
+            node_a.meta_data.in_types_nest_depth + node_b.meta_data.in_types_nest_depth
+        )
         self.meta_data.out_types = out_types_a + out_types_b
+        self.meta_data.out_types_nest_depth = (
+            node_a.meta_data.out_types_nest_depth
+            + node_b.meta_data.out_types_nest_depth
+        )
         self.buffered_stream.update(node_a.buffered_stream)
         for stream_info in node_b.buffered_stream.values():
             stream_info.src_arg_idx += arg_idx_offset
@@ -536,8 +567,8 @@ class ComputationGraph:
         allo_module: allo_ir.ir.Module,
         top_func_name: str,
         stream_map: dict[str, Stream],
-        core_func_args: dict[str, dict[int, tuple[Argument, bool]]],
-        use_external_kernels: dict[str, bool],
+        core_func_args: dict[str, dict[int, tuple[Argument | list[Argument], bool]]],
+        used_external_kernels: dict[str, set[str]],
         func_instances: dict = None,
     ):
         self.allo_module = allo_module
@@ -574,12 +605,20 @@ class ComputationGraph:
                 node = InitialNode(
                     func_sample,
                     func_name,
-                    use_external_kernels[predicate_tag],
+                    used_external_kernels[predicate_tag],
                     predicate_tag,
                 )
                 _, indexes = parse_kernel_name(func_name)
                 params = core_func_args[func_name]
                 for idx, (argument, is_input) in params.items():
+                    if isinstance(argument, list):
+                        for arg in argument:
+                            if arg.stream is not None:
+                                if is_input:
+                                    node.meta_data.input_streams.append(arg.stream)
+                                else:
+                                    node.meta_data.output_streams.append(arg.stream)
+                        continue
                     if argument.stream is not None:
                         if is_input:
                             node.meta_data.input_streams.append(argument.stream)
@@ -626,7 +665,7 @@ class ComputationGraph:
         bundled_node = CollocatedNode(
             tag=sample_node.meta_data.op_tag,
             name=f"{sample_node.meta_data.name}x{len(node_name_list)}",
-            length=sample_node.meta_data.length,
+            length=sample_node.meta_data.length * len(node_name_list),
         )
         bundled_node.init_for_bundle(node_list)
         # update stream
@@ -640,11 +679,19 @@ class ComputationGraph:
                 self.dependencies[bundled_node.meta_data.name].add(stream.src)
         # update nodes and remove bundled function
         for idx, arg in self.func_args[sample_node.meta_data.name].items():
-            if arg[0].stream is not None:
+            if isinstance(arg[0], Argument):
+                if arg[0].stream is not None:
+                    for name in node_name_list:
+                        if name != sample_node.meta_data.name:
+                            self.edges.pop(self.func_args[name][idx][0].stream.name)
+                        self.func_args[name][idx][0].stream.name = arg[0].stream.name
+            else:
+                # stream list
                 for name in node_name_list:
-                    if name != sample_node.meta_data.name:
-                        self.edges.pop(self.func_args[name][idx][0].stream.name)
-                    self.func_args[name][idx][0].stream.name = arg[0].stream.name
+                    for arg_idx, stream_arg in enumerate(self.func_args[name][idx][0]):
+                        if name != sample_node.meta_data.name:
+                            self.edges.pop(stream_arg.stream.name)
+                        stream_arg.stream.name = arg[0][arg_idx].stream.name
         self.func_args[bundled_node.meta_data.name] = self.func_args[
             sample_node.meta_data.name
         ]
@@ -687,11 +734,35 @@ class ComputationGraph:
             if stream.src == node_name_a:
                 idx_a, idx_b = -1, -1
                 for idx, arg_info in param_a.items():
-                    if arg_info[0].stream is not None and arg_info[0].stream == stream:
+                    stream_names = set()
+                    if isinstance(arg_info[0], list):
+                        for stream_arg in arg_info[0]:
+                            stream_names.add(stream_arg.stream.name)
+                    assert (
+                        isinstance(arg_info[0], Argument) or len(stream_names) == 1
+                    ), "TODO: add support to handle producer-consumer chaining where stream is used in non-unrolled meta_for loops"
+                    arg_info_ = (
+                        arg_info[0]
+                        if isinstance(arg_info[0], Argument)
+                        else arg_info[0][0]
+                    )
+                    if arg_info_.stream is not None and arg_info_.stream == stream:
                         idx_a = idx
                         break
                 for idx, arg_info in param_b.items():
-                    if arg_info[0].stream is not None and arg_info[0].stream == stream:
+                    stream_names = set()
+                    if isinstance(arg_info[0], list):
+                        for stream_arg in arg_info[0]:
+                            stream_names.add(stream_arg.stream.name)
+                    assert (
+                        isinstance(arg_info[0], Argument) or len(stream_names) == 1
+                    ), "TODO: add support to handle producer-consumer chaining where stream is used in non-unrolled meta_for loops"
+                    arg_info_ = (
+                        arg_info[0]
+                        if isinstance(arg_info[0], Argument)
+                        else arg_info[0][0]
+                    )
+                    if arg_info_.stream is not None and arg_info_.stream == stream:
                         idx_b = idx
                         break
                 assert idx_a >= 0 and idx_b >= 0
@@ -754,6 +825,24 @@ class ComputationGraph:
                     ip=self.insert_point,
                 )
                 new_function.attributes["df.kernel"] = UnitAttr.get()
+                new_function.attributes["input_depth"] = ArrayAttr.get(
+                    [
+                        IntegerAttr.get(
+                            IntegerType.get_signless(64),
+                            max(node.meta_data.in_types_nest_depth) - v,
+                        )
+                        for v in node.meta_data.in_types_nest_depth
+                    ]
+                )
+                new_function.attributes["output_depth"] = ArrayAttr.get(
+                    [
+                        IntegerAttr.get(
+                            IntegerType.get_signless(64),
+                            max(node.meta_data.out_types_nest_depth) - v,
+                        )
+                        for v in node.meta_data.out_types_nest_depth
+                    ]
+                )
                 entry_block = new_function.add_entry_block()
                 arg_offset = 0
                 with InsertionPoint(entry_block):
@@ -791,6 +880,10 @@ class ComputationGraph:
                                 loop = scf_d.ForOp(
                                     lower_bound=c0, upper_bound=cmax, step=c1
                                 )
+                                # "task_nest" marks the boundary of original tasks (virtual nodes).
+                                # It ensures acquire/release operations for input/output arguments
+                                # are inserted at the correct points after virtual mapping.
+                                loop.attributes["task_nest"] = UnitAttr.get()
                                 with InsertionPoint(loop.body):
                                     construct_kernel(ele_tag[0])
                                     scf_d.YieldOp([])
@@ -826,14 +919,25 @@ class ComputationGraph:
                         for ele in node.org_tags:
                             construct_kernel(ele)
                     func_d.ReturnOp([])
+
                     # Step3: Convert some streams to local buffers
+                    def is_op_in_func(op_, target_func):
+                        parent = op_
+                        while parent is not None:
+                            if parent.operation.name == "func.func":
+                                return parent == target_func
+                            parent = parent.parent
+                        return False
+
                     for bufferized_stream_info in node.buffered_stream.values():
+                        # collect put/get, filter out the put/get not in the new kernel function
                         stream_puts = [
                             use.owner
                             for use in new_function.arguments[
                                 bufferized_stream_info.src_arg_idx
                             ].uses
                             if isinstance(use.owner, allo_d.StreamPutOp)
+                            and is_op_in_func(use.owner, new_function)
                         ]
                         stream_gets = [
                             use.owner
@@ -841,18 +945,51 @@ class ComputationGraph:
                                 bufferized_stream_info.dst_arg_idx
                             ].uses
                             if isinstance(use.owner, allo_d.StreamGetOp)
+                            and is_op_in_func(use.owner, new_function)
                         ]
                         assert len(stream_puts) == len(stream_gets)
                         for i in range(len(stream_puts)):
                             stream_put: allo_d.StreamPutOp = stream_puts[i]
                             stream_get: allo_d.StreamGetOp = stream_gets[i]
-                            # TODO: support bufferize stream in branches or even loops
                             if stream_put.parent is stream_get.parent:
                                 put_value = stream_put.operands[-1]
                                 get_result = stream_get.result
                                 get_result.replace_all_uses_with(put_value)
                                 stream_put.erase()
                                 stream_get.erase()
+                            else:
+                                put_in_loop = (
+                                    stream_put.parent is not None
+                                    and stream_put.parent.name
+                                    in {"scf.for", "affine.for"}
+                                )
+                                get_in_loop = (
+                                    stream_get.parent is not None
+                                    and stream_get.parent.name
+                                    in {"scf.for", "affine.for"}
+                                )
+                                if (
+                                    put_in_loop
+                                    and get_in_loop
+                                    and stream_put.parent.parent
+                                    == stream_get.parent.parent
+                                ):
+                                    # fixme: this is only a little trick to do very simple loop fusion
+                                    if (
+                                        len(
+                                            list(stream_put.parent.regions[0].blocks[0])
+                                        )
+                                        == 2
+                                    ):
+                                        # only contains `put` and `yield`
+                                        put_value = stream_put.operands[-1]
+                                        get_result = stream_get.result
+                                        get_result.replace_all_uses_with(put_value)
+                                        stream_put.parent.erase()
+                                        stream_get.erase()
+                                        continue
+                                # TODO: support bufferize stream across regions
+                                raise RuntimeError("TODO")
         # Step4: Clean up unused functions
         for func in self.allo_module.body.operations:
             if isinstance(func, func_d.FuncOp) and "df.kernel" in func.attributes:
@@ -937,3 +1074,12 @@ class ComputationGraph:
         for (name_1, name_2), count in connections.items():
             connection_info.append((count, name_1, name_2))
         return connection_info
+
+    def dump(self, output_dir, file_name="virtual_graph"):
+        dot = Digraph(comment="Virtual Computation Graph")
+        dot.attr(rankdir="LR")
+        for node in self.nodes.values():
+            dot.node(node.meta_data.name, label=node.meta_data.name)
+        for edge in self.edges.values():
+            dot.edge(edge.src, edge.dst, label=edge.name)
+        dot.render(file_name, directory=output_dir, format="pdf")
