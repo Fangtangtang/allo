@@ -1196,14 +1196,14 @@ class ASTTransformer(ASTBuilder):
                     static_sizes.append(1)
                     static_strides.append(1)
                     continue
+                # fixme: dynamic offset is incompatible with many builtin opt passes
                 if isinstance(index, MockArg):
                     index = index.val
-                # fixme: unverified (dynamic offset is incompatible with many builtin opt passes)
                 offsets.append(index)
                 static_offsets.append(-1)
                 static_sizes.append(1)
                 static_strides.append(1)
-                continue
+                raise RuntimeError("Not supported. Dynamic offset is incompatible with many builtin opt passes")
             else:
                 raise ValueError(f"Unsupported slice index type ({type(index)})")
         return offsets, sizes, strides, static_offsets, static_sizes, static_strides
