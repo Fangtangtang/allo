@@ -927,6 +927,9 @@ class ASTTransformer(ASTBuilder):
                                 ele.attributes["name"] = StringAttr.get(new_name)
                                 ctx.buffers[new_name] = ele
                                 ctx.put_symbol(name=new_name, val=ele)
+                            # placeholder for array of FIFOs
+                            array = eval(ast.unparse(node.value), ctx.global_vars)
+                            ctx.put_symbol(name=target.id, val=array.shape)
                             return rhs
                         if hasattr(rhs, "attributes"):
                             rhs.attributes["name"] = StringAttr.get(target.id)
@@ -1103,8 +1106,7 @@ class ASTTransformer(ASTBuilder):
 
     @staticmethod
     def build_slices(ctx: ASTContext, node: ast.Subscript, in_shape: list[int]):
-        # TODO: support dynamic.
-        # calculate the static offsets, sizes, strides for ExtractSlice and InsertSlice
+        # calculate the (static) offsets, sizes, strides for ExtractSlice and InsertSlice
         if isinstance(node.slice, ast.Tuple):
             slices = list(node.slice.elts)
         else:
@@ -1196,14 +1198,15 @@ class ASTTransformer(ASTBuilder):
                     static_sizes.append(1)
                     static_strides.append(1)
                     continue
-                # fixme: dynamic offset is incompatible with many builtin opt passes
                 if isinstance(index, MockArg):
-                    index = index.val
-                offsets.append(index)
-                static_offsets.append(-1)
-                static_sizes.append(1)
-                static_strides.append(1)
-                raise RuntimeError("Not supported. Dynamic offset is incompatible with many builtin opt passes")
+                    offsets.append(index.val)
+                    static_offsets.append(-1)
+                    static_sizes.append(1)
+                    static_strides.append(1)
+                    continue
+                raise ValueError(
+                    f"Index type ({type(index)}) not supported. Dynamic offset is incompatible with many builtin opt passes."
+                )
             else:
                 raise ValueError(f"Unsupported slice index type ({type(index)})")
         return offsets, sizes, strides, static_offsets, static_sizes, static_strides
@@ -1304,39 +1307,83 @@ class ASTTransformer(ASTBuilder):
                 orig_strides = list(reversed(orig_strides))
             else:
                 raise RuntimeError("Unsupported layout type")
-            new_offset = orig_offset + sum(
-                o * s for o, s in zip(static_offsets, orig_strides)
-            )
             new_strides = [
                 orig_strides[i] * static_strides[i] for i in range(len(static_strides))
             ]
-            result_strides = []
             result_sizes = []
+            result_strides = []
             for idx_, size in enumerate(static_sizes):
                 if size > 1:
                     result_sizes.append(size)
                     result_strides.append(new_strides[idx_])
-            layout = StridedLayoutAttr.get(new_offset, result_strides)
-            result = MemRefType.get(result_sizes, dtype, layout=layout)
-            subview = memref_d.SubViewOp(
-                source=value.result,
-                result=result,
-                static_offsets=static_offsets,
-                static_sizes=static_sizes,
-                static_strides=static_strides,
-                offsets=offsets,
-                sizes=sizes,
-                strides=strides,
-                ip=ctx.get_ip(),
-            )
-            if isinstance(node.ctx, ast.Load):
-                # copy to another memref type to avoid some annoying type compatibility issue
-                memref_type = MemRefType.get(result_sizes, dtype)
-                alloc_op = memref_d.AllocOp(memref_type, [], [], ip=ctx.get_ip())
-                memref_d.CopyOp(subview.result, alloc_op.result, ip=ctx.get_ip())
-                op = alloc_op
+            if len(offsets) > 0:
+                offset_values = []
+                dynamic_offset_cnt = 0
+                for offset in static_offsets:
+                    if offset < 0:
+                        offset_values.append(offsets[dynamic_offset_cnt])
+                        dynamic_offset_cnt += 1
+                    else:
+                        const_var = arith_d.ConstantOp.create_index(
+                            offset, ip=ctx.get_ip()
+                        )
+                        offset_values.append(const_var)
+                assert len(in_shape) == len(static_strides)
+                flattened_stride = []
+                stride_ = np.prod(in_shape)
+                for shape in in_shape:
+                    stride_ //= shape
+                    flattened_stride.append(stride_)
+                stride_values = [
+                    o * i for o, i in zip(static_strides, flattened_stride)
+                ]
+                # use dynamic index
+                if isinstance(node.ctx, ast.Load):
+                    memref_type = MemRefType.get(result_sizes, dtype)
+                    op = allo_d.LoadSliceOp(
+                        memref_type,
+                        value.result,
+                        offsets=offset_values,
+                        sizes=static_sizes,
+                        strides=stride_values,
+                        ip=ctx.get_ip(),
+                    )
+                else:
+                    op = allo_d.StoreSliceOp(
+                        val.result,
+                        value.result,
+                        offsets=offset_values,
+                        sizes=static_sizes,
+                        strides=stride_values,
+                        ip=ctx.get_ip(),
+                    )
             else:
-                op = memref_d.CopyOp(val.result, subview.result, ip=ctx.get_ip())
+
+                new_offset = orig_offset + sum(
+                    o * s for o, s in zip(static_offsets, orig_strides)
+                )
+
+                layout = StridedLayoutAttr.get(new_offset, result_strides)
+                result = MemRefType.get(result_sizes, dtype, layout=layout)
+                subview = memref_d.SubViewOp(
+                    source=value.result,
+                    result=result,
+                    static_offsets=static_offsets,
+                    static_sizes=static_sizes,
+                    static_strides=static_strides,
+                    offsets=offsets,
+                    sizes=sizes,
+                    strides=strides,
+                    ip=ctx.get_ip(),
+                )
+                if isinstance(node.ctx, ast.Load):
+                    # copy to another memref type to avoid some annoying type compatibility issue
+                    memref_type = MemRefType.get(result_sizes, dtype)
+                    alloc_op = memref_d.AllocOp(memref_type, [], [], ip=ctx.get_ip())
+                    memref_d.CopyOp(subview.result, alloc_op.result, ip=ctx.get_ip())
+                    op = alloc_op
+                else:
+                    op = memref_d.CopyOp(val.result, subview.result, ip=ctx.get_ip())
         else:
             new_indices, is_affine = ASTTransformer.build_indices(ctx, node.slice)
             if len(node.value.shape) > len(new_indices):  # partial access
@@ -2286,6 +2333,31 @@ class ASTTransformer(ASTBuilder):
                     stream_op.attributes["id"] = StringAttr.get("_".join(map(str, dim)))
                     results.append(stream_op)
                 return results
+            if fn_name == "gather":
+                fifo_list = node.args[0]
+                shape = node.shape
+                dtype = node.dtype
+                with ctx.get_ip():
+                    alloc_op = ASTTransformer.build_array(ctx, dtype, shape)
+                print(shape, dtype)
+                if isinstance(fifo_list, ast.Subscript):
+                    array_shape = ctx.get_symbol(fifo_list.value.id)
+                    (
+                        offsets,
+                        sizes,
+                        strides,
+                        static_offsets,
+                        static_sizes,
+                        static_strides,
+                    ) = ASTTransformer.build_slices(ctx, fifo_list, array_shape)
+                    print(static_offsets, static_sizes, static_strides)
+                    raise RuntimeError("TODO")
+                elif isinstance(fifo_list, ast.Name):
+                    array_shape = ctx.get_symbol(fifo_list.id)
+                    raise RuntimeError("TODO")
+                else:
+                    raise RuntimeError("Fail to resolve fifo_list for gather.")
+                return allo
             # Allo library functions
             new_args = build_stmts(ctx, node.args)
             if isinstance(obj, (IPModule, ExternalModule)):

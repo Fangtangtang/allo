@@ -156,6 +156,16 @@ static bool lowerScatterOps(MlirModule &mlir_mod) {
   return applyLowerScatterOps(mod);
 }
 
+static bool lowerStoreSliceOps(MlirModule &mlir_mod) {
+  auto mod = unwrap(mlir_mod);
+  return applyLowerStoreSliceOps(mod);
+}
+
+static bool lowerLoadSliceOps(MlirModule &mlir_mod) {
+  auto mod = unwrap(mlir_mod);
+  return applyLowerLoadSliceOps(mod);
+}
+
 static bool legalizeCast(MlirModule &mlir_mod) {
   auto mod = unwrap(mlir_mod);
   return applyLegalizeCast(mod);
@@ -315,6 +325,9 @@ PYBIND11_MODULE(_allo, m) {
   allo_m.def("lower_transform_layout_ops", &lowerGatherOps);
   allo_m.def("lower_gather_ops", &lowerTransformLayoutOps);
   allo_m.def("lower_scatter_ops", &lowerScatterOps);
+  allo_m.def("lower_transform_layout_ops", &lowerTransformLayoutOps);
+  allo_m.def("lower_store_slice_ops", &lowerStoreSliceOps);
+  allo_m.def("lower_load_slice_ops", &lowerLoadSliceOps);
   allo_m.def("legalize_cast", &legalizeCast);
   allo_m.def("remove_stride_map", &removeStrideMap);
   allo_m.def("lower_print_ops", &lowerPrintOps);

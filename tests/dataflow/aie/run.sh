@@ -21,6 +21,7 @@ FILES=(
     test_norm.py        
     test_pingpong_gemm.py      
     test_producer_consumer.py  
+    test_slice.py
     test_summa.py
     test_tp.py                   
     # test_trace_conv.py

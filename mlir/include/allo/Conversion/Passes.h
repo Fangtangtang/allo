@@ -23,6 +23,9 @@ std::unique_ptr<OperationPass<ModuleOp>> createLowerBitOpsPass();
 std::unique_ptr<OperationPass<ModuleOp>> createLowerTransformLayoutOpsPass();
 std::unique_ptr<OperationPass<ModuleOp>> createLowerGatherOpsPass();
 std::unique_ptr<OperationPass<ModuleOp>> createLowerScatterOpsPass();
+std::unique_ptr<OperationPass<ModuleOp>> createLowerStoreSliceOpsPass();
+std::unique_ptr<OperationPass<ModuleOp>> createLowerLoadSliceOpsPass();
+std::unique_ptr<OperationPass<ModuleOp>> createLowerMemrefOpsPass();
 std::unique_ptr<OperationPass<ModuleOp>> createLowerPrintOpsPass();
 
 bool applyAlloToLLVMLoweringPass(ModuleOp &module, MLIRContext &context);
@@ -32,6 +35,8 @@ bool applyLowerBitOps(ModuleOp &module);
 bool applyLowerTransformLayoutOps(ModuleOp &module);
 bool applyLowerGatherOps(ModuleOp &module);
 bool applyLowerScatterOps(ModuleOp &module);
+bool applyLowerStoreSliceOps(ModuleOp &module);
+bool applyLowerLoadSliceOps(ModuleOp &module);
 bool applyLowerPrintOps(ModuleOp &module);
 
 /// Registers all Allo conversion passes

@@ -4,7 +4,7 @@
  */
 
 //===----------------------------------------------------------------------===//
-// CopyOnWrtite Pass
+// CopyOnWrite Pass
 // This pass avoids copying data until the source have to be modifed
 // TODO: better solution for 'last use' and 'all use after'
 //===----------------------------------------------------------------------===//
