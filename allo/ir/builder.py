@@ -61,17 +61,7 @@ from .utils import (
     get_func_id_from_param_types,
     resolve_generic_types,
 )
-from .types import (
-    AlloType,
-    Int,
-    UInt,
-    Index,
-    Float,
-    Fixed,
-    UFixed,
-    Struct,
-    float32,
-)
+from .types import AlloType, Int, UInt, Index, Float, Fixed, UFixed, Struct, float32
 from .visitor import ASTVisitor, ASTContext, get_symbolic_expr
 from .symbol_resolver import ASTResolver
 from ..utils import (
@@ -1380,6 +1370,9 @@ class ASTTransformer(ASTBuilder):
                     result_sizes.append(size)
                     result_strides.append(new_strides[idx_])
             if len(offsets) > 0:
+                assert (
+                    ctx.in_call_arg_list == 0
+                ), "Dynamic slices as call operation arguments are not supported yet"
                 offset_values = []
                 dynamic_offset_cnt = 0
                 for offset in static_offsets:
@@ -1440,11 +1433,7 @@ class ASTTransformer(ASTBuilder):
                     ip=ctx.get_ip(),
                 )
                 if isinstance(node.ctx, ast.Load):
-                    # copy to another memref type to avoid some annoying type compatibility issue
-                    memref_type = MemRefType.get(result_sizes, dtype)
-                    alloc_op = memref_d.AllocOp(memref_type, [], [], ip=ctx.get_ip())
-                    memref_d.CopyOp(subview.result, alloc_op.result, ip=ctx.get_ip())
-                    op = alloc_op
+                    op = subview
                 else:
                     op = memref_d.CopyOp(val.result, subview.result, ip=ctx.get_ip())
         else:
@@ -1500,12 +1489,6 @@ class ASTTransformer(ASTBuilder):
                     ip=ctx.get_ip(),
                 )
                 op = subview
-                if isinstance(node.ctx, ast.Load):
-                    # copy to another memref type to avoid some annoying type compatibility issue
-                    memref_type = MemRefType.get(node.shape, node.dtype.build())
-                    alloc_op = memref_d.AllocOp(memref_type, [], [], ip=ctx.get_ip())
-                    memref_d.CopyOp(subview.result, alloc_op.result, ip=ctx.get_ip())
-                    op = alloc_op
             elif is_affine:
                 affine_map = AffineMap.get(
                     dim_count=ctx.dim_count, symbol_count=0, exprs=new_indices
@@ -2299,7 +2282,8 @@ class ASTTransformer(ASTBuilder):
                 )
                 func_op.attributes["sym_visibility"] = StringAttr.get("private")
             # Build arguments and create call
-            new_args = build_stmts(ctx, node.args)
+            with ctx.visit_call_arg_list_guard():
+                new_args = build_stmts(ctx, node.args)
             call_op = func_d.CallOp(
                 [],
                 FlatSymbolRefAttr.get(external_module.top),
@@ -2478,20 +2462,34 @@ class ASTTransformer(ASTBuilder):
                         return alloc_op
                     return for_op
             # Allo library functions
-            new_args = build_stmts(ctx, node.args)
+            with ctx.visit_call_arg_list_guard():
+                new_args = build_stmts(ctx, node.args)
             if isinstance(obj, (IPModule, ExternalModule)):
+                input_idx = obj.input_idx if isinstance(obj, ExternalModule) else None
+                input_types = []
+                call_operands = []
+                for idx, (arg_type, shape) in enumerate(obj.args):
+                    ele_type = get_mlir_dtype_from_str(c2allo_type[arg_type])
+                    if len(shape) != 0:
+                        memref = MemRefType.get(shape, ele_type)
+                    else:
+                        memref = ele_type
+                    input_types.append(memref)
+                    operand = new_args[idx]
+                    if operand.result.type != memref:
+                        assert (
+                            input_idx is not None
+                        ), "IPModule is not well supported yet."
+                        alloc_op = memref_d.AllocOp(memref, [], [], ip=ctx.get_ip())
+                        call_operands.append(alloc_op.result)
+                        if idx in input_idx:
+                            memref_d.CopyOp(operand, alloc_op.result, ip=ctx.get_ip())
+                    else:
+                        call_operands.append(operand.result)
                 # Add HLS IP as external library
                 if obj not in ctx.ext_libs:
                     ctx.ext_libs.append(obj)
                     # Suppose it does not have any return values
-                    input_types = []
-                    for arg_type, shape in obj.args:
-                        ele_type = get_mlir_dtype_from_str(c2allo_type[arg_type])
-                        if len(shape) != 0:
-                            memref = MemRefType.get(shape, ele_type)
-                        else:
-                            memref = ele_type
-                        input_types.append(memref)
                     func_type = FunctionType.get(input_types, [])
                     func_op = func_d.FuncOp(
                         name=obj.top, type=func_type, ip=InsertionPoint(ctx.top_func)
@@ -2500,9 +2498,17 @@ class ASTTransformer(ASTBuilder):
                 call_op = func_d.CallOp(
                     [],
                     FlatSymbolRefAttr.get(obj.top),
-                    [arg.result for arg in new_args],
+                    call_operands,
                     ip=ctx.get_ip(),
                 )
+                for idx, (call_operand, operand_op) in enumerate(
+                    zip(call_operands, new_args)
+                ):
+                    if input_idx is not None and idx not in input_idx:
+                        if call_operand != operand_op.result:
+                            memref_d.CopyOp(
+                                call_operand, operand_op.result, ip=ctx.get_ip()
+                            )
                 return
             if fn_name in {"zeros", "ones"}:
                 shape = node.shape
@@ -2630,7 +2636,8 @@ class ASTTransformer(ASTBuilder):
 
         # User-defined subfunction
         func = ctx.global_vars[obj_name]
-        new_args = [stmt.result for stmt in build_stmts(ctx, node.args)]
+        with ctx.visit_call_arg_list_guard():
+            new_args = [stmt.result for stmt in build_stmts(ctx, node.args)]
         func_name = obj_name if ctx.func_id is None else f"{obj_name}_{ctx.func_id}"
         if func_name not in ctx.global_vars or not isinstance(
             ctx.global_vars[func_name], func_d.FuncOp

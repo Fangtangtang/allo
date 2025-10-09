@@ -971,12 +971,14 @@ class TypeInferer(ASTVisitor):
             if isinstance(obj, IPModule):
                 # HLS IP, suppose it does not have return values
                 # Also, it has NO side effect, which means it does not change the shape/dtype of the input
+                visit_stmts(ctx, node.args)
                 node.shape = None
                 node.dtype = None
                 return node
             if isinstance(obj, ExternalModule):
                 # AIE external kernel, suppose it does not have return values
                 # Also, it has NO side effect, which means it does not change the shape/dtype of the input
+                visit_stmts(ctx, node.args)
                 node.shape = None
                 node.dtype = None
                 return node
@@ -1059,7 +1061,7 @@ class TypeInferer(ASTVisitor):
                     node.dtype = None
                 return node
             if all(len(arg.shape) == 0 for arg in new_args):
-                # element-wisle operation
+                # element-wise operation
                 node.shape = tuple()
                 node.dtype = new_args[0].dtype
                 return node
