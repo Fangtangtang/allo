@@ -33,6 +33,16 @@ def LowerTransformLayoutOps : Pass<"lower-transform-layout-ops", "ModuleOp"> {
   let constructor = "mlir::allo::createLowerTransformLayoutOpsPass()";
 }
 
+def LowerGatherOps : Pass<"lower-gather-ops", "ModuleOp"> {
+  let summary = "Lower gather operations";
+  let constructor = "mlir::allo::createLowerGatherOpsPass()";
+}
+
+def LowerScatterOps : Pass<"lower-scatter-ops", "ModuleOp"> {
+  let summary = "Lower scatter operations";
+  let constructor = "mlir::allo::createLowerScatterOpsPass()";
+}
+
 def LowerStoreSliceOps : Pass<"lower-store-slice-ops", "ModuleOp"> {
   let summary = "Lower store-slice operations";
   let constructor = "mlir::allo::createLowerStoreSliceOpsPass()";
