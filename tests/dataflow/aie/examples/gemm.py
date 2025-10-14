@@ -95,10 +95,16 @@ if __name__ == "__main__":
     os.environ["OPT"] = "0"
     _test_pingpong_gemm(M, N, K, M // m, N // n, K // k, int16, int16)
 
-    os.environ["OPT"] = "1"
-    _test_pingpong_gemm(M, N, K, M // m, N // n, K // k, int16, int16)
+    try:
+        os.environ["OPT"] = "1"
+        _test_pingpong_gemm(M, N, K, M // m, N // n, K // k, int16, int16)
+    except:
+        print("For this example, O1 will leads to data/program memory overflow")
 
     os.environ["OPT"] = "2"
     _test_pingpong_gemm(M, N, K, M // m, N // n, K // k, int16, int16)
 
-    del os.environ["FORCE_UNROLL_INDEX"]
+    os.environ["OPT"] = "3"
+    _test_pingpong_gemm(M, N, K, M // m, N // n, K // k, int16, int16)
+
+    del os.environ["OPT"]

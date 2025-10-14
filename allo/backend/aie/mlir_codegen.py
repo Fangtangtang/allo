@@ -1305,7 +1305,9 @@ class CodeGenerator:
         # # HACK: an aggressive strategy to fully utilize interface ports (may be problematic)
         # ####################
         opt_level = int(os.getenv("OPT"))
-        if os.getenv("ENABLE_AGGRESSIVE_PORT_UTILIZATION_PATCH") == "1" or (opt_level is not None and opt_level > 1):
+        if os.getenv("ENABLE_AGGRESSIVE_PORT_UTILIZATION_PATCH") == "1" or (
+            opt_level is not None and opt_level > 2
+        ):
             global_input_num, global_output_num = 0, 0
             for idx, contiguous_interfaces in global_dma_tasks.items():
                 if self.global_tensors[idx].is_input:

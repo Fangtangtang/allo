@@ -651,6 +651,7 @@ class AIE_MLIRModule:
                 allo_d.copy_on_write_on_function(func)
                 if opt_level is None or opt_level > 0:
                     vectorize_matmul(func)
+                if opt_level is None or opt_level > 1:
                     optimize_layout_transformation(func)
 
         pipeline = "builtin.module(canonicalize)"
