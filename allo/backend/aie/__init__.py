@@ -643,12 +643,15 @@ class AIE_MLIRModule:
             allo_d.copy_on_write_on_function(function)
             transform_with_dma()
 
+        opt_level = int(os.getenv("OPT"))
+        print("Optimization Level:", opt_level)
         for func in self.allo_module.body.operations:
             if isinstance(func, allo_func_d.FuncOp) and "df.kernel" in func.attributes:
                 simplify_matmul_accumulate(func)
                 allo_d.copy_on_write_on_function(func)
-                vectorize_matmul(func)
-                optimize_layout_transformation(func)
+                if opt_level is None or opt_level > 0:
+                    vectorize_matmul(func)
+                    optimize_layout_transformation(func)
 
         pipeline = "builtin.module(canonicalize)"
         with self.allo_module.context:
