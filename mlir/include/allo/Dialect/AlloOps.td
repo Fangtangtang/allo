@@ -1077,4 +1077,54 @@ def TransformLayoutOp : Allo_Op<"transform_layout"> {
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// Distributed communication operations
+//===----------------------------------------------------------------------===//
+
+def GatherOp : Allo_Op<"gather"> {
+  let summary = "gather elements from streams into a memref";
+  let description = [{
+    The `gather` operation extracts elements from the input `stream`s
+    according to the string identifiers specified in the `names` attribute,
+    and stores them sequentially into the result memref.
+
+    Example:
+      %res = allo.gather(%s) {names = ["a", "b", "c"]}
+          : !allo.stream<i32> -> memref<3xi32>
+  }];
+
+  let arguments = (ins StreamLike:$stream, ArrayAttr:$names);
+
+  let results = (outs AnyStaticShapeMemRef:$res);
+
+  let assemblyFormat = [{
+      `(` $stream `)` attr-dict
+      `:` type($stream) `->` type($res)
+  }];
+}
+
+def ScatterOp : Allo_Op<"scatter"> {
+  let summary = "scatter elements from a memref into streams";
+  let description = [{
+    The `scatter` operation writes elements from the input memref
+    into `stream`s according to the string identifiers specified in the `names` attribute.
+
+    Example:
+      allo.scatter(%s, %data) {names = ["a", "b", "c"]}
+          : !allo.stream<i32>, memref<3xi32>
+  }];
+
+  let arguments = (
+    ins StreamLike:$stream,
+        ArrayAttr:$names,
+        AnyStaticShapeMemRef:$values
+  );
+  let results = (outs );
+
+  let assemblyFormat = [{
+      `(` $stream `,` $values `)` attr-dict
+      `:` type($stream) `,` type($values)
+  }];
+}
+
 #endif // ALLO_OPS
