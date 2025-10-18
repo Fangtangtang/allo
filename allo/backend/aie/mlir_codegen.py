@@ -1869,7 +1869,6 @@ class CodeGenerator:
                     )
                     if self.global_ip is None:
                         self.global_ip = aie_ir.InsertionPoint(func_core)
-                    print(func)
                     self.build_core_function(
                         func_core,
                         func,

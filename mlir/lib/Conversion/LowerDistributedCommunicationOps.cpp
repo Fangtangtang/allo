@@ -25,7 +25,6 @@ namespace allo {
 bool applyLowerDistributedCommunicationOps(ModuleOp &mod) {
   for (func::FuncOp func : mod.getOps<func::FuncOp>()) {
     std::string funcName = func.getName().str();
-    llvm::outs() << "Function name: " << funcName << "\n";
     SmallVector<GatherOp, 8> setGatherOps;
     SmallVector<ScatterOp, 8> setScatterOps;
     func.walk([&](Operation *op) {
@@ -36,7 +35,6 @@ bool applyLowerDistributedCommunicationOps(ModuleOp &mod) {
         setScatterOps.push_back(scatterOp);
       }
     });
-    // TODO: lowering
     for (size_t i = 0; i < setGatherOps.size(); ++i) {
       auto op = setGatherOps[i];
       Location loc = op->getLoc();
@@ -58,10 +56,8 @@ bool applyLowerDistributedCommunicationOps(ModuleOp &mod) {
       Value step = rewriter.create<arith::ConstantIndexOp>(loc, 1);
       auto forOp = rewriter.create<scf::ForOp>(loc, lb, ub, step);
       // attributes for the loop
-      std::string opName = "S_" + funcName + "_" + std::to_string(i);
-      std::string iterName = funcName + std::to_string(i);
-      forOp->setAttr("op_name", StringAttr::get(op->getContext(), opName));
-      forOp->setAttr("loop_name", StringAttr::get(op->getContext(), iterName));
+      forOp->setAttr("op_name", op->getAttr("iter_name"));
+      forOp->setAttr("loop_name", op->getAttr("iter_name"));
       OpBuilder bodyBuilder = OpBuilder::atBlockBegin(forOp.getBody());
       // get op
       auto get_op = bodyBuilder.create<StreamGetOp>(
@@ -92,15 +88,16 @@ bool applyLowerDistributedCommunicationOps(ModuleOp &mod) {
       auto subViewType = MemRefType::get(
           streamBaseType.getShape(), streamBaseType.getElementType(), layout);
       auto subview_op = bodyBuilder.create<memref::SubViewOp>(
-          loc, subViewType, buffer,
-          offsetValues,
-          emptyValues,
-          emptyValues,
+          loc, subViewType, buffer, offsetValues, emptyValues, emptyValues,
           staticOffsets, staticSizes, staticStrides);
       // copy
       bodyBuilder.create<memref::CopyOp>(loc, get_op, subview_op);
       output.replaceAllUsesWith(buffer);
       op->erase();
+    }
+    for (size_t i = 0; i < setScatterOps.size(); ++i) {
+      auto op = setScatterOps[i];
+      // TODO: lowering
     }
   }
   return true;

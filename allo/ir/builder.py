@@ -1592,7 +1592,9 @@ class ASTTransformer(ASTBuilder):
             alloc_op = ASTTransformer.build_array(ctx, dtype, shape)
             alloc_op.attributes["name"] = StringAttr.get(node.target.id)
             with ctx.get_ip():
-                if isinstance(rhs, (memref_d.AllocOp, MockArg)):
+                if isinstance(rhs, MockArg) or (
+                    rhs.result is not None and isinstance(rhs.result.type, MemRefType)
+                ):
                     linalg_op = linalg_d.copy(rhs.result, outs=[alloc_op.result])
                 elif rhs is not None:
                     linalg_op = linalg_d.fill(rhs.result, outs=[alloc_op.result])
@@ -2353,7 +2355,11 @@ class ASTTransformer(ASTBuilder):
                         gather_op = allo_d.GatherOp(
                             memref_type, stream_op.result, fifo_name_attr
                         )
-                        print(gather_op)
+                        iter_name = f"I_{fn_name}_{str(ctx.rename_cnt)}"
+                        ctx.rename_cnt += 1
+                        gather_op.attributes["iter_name"] = StringAttr.get(iter_name)
+                        stream_op.attributes["iter_name"] = StringAttr.get(iter_name)
+                        return gather_op
                 else:
                     buffer = build_stmt(ctx, node.args[0])
                 # internally build gather loop
@@ -2373,6 +2379,7 @@ class ASTTransformer(ASTBuilder):
                     op_name = f"S_{fn_name}_{str(ctx.loop_band_count)}"
                     for_op.attributes["op_name"] = StringAttr.get(op_name)
                     loop_iter_name = f"{fn_name}{str(ctx.loop_band_count)}"
+                    stream_op.attributes["iter_name"] = StringAttr.get(op_name)
                     for_op.attributes["loop_name"] = StringAttr.get(loop_iter_name)
                     scf_d.YieldOp([], ip=InsertionPoint(for_op.body))
                     with InsertionPoint(for_op.body.operations[0]):
@@ -2399,26 +2406,7 @@ class ASTTransformer(ASTBuilder):
                             f"memref<{'x'.join([str(x) for x in result_sizes])}x{node.dtype}"
                             f", strided<{result_strides}, offset: ?>>"
                         )
-                        if fn_name == "gather":
-                            pass
-                            # #######################
-                            # get_op = allo_d.StreamGetOp(
-                            #     fifo_list.dtype.build(), stream_op.result, []
-                            # )
-                            # subview = memref_d.SubViewOp(
-                            #     source=alloc_op.result,
-                            #     result=subview_result,
-                            #     static_offsets=static_offsets,
-                            #     static_sizes=size_values,
-                            #     static_strides=stride_values,
-                            #     offsets=offset_values,
-                            #     sizes=[],
-                            #     strides=[],
-                            # )
-                            # # copy to slice
-                            # memref_d.CopyOp(get_op.result, subview.result)
-                            # #######################
-                        else:
+                        if fn_name != "gather":
                             subview = memref_d.SubViewOp(
                                 source=buffer.result,
                                 result=subview_result,
@@ -2430,9 +2418,6 @@ class ASTTransformer(ASTBuilder):
                                 strides=[],
                             )
                             allo_d.StreamPutOp(stream_op.result, [], subview.result)
-                    if fn_name == "gather":
-                        return gather_op
-                        # return alloc_op
                     return for_op
             # Allo library functions
             new_args = build_stmts(ctx, node.args)

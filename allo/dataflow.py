@@ -146,8 +146,11 @@ def move_stream_to_interface(
                                 org_stream_name,
                                 op_,
                                 arg_idx_,
+                                init_iter_map=None,
                             ):
                                 iter_map = {}
+                                if init_iter_map is not None:
+                                    iter_map.update(init_iter_map)
                                 for k, v in symbol_map_.items():
                                     if k not in pid_map_:
                                         iter_map[k] = v
@@ -180,8 +183,9 @@ def move_stream_to_interface(
                                     stream_symbolic_slice_list = op.attributes[
                                         "stream_symbolic_slice_list"
                                     ]
-                                    for name_, symbolic_name_ in zip(
-                                        stream_list, stream_symbolic_slice_list
+                                    iter_name = op.attributes["iter_name"].value
+                                    for idx, (name_, symbolic_name_) in enumerate(
+                                        zip(stream_list, stream_symbolic_slice_list)
                                     ):
                                         eval_stream(
                                             pid_map,
@@ -190,6 +194,7 @@ def move_stream_to_interface(
                                             org_stream_name=name_.value,
                                             op_=op,
                                             arg_idx_=arg_idx,
+                                            init_iter_map={iter_name: idx},
                                         )
                                 else:
                                     eval_stream(
