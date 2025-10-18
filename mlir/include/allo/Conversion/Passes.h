@@ -29,8 +29,7 @@ bool applyFixedPointToInteger(ModuleOp &module);
 bool applyLowerCompositeType(ModuleOp &module);
 bool applyLowerBitOps(ModuleOp &module);
 bool applyLowerTransformLayoutOps(ModuleOp &module);
-bool applyLowerGatherOps(ModuleOp &module);
-bool applyLowerScatterOps(ModuleOp &module);
+bool applyLowerDistributedCommunicationOps(ModuleOp &module);
 bool applyLowerPrintOps(ModuleOp &module);
 
 /// Registers all Allo conversion passes

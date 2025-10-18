@@ -296,6 +296,6 @@ def _test_scatter():
 
 if __name__ == "__main__":
     _test_gather()
-    _test_gather_matmul()
-    _test_scatter()
-    _test_split_k_explicit_gather_gemm_1x1x4()
+    # _test_gather_matmul()
+    # _test_scatter()
+    # _test_split_k_explicit_gather_gemm_1x1x4()

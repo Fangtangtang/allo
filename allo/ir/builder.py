@@ -2343,9 +2343,17 @@ class ASTTransformer(ASTBuilder):
                 if fn_name == "gather":
                     # allocate local buffer for the gathered results
                     with ctx.get_ip():
+                        # ####################
                         alloc_op = ASTTransformer.build_array(
                             ctx, node.dtype, node.shape
                         )
+                        # ####################
+                        assert not ctx.enable_tensor, "Gather Op results a memref"
+                        memref_type = MemRefType.get(node.shape, node.dtype.build())
+                        gather_op = allo_d.GatherOp(
+                            memref_type, stream_op.result, fifo_name_attr
+                        )
+                        print(gather_op)
                 else:
                     buffer = build_stmt(ctx, node.args[0])
                 # internally build gather loop
@@ -2366,7 +2374,6 @@ class ASTTransformer(ASTBuilder):
                     for_op.attributes["op_name"] = StringAttr.get(op_name)
                     loop_iter_name = f"{fn_name}{str(ctx.loop_band_count)}"
                     for_op.attributes["loop_name"] = StringAttr.get(loop_iter_name)
-                    stream_op.attributes["loop_name"] = StringAttr.get(op_name)
                     scf_d.YieldOp([], ip=InsertionPoint(for_op.body))
                     with InsertionPoint(for_op.body.operations[0]):
                         offset_values = []
@@ -2393,21 +2400,24 @@ class ASTTransformer(ASTBuilder):
                             f", strided<{result_strides}, offset: ?>>"
                         )
                         if fn_name == "gather":
-                            get_op = allo_d.StreamGetOp(
-                                fifo_list.dtype.build(), stream_op.result, []
-                            )
-                            subview = memref_d.SubViewOp(
-                                source=alloc_op.result,
-                                result=subview_result,
-                                static_offsets=static_offsets,
-                                static_sizes=size_values,
-                                static_strides=stride_values,
-                                offsets=offset_values,
-                                sizes=[],
-                                strides=[],
-                            )
-                            # copy to slice
-                            memref_d.CopyOp(get_op.result, subview.result)
+                            pass
+                            # #######################
+                            # get_op = allo_d.StreamGetOp(
+                            #     fifo_list.dtype.build(), stream_op.result, []
+                            # )
+                            # subview = memref_d.SubViewOp(
+                            #     source=alloc_op.result,
+                            #     result=subview_result,
+                            #     static_offsets=static_offsets,
+                            #     static_sizes=size_values,
+                            #     static_strides=stride_values,
+                            #     offsets=offset_values,
+                            #     sizes=[],
+                            #     strides=[],
+                            # )
+                            # # copy to slice
+                            # memref_d.CopyOp(get_op.result, subview.result)
+                            # #######################
                         else:
                             subview = memref_d.SubViewOp(
                                 source=buffer.result,
@@ -2421,7 +2431,8 @@ class ASTTransformer(ASTBuilder):
                             )
                             allo_d.StreamPutOp(stream_op.result, [], subview.result)
                     if fn_name == "gather":
-                        return alloc_op
+                        return gather_op
+                        # return alloc_op
                     return for_op
             # Allo library functions
             new_args = build_stmts(ctx, node.args)

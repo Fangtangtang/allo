@@ -148,10 +148,7 @@ static bool lowerTransformLayoutOps(MlirModule &mlir_mod) {
 
 static bool lowerDistributedCommunicationOps(MlirModule &mlir_mod) {
   auto mod = unwrap(mlir_mod);
-  if (applyLowerGatherOps(mod)) {
-    return applyLowerScatterOps(mod);
-  }
-  return false;
+  return applyLowerDistributedCommunicationOps(mod);
 }
 
 static bool legalizeCast(MlirModule &mlir_mod) {
