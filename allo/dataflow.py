@@ -42,6 +42,20 @@ def scatter(buffer, pipes: list):
     raise NotImplementedError("This function should be called in a kernel function.")
 
 
+def reduce(pipes: list, reduction_op):
+    """
+    Apply a reduction operation over data from all pipe objects in the given list (explicit list or slice).
+    """
+    raise NotImplementedError("This function should be called in a kernel function.")
+
+
+def broadcast(buffer, pipes: list):
+    """
+    Broadcast data from the given buffer to all pipe objects in the given list (explicit list or slice)
+    """
+    raise NotImplementedError("This function should be called in a kernel function.")
+
+
 def get_pid():
     raise NotImplementedError("This function should be called in a kernel function.")
 
