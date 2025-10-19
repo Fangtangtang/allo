@@ -62,7 +62,7 @@ SubViewParams computeSubViewParams(ArrayRef<int64_t> memrefShape) {
   return params;
 }
 
-bool applyLowerDistributedCommunicationOps(ModuleOp &mod) {
+bool applyLowerCollectiveOps(ModuleOp &mod) {
   for (func::FuncOp func : mod.getOps<func::FuncOp>()) {
     std::string funcName = func.getName().str();
     SmallVector<GatherOp, 8> setGatherOps;
@@ -153,12 +153,12 @@ bool applyLowerDistributedCommunicationOps(ModuleOp &mod) {
 } // namespace mlir
 
 namespace {
-struct AlloLowerDistributedCommunicationOpsTransformation
-    : public LowerDistributedCommunicationOpsBase<
-          AlloLowerDistributedCommunicationOpsTransformation> {
+struct AlloLowerCollectiveOpsTransformation
+    : public LowerCollectiveOpsBase<
+          AlloLowerCollectiveOpsTransformation> {
   void runOnOperation() override {
     auto mod = getOperation();
-    if (!applyLowerDistributedCommunicationOps(mod)) {
+    if (!applyLowerCollectiveOps(mod)) {
       return signalPassFailure();
     }
   }
@@ -169,8 +169,8 @@ namespace mlir {
 namespace allo {
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createLowerDistributedCommunicationOpsPass() {
-  return std::make_unique<AlloLowerDistributedCommunicationOpsTransformation>();
+createLowerCollectiveOpsPass() {
+  return std::make_unique<AlloLowerCollectiveOpsTransformation>();
 }
 
 } // namespace allo

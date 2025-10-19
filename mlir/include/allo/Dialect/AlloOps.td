@@ -1078,7 +1078,7 @@ def TransformLayoutOp : Allo_Op<"transform_layout"> {
 }
 
 //===----------------------------------------------------------------------===//
-// Distributed communication operations
+// Collective operations
 //===----------------------------------------------------------------------===//
 
 def GatherOp : Allo_Op<"gather"> {
