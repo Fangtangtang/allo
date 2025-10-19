@@ -1593,7 +1593,9 @@ class ASTTransformer(ASTBuilder):
             alloc_op.attributes["name"] = StringAttr.get(node.target.id)
             with ctx.get_ip():
                 if isinstance(rhs, MockArg) or (
-                    rhs.result is not None and isinstance(rhs.result.type, MemRefType)
+                    rhs is not None
+                    and rhs.result is not None
+                    and isinstance(rhs.result.type, MemRefType)
                 ):
                     linalg_op = linalg_d.copy(rhs.result, outs=[alloc_op.result])
                 elif rhs is not None:
@@ -2342,83 +2344,27 @@ class ASTTransformer(ASTBuilder):
                 stream_op.attributes["stream_symbolic_slice_list"] = ArrayAttr.get(
                     fifo_symbolic_slice_attr
                 )
+                iter_name = f"I_{fn_name}_{str(ctx.rename_cnt)}"
+                ctx.rename_cnt += 1
+                stream_op.attributes["iter_name"] = StringAttr.get(iter_name)
                 if fn_name == "gather":
                     # allocate local buffer for the gathered results
                     with ctx.get_ip():
-                        # ####################
-                        alloc_op = ASTTransformer.build_array(
-                            ctx, node.dtype, node.shape
-                        )
-                        # ####################
                         assert not ctx.enable_tensor, "Gather Op results a memref"
                         memref_type = MemRefType.get(node.shape, node.dtype.build())
                         gather_op = allo_d.GatherOp(
                             memref_type, stream_op.result, fifo_name_attr
                         )
-                        iter_name = f"I_{fn_name}_{str(ctx.rename_cnt)}"
-                        ctx.rename_cnt += 1
                         gather_op.attributes["iter_name"] = StringAttr.get(iter_name)
-                        stream_op.attributes["iter_name"] = StringAttr.get(iter_name)
                         return gather_op
                 else:
                     buffer = build_stmt(ctx, node.args[0])
-                # internally build gather loop
-                with ctx.loop_scope_guard():
-                    lb_expr = arith_d.ConstantOp(
-                        arith_d.IndexType.get(), 0, ip=ctx.get_ip()
-                    )
-                    ub_expr = arith_d.ConstantOp(
-                        arith_d.IndexType.get(), len(fifo_name_attr), ip=ctx.get_ip()
-                    )
-                    step = arith_d.ConstantOp(
-                        arith_d.IndexType.get(), 1, ip=ctx.get_ip()
-                    )
-                    for_op = scf_d.ForOp(
-                        lb_expr.result, ub_expr.result, step.result, ip=ctx.get_ip()
-                    )
-                    op_name = f"S_{fn_name}_{str(ctx.loop_band_count)}"
-                    for_op.attributes["op_name"] = StringAttr.get(op_name)
-                    loop_iter_name = f"{fn_name}{str(ctx.loop_band_count)}"
-                    stream_op.attributes["iter_name"] = StringAttr.get(op_name)
-                    for_op.attributes["loop_name"] = StringAttr.get(loop_iter_name)
-                    scf_d.YieldOp([], ip=InsertionPoint(for_op.body))
-                    with InsertionPoint(for_op.body.operations[0]):
-                        offset_values = []
-                        static_offsets = []
-                        size_values = []
-                        stride_values = []
-                        result_sizes = []
-                        result_strides = []
-                        tile_size = np.prod(node.shape)
-                        for i, shape in enumerate(node.shape):
-                            tile_size //= shape
-                            stride_values.append(1)
-                            if i == 0:
-                                offset_values.append(for_op.induction_variable)
-                                static_offsets.append(ShapedType.get_dynamic_size())
-                                size_values.append(1)
-                            else:
-                                static_offsets.append(0)
-                                size_values.append(shape)
-                                result_sizes.append(shape)
-                                result_strides.append(tile_size)
-                        subview_result = MLIRType.parse(
-                            f"memref<{'x'.join([str(x) for x in result_sizes])}x{node.dtype}"
-                            f", strided<{result_strides}, offset: ?>>"
+                    with ctx.get_ip():
+                        scatter_op = allo_d.ScatterOp(
+                            stream_op.result, fifo_name_attr, buffer.result
                         )
-                        if fn_name != "gather":
-                            subview = memref_d.SubViewOp(
-                                source=buffer.result,
-                                result=subview_result,
-                                static_offsets=static_offsets,
-                                static_sizes=size_values,
-                                static_strides=stride_values,
-                                offsets=offset_values,
-                                sizes=[],
-                                strides=[],
-                            )
-                            allo_d.StreamPutOp(stream_op.result, [], subview.result)
-                    return for_op
+                        scatter_op.attributes["iter_name"] = StringAttr.get(iter_name)
+                    return scatter_op
             # Allo library functions
             new_args = build_stmts(ctx, node.args)
             if isinstance(obj, (IPModule, ExternalModule)):
