@@ -29,7 +29,7 @@ def _test_gather():
             # gather a list of pipes
             B[:, :] = df.gather([pipe[0], pipe[1], pipe[2], pipe[3]])
 
-    A = np.random.randint(0, 64, (N)).astype(np.int16)
+    A = np.random.randint(-16, 16, (N)).astype(np.int16)
     B = np.zeros((Pk, N)).astype(np.int16)
 
     mod_v1 = df.build(top_v1, target="aie")
@@ -66,7 +66,7 @@ def _test_gather():
             # gather slice
             B[:, :] = df.gather(pipe[:])
 
-    A = np.random.randint(0, 64, (N)).astype(np.int16)
+    A = np.random.randint(-16, 16, (N)).astype(np.int16)
     B = np.zeros((Pk, N)).astype(np.int16)
 
     mod_v1 = df.build(top_v2, target="aie")
@@ -119,8 +119,8 @@ def _test_gather_matmul():
             C_: TyO[M, N] = allo.matmul(tmp_A[0], B)
             C[:, :] = C_
 
-    A = np.random.randint(0, 64, (M, K)).astype(np.int16)
-    B = np.random.randint(0, 64, (K, N)).astype(np.int16)
+    A = np.random.randint(-16, 16, (M, K)).astype(np.int16)
+    B = np.random.randint(-16, 16, (K, N)).astype(np.int16)
     C = np.zeros((M, N)).astype(np.int32)
 
     mod = df.build(top, target="aie")
@@ -171,8 +171,8 @@ def _test_split_k_explicit_gather_gemm_1x1x4():
             ),
         ],
     )
-    A = np.random.randint(0, 64, (M, K)).astype(np.int16)
-    B = np.random.randint(0, 64, (K, N)).astype(np.int16)
+    A = np.random.randint(-16, 16, (M, K)).astype(np.int16)
+    B = np.random.randint(-16, 16, (K, N)).astype(np.int16)
     C = np.zeros((M, N)).astype(np.int16)
     mod(A, B, C)
     np.testing.assert_allclose(C, A @ B, atol=1e-5)
@@ -213,8 +213,8 @@ def _test_split_k_explicit_gather_gemm_1x1x4():
             ),
         ],
     )
-    A = np.random.randint(0, 64, (M, K)).astype(np.int16)
-    B = np.random.randint(0, 64, (K, N)).astype(np.int16)
+    A = np.random.randint(-16, 16, (M, K)).astype(np.int16)
+    B = np.random.randint(-16, 16, (K, N)).astype(np.int16)
     C = np.zeros((M, N)).astype(np.int16)
     mod(A, B, C)
     np.testing.assert_allclose(C, A @ B, atol=1e-5)
@@ -245,7 +245,7 @@ def _test_scatter():
         def dst(B: Ty[Pk, N]):
             B[:, :] = df.gather(pipe_2[:])
 
-    A = np.random.randint(0, 64, (Pk, N)).astype(np.int16)
+    A = np.random.randint(-16, 16, (Pk, N)).astype(np.int16)
     B = np.zeros((Pk, N)).astype(np.int16)
 
     mod_v1 = df.build(top_v1, target="aie")
@@ -278,7 +278,7 @@ def _test_scatter():
         def dst(B: Ty[Pk, N]):
             B[:, :] = df.gather(pipe_2[:])
 
-    A = np.random.randint(0, 64, (Pk, N)).astype(np.int16)
+    A = np.random.randint(-16, 16, (Pk, N)).astype(np.int16)
     B = np.zeros((Pk, N)).astype(np.int16)
 
     mod_v1 = df.build(top_v2, target="aie")
