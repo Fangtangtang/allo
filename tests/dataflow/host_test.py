@@ -29,6 +29,7 @@ def pack_i32_to_i256(arr):
             val64 = (high32 << 32) | low32
             parts.append(np.uint64(val64))
         packed.append(parts)
+    print(packed)
     return np.array(packed, dtype=np.uint64)
 
 
@@ -63,8 +64,8 @@ def test_vadd():
 
     A = np.random.randint(0, 64, (VLEN // ELEN,)).astype(np.uint32)
     B = np.random.randint(0, 64, (VLEN // ELEN,)).astype(np.uint32)
-    packed_A = pack_i32_to_i256(A)
-    packed_B = pack_i32_to_i256(B)
+    packed_A = pack_i32_to_i256(A)[0]
+    packed_B = pack_i32_to_i256(B)[0]
     packed_C = np.zeros((VLEN // ENTRY_SIZE,)).astype(np.uint64)
 
     mod = df.build(top, target="simulator")

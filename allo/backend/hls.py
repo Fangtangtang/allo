@@ -5,6 +5,7 @@
 import os
 import re
 import io
+import numpy as np
 import subprocess
 import time
 from .._mlir.dialects import allo as allo_d
@@ -35,7 +36,7 @@ from ..passes import (
 )
 from ..harness.makefile_gen.makegen import generate_makefile
 from ..ir.transform import find_func_in_module
-from ..utils import get_func_inputs_outputs, c2allo_type
+from ..utils import get_func_inputs_outputs, c2allo_type, get_bitwidth_from_type
 
 
 def is_available(backend="vivado_hls"):
@@ -405,12 +406,22 @@ class HLSModule:
             assert len(args) == len(inputs) + len(
                 outputs
             ), f"Number of arguments mismatch, got {len(args)}, expected {len(inputs) + len(outputs)}"
-            for i, ((_, in_shape), arg) in enumerate(zip(inputs, args)):
-                write_tensor_to_file(
-                    arg,
-                    in_shape,
-                    f"{self.project}/input{i}.data",
-                )
+            for i, ((in_dtype, in_shape), arg) in enumerate(zip(inputs, args)):
+                assert arg.shape == tuple(
+                    in_shape
+                ), f"invalid arguemnt {i}, {arg.shape}-{in_shape}"
+                ele_bitwidth = get_bitwidth_from_type(in_dtype)
+                assert (
+                    ele_bitwidth == 1 or ele_bitwidth % 8 == 0
+                ), "can only handle bytes"
+                # store as byte stream
+                with open(f"{self.project}/input{i}.data", "wb") as f:
+                    f.write(arg.tobytes())
+                # write_tensor_to_file(
+                #     arg,
+                #     in_shape,
+                #     f"{self.project}/input{i}.data",
+                # )
             # check if the build folder exists
             bitstream_folder = f"{self.project}/build_dir.{self.mode}.{os.environ['XDEVICE'].rsplit('/')[-1].split('.')[0]}"
             if not os.path.exists(
@@ -441,10 +452,8 @@ class HLSModule:
                 if process.returncode != 0:
                     raise RuntimeError("Failed to run the executable")
             # suppose the last argument is the output tensor
-            result = read_tensor_from_file(
-                inputs[-1][0], args[-1].shape, f"{self.project}/output.data"
-            )
-            args[-1][:] = result
+            arr = np.fromfile(f"{self.project}/output.data", dtype=args[-1].dtype)
+            args[-1][:] = arr.reshape(args[-1].shape)
             return
         elif self.platform == "tapa":
             assert is_available("tapa"), "tapa is not available"
