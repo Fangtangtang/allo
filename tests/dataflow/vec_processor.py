@@ -5,6 +5,7 @@ import numpy as np
 import allo
 from allo.ir.types import uint64
 import allo.dataflow as df
+from allo.backend import hls
 
 VLEN = 256
 ENTRY_SIZE = 64
@@ -76,6 +77,20 @@ def test_vadd():
     nest_loop_j = s.get_loops("VEC_0")["vec_nest"]["j"]
     s.unroll(nest_loop_j)
     print(s.module)
+
+    if hls.is_available("vitis_hls"):    
+        print("Starting hw Test...")
+        modhw = s.build(
+                target="vitis_hls",
+                mode="hw",
+                project=f"vec_hw.prj",
+                wrap_io=False,
+            )
+        modhw(packed_A, packed_B, packed_C)
+        C_ = unpack_i256_to_i32(packed_C)
+        np.testing.assert_allclose(A + B, C_, rtol=1e-5, atol=1e-5)
+        print("Passed hw Test!")
+
 
 
 if __name__ == "__main__":
