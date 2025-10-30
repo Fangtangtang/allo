@@ -269,8 +269,9 @@ def test_packed_add():
         )
         mod(packed_A, packed_B)
         unpacked_B = packed_B.view(np.int32)
+        np.testing.assert_allclose(A + 1, unpacked_B, rtol=1e-5, atol=1e-5)
         print(unpacked_B)
-        print(A)
+        print("Passed Test!")
 
 
 if __name__ == "__main__":
