@@ -131,20 +131,20 @@ def test_vadd_adv():
     s.unroll(nest_loop_i)
     print(s.module)
 
-    # if hls.is_available("vitis_hls"):
-    #     print("Starting hw Test...")
-    #     modhw = s.build(
-    #             target="vitis_hls",
-    #             mode="hw",
-    #             project=f"vec_hw.prj",
-    #             wrap_io=False,
-    #         )
-    #     modhw(packed_A, packed_B, packed_C)
-    #     unpacked_C = packed_C.view(np.uint32)
-    #     np.testing.assert_allclose(A + B, unpacked_C, rtol=1e-5, atol=1e-5)
-    #     print("Passed hw Test!")
+    if hls.is_available("vitis_hls"):
+        print("Starting hw Test...")
+        modhw = s.build(
+            target="vitis_hls",
+            mode="hw",
+            project=f"vec_hw.prj",
+            wrap_io=False,
+        )
+        modhw(packed_A, packed_B, packed_C)
+        unpacked_C = packed_C.view(np.uint32)
+        np.testing.assert_allclose(A + B, unpacked_C, rtol=1e-5, atol=1e-5)
+        print("Passed hw Test!")
 
 
 if __name__ == "__main__":
-    test_vadd()
+    # test_vadd()
     test_vadd_adv()
