@@ -95,7 +95,7 @@ def codegen_host(top, module):
         """
     )
     # Generate in/out buffers
-    input_bytes: list[int] = []
+    buffer_bytes: list[int] = []
     for i, (in_dtype, in_shape) in enumerate(inputs):
         ele_bitwidth = get_bitwidth_from_type(in_dtype)
         # bool -> 1 byte
@@ -112,7 +112,7 @@ def codegen_host(top, module):
         out_str += format_str("}")
         size = np.prod(in_shape) if len(in_shape) > 0 else 1
         byte_num = size * ele_bytes
-        input_bytes.append(byte_num)
+        buffer_bytes.append(byte_num)
         # check if the input file has expected bytes
         out_str += format_str(f"ifile{i}.seekg(0, std::ios::end);")
         out_str += format_str(f"auto ifile{i}_size = ifile{i}.tellg();")
@@ -129,25 +129,13 @@ def codegen_host(top, module):
             f"ifile{i}.read(reinterpret_cast<char*>(source_in{i}.data()), {byte_num});"
         )
     for i, (out_dtype, out_shape) in enumerate(outputs):
-        if out_dtype in ctype_map:
-            out_dtype = ctype_map[out_dtype]
-        elif out_dtype.startswith("i") or out_dtype.startswith("ui"):
-            prefix, bitwidth = out_dtype.split("i")
-            new_int_type = f"{prefix}i{max(get_clostest_pow2(int(bitwidth)), 8)}"
-            out_dtype = ctype_map[new_int_type]
-        elif out_dtype.startswith("fixed") or out_dtype.startswith("ufixed"):
-            out_dtype = "float"
-        else:
-            raise ValueError(f"Unsupported input type: {out_dtype}")
-        out_shape = [str(i) for i in out_shape]
-        out_str += format_str(
-            f"size_t size_bytes_out{i} = sizeof({out_dtype}) * {' * '.join(out_shape)};\n",
-            strip=False,
-        )
-        out_str += format_str(
-            f"std::vector<{out_dtype}, aligned_allocator<{out_dtype}> > source_out{i}({' * '.join(out_shape)});\n",
-            strip=False,
-        )
+        ele_bitwidth = get_bitwidth_from_type(out_dtype)
+        # bool -> 1 byte
+        ele_bytes = 1 if ele_bitwidth == 1 else ele_bitwidth // 8
+        size = np.prod(out_shape) if len(out_shape) > 0 else 1
+        byte_num = size * ele_bytes
+        buffer_bytes.append(byte_num)
+        out_str += format_str(f"std::vector<uint8_t>  source_out{i}({byte_num});")
         out_str += format_str(
             f"std::fill(source_out{i}.begin(), source_out{i}.end(), 0);\n", strip=False
         )
@@ -207,12 +195,12 @@ def codegen_host(top, module):
         else:
             flag = "CL_MEM_READ_ONLY"
         out_str += format_str(
-            f"OCL_CHECK(err, cl::Buffer buffer_in{i}(context, CL_MEM_USE_HOST_PTR | {flag}, {input_bytes[i]}, source_in{i}.data(), &err));",
+            f"OCL_CHECK(err, cl::Buffer buffer_in{i}(context, CL_MEM_USE_HOST_PTR | {flag}, {buffer_bytes[i]}, source_in{i}.data(), &err));",
             strip=False,
         )
     for i in range(len(outputs)):
         out_str += format_str(
-            f"OCL_CHECK(err, cl::Buffer buffer_out{i}(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, size_bytes_out{i}, source_out{i}.data(), &err));",
+            f"OCL_CHECK(err, cl::Buffer buffer_out{i}(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, {buffer_bytes[i + len(inputs)]}, source_out{i}.data(), &err));",
             strip=False,
         )
     out_str += "\n"
@@ -311,7 +299,7 @@ def codegen_host(top, module):
         out_buf = "source_in" + str(len(inputs) - 1)
     else:
         out_buf = "source_out" + str(len(outputs) - 1)
-        raise RuntimeError("TODO: output is not the last argument")
+        # raise RuntimeError("TODO: output is not the last argument")
     out_str += format_str(
         f"""    // Write the output data to file
     std::ofstream ofile;
@@ -320,7 +308,7 @@ def codegen_host(top, module):
         std::cerr << "Failed to open output file!" << std::endl;
         return EXIT_FAILURE;
     }}
-    ofile.write(reinterpret_cast<const char*>({out_buf}.data()), {input_bytes[-1]});
+    ofile.write(reinterpret_cast<const char*>({out_buf}.data()), {buffer_bytes[-1]});
     ofile.close();
     """,
         strip=False,

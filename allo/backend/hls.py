@@ -408,7 +408,7 @@ class HLSModule:
                 outputs
             ), f"Number of arguments mismatch, got {len(args)}, expected {len(inputs) + len(outputs)}"
             for i, ((in_dtype, in_shape), arg) in enumerate(zip(inputs, args)):
-                assert arg.shape == tuple(
+                assert np.prod(arg.shape) == np.prod(
                     in_shape
                 ), f"invalid arguemnt {i}, {arg.shape}-{in_shape}"
                 ele_bitwidth = get_bitwidth_from_type(in_dtype)

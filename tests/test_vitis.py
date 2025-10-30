@@ -3,7 +3,7 @@
 
 import numpy as np
 import allo
-from allo.ir.types import uint64, uint256, int32
+from allo.ir.types import uint64, uint256, int32, float32
 from allo.utils import get_np_struct_type
 import allo.dataflow as df
 from allo.backend import hls
@@ -192,6 +192,6 @@ def test_grid_for_gemm():
 
 
 if __name__ == "__main__":
-    # test_vadd()
-    # test_vadd_adv()
+    test_vadd()
+    test_vadd_adv()
     test_grid_for_gemm()
