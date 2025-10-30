@@ -124,10 +124,20 @@ def codegen_host(top, module):
         )
         out_str += format_str("  return 1;", strip=False)
         out_str += format_str("}")
-        out_str += format_str(f"std::vector<uint8_t>  source_in{i}({byte_num});")
-        out_str += format_str(
-            f"ifile{i}.read(reinterpret_cast<char*>(source_in{i}.data()), {byte_num});"
-        )
+        if len(in_shape) == 0:
+            out_str += format_str(f"std::vector<uint8_t>  source_in{i}_({byte_num});")
+            out_str += format_str(
+                f"ifile{i}.read(reinterpret_cast<char*>(source_in{i}_.data()), {byte_num});"
+            )
+            scalar_type = ctype_map[in_dtype]
+            out_str += format_str(
+                f"{scalar_type} source_in{i} = *reinterpret_cast<{scalar_type}*>(source_in{i}_.data());"
+            )
+        else:
+            out_str += format_str(f"std::vector<uint8_t>  source_in{i}({byte_num});")
+            out_str += format_str(
+                f"ifile{i}.read(reinterpret_cast<char*>(source_in{i}.data()), {byte_num});"
+            )
     for i, (out_dtype, out_shape) in enumerate(outputs):
         ele_bitwidth = get_bitwidth_from_type(out_dtype)
         # bool -> 1 byte
@@ -194,10 +204,11 @@ def codegen_host(top, module):
             flag = "CL_MEM_READ_WRITE"
         else:
             flag = "CL_MEM_READ_ONLY"
-        out_str += format_str(
-            f"OCL_CHECK(err, cl::Buffer buffer_in{i}(context, CL_MEM_USE_HOST_PTR | {flag}, {buffer_bytes[i]}, source_in{i}.data(), &err));",
-            strip=False,
-        )
+        if len(in_shape) != 0:
+            out_str += format_str(
+                f"OCL_CHECK(err, cl::Buffer buffer_in{i}(context, CL_MEM_USE_HOST_PTR | {flag}, {buffer_bytes[i]}, source_in{i}.data(), &err));",
+                strip=False,
+            )
     for i in range(len(outputs)):
         out_str += format_str(
             f"OCL_CHECK(err, cl::Buffer buffer_out{i}(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, {buffer_bytes[i + len(inputs)]}, source_out{i}.data(), &err));",
@@ -207,11 +218,18 @@ def codegen_host(top, module):
     # Set kernel arguments
     buf_str = ""
     for i, (in_dtype, in_shape) in enumerate(inputs):
-        out_str += format_str(
-            f"OCL_CHECK(err, err = krnl_{top}.setArg({i}, buffer_in{i}));",
-            strip=False,
-        )
-        buf_str += f"buffer_in{i}, "
+        if len(in_shape) == 0:
+            # scalar
+            out_str += format_str(
+                f"OCL_CHECK(err, err = krnl_{top}.setArg({i}, source_in{i}));",
+                strip=False,
+            )
+        else:
+            out_str += format_str(
+                f"OCL_CHECK(err, err = krnl_{top}.setArg({i}, buffer_in{i}));",
+                strip=False,
+            )
+            buf_str += f"buffer_in{i}, "
     for i in range(len(outputs)):
         out_str += format_str(
             f"OCL_CHECK(err, err = krnl_{top}.setArg({len(inputs) + i}, buffer_out{i}));",
@@ -219,12 +237,13 @@ def codegen_host(top, module):
         )
     out_str += format_str("// Copy input data to device global memory", strip=False)
     buf_str = buf_str.strip(", ")
-    out_str += format_str(
-        "OCL_CHECK(err, err = q.enqueueMigrateMemObjects({"
-        + buf_str
-        + "}, 0 /* 0 means from host*/));",
-        strip=False,
-    )
+    if len(buf_str) > 0:
+        out_str += format_str(
+            "OCL_CHECK(err, err = q.enqueueMigrateMemObjects({"
+            + buf_str
+            + "}, 0 /* 0 means from host*/));",
+            strip=False,
+        )
     out_str += "\n"
     out_str += format_str(
         """

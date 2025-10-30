@@ -117,6 +117,50 @@ def test_vitis_io_stream():
         np_A = np.random.randint(0, 10, size=(32, 32)).astype(np.int32)
         np_B = np.zeros((32, 32), dtype=np.int32)
         hls_mod(np_A, np_B)
+        print("Passed!")
+
+
+def test_scalar():
+    # from `test_vhls.py`, test scalar
+    def case1(C: int32) -> int32:
+        return C + 1
+
+    s = allo.customize(case1)
+    mod = s.build()
+    assert mod(1) == 2
+    print("Passed CPU simulation!")
+    mod = s.build(target="vitis_hls", mode="sw_emu", project="test_scalar_sw_emu.prj")
+    ret = np.zeros((1,), dtype=np.int32)
+    mod(1, ret)
+    assert ret == 2
+    print("Passed!")
+
+
+def test_pointer_generation():
+    # from `test_vhls.py`, test bool and scalar
+    def top(inst: bool, C: int32[3]):
+        if inst:
+            C[0] = C[0] + 1
+
+    s = allo.customize(top)
+    mod = s.build(target="vitis_hls", mode="sw_emu", project="test_pointer_sw_emu.prj")
+    assert "bool v" in mod.hls_code and ",," not in mod.hls_code
+    if hls.is_available("vitis_hls"):
+
+        inst = np.array([1], dtype=np.bool_)
+        C = np.array([1, 2, 3], dtype=np.int32)
+        mod(inst, C)
+        np.testing.assert_allclose(C, [2, 2, 3], rtol=1e-5)
+        print("Passed!")
+
+        mod = s.build(
+            target="vitis_hls", mode="sw_emu", project="test_pointer_sw_emu_f.prj"
+        )
+        inst = np.array([0], dtype=np.bool_)
+        C = np.array([1, 2, 3], dtype=np.int32)
+        mod(inst, C)
+        np.testing.assert_allclose(C, [1, 2, 3], rtol=1e-5)
+        print("Passed!")
 
 
 # ##############################################################
@@ -178,9 +222,10 @@ def test_vadd_adv():
 
 
 if __name__ == "__main__":
-    test_vadd()
-    test_vadd_adv()
-    test_grid_for_gemm()
-    test_vitis_gemm_template_int32()
-    test_vitis_gemm_template_float32()
-    test_vitis_io_stream()
+    # test_vadd_adv()
+    # test_grid_for_gemm()
+    # test_vitis_gemm_template_int32()
+    # test_vitis_gemm_template_float32()
+    # test_vitis_io_stream()
+    # test_scalar()
+    test_pointer_generation()
