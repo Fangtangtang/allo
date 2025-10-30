@@ -3,7 +3,7 @@
 
 import numpy as np
 import allo
-from allo.ir.types import uint64, uint256, int32, float32, int16, bool
+from allo.ir.types import uint64, uint256, int32, float32, int512, bool
 from allo.utils import get_np_struct_type
 import allo.dataflow as df
 from allo.backend import hls
@@ -163,10 +163,28 @@ def test_pointer_generation():
         print("Passed!")
 
 
+def test_bool_array():
+    # modified from `test_vhls.py`, test bool array
+    def top(inst: bool[3], C: int32[3]):
+        for i in range(3):
+            if inst[i]:
+                C[i] = C[i] + 1
+
+    s = allo.customize(top)
+    mod = s.build(target="vitis_hls", mode="sw_emu", project="test_bool_array.prj")
+    if hls.is_available("vitis_hls"):
+        inst = np.array([1, 0, 1], dtype=np.bool_)
+        C = np.array([1, 2, 3], dtype=np.int32)
+        mod(inst, C)
+        np.testing.assert_allclose(C, [2, 2, 4], rtol=1e-5)
+        print("Passed!")
+
+
 # ##############################################################
 # Test large bitwidth
 # ##############################################################
-def test_vadd_adv():
+def test_vadd():
+    # test 256 bits
     VLEN = 256
     ELEN = 32
 
@@ -221,11 +239,48 @@ def test_vadd_adv():
         print("Passed Test!")
 
 
+def test_packed_add():
+    # test 512 bits
+    np_512 = get_np_struct_type(512)
+
+    def packed_add(input_: int512[1], output_: int512[1]):
+        unpacked: int32[16]
+        packed: int512
+
+        for i in range(16):
+            unpacked[i] = input_[0][i * 32 : (i + 1) * 32]
+
+        for i in range(16):
+            unpacked[i] = unpacked[i] + 1
+
+        for i in range(16):
+            packed[i * 32 : (i + 1) * 32] = unpacked[i]
+
+        output_[0] = packed
+
+    A = np.random.randint(0, 64, (512 // 32,)).astype(np.int32)
+    B = np.zeros(512 // 32).astype(np.int32)
+    packed_A = np.ascontiguousarray(A).view(np_512)
+    packed_B = np.ascontiguousarray(B).view(np_512)
+    s = allo.customize(packed_add)
+    if hls.is_available("vitis_hls"):
+        mod = s.build(
+            target="vitis_hls", mode="sw_emu", project="test_packed_int512.prj"
+        )
+        mod(packed_A, packed_B)
+        unpacked_B = packed_B.view(np.int32)
+        print(unpacked_B)
+        print(A)
+
+
 if __name__ == "__main__":
-    # test_vadd_adv()
-    # test_grid_for_gemm()
-    # test_vitis_gemm_template_int32()
-    # test_vitis_gemm_template_float32()
-    # test_vitis_io_stream()
-    # test_scalar()
+    test_grid_for_gemm()
+    test_vitis_gemm_template_int32()
+    test_vitis_gemm_template_float32()
+    test_vitis_io_stream()
+    test_scalar()
     test_pointer_generation()
+    test_bool_array()
+
+    test_vadd()
+    test_packed_add()
