@@ -282,6 +282,7 @@ class HLSModule:
                 )
                 self.args = []
                 generate_makefile(dst_path, project, self.platform)
+                # [NOTE] (Shihan): I guess tapa backend do not use this one. I modified codegen_host for vitis, similar logic should be updated for tapa if self.host_code is useful here
                 self.host_code = codegen_host(
                     self.top_func_name,
                     self.module,
@@ -417,11 +418,6 @@ class HLSModule:
                 # store as byte stream
                 with open(f"{self.project}/input{i}.data", "wb") as f:
                     f.write(arg.tobytes())
-                # write_tensor_to_file(
-                #     arg,
-                #     in_shape,
-                #     f"{self.project}/input{i}.data",
-                # )
             # check if the build folder exists
             bitstream_folder = f"{self.project}/build_dir.{self.mode}.{os.environ['XDEVICE'].rsplit('/')[-1].split('.')[0]}"
             if not os.path.exists(

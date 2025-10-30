@@ -128,67 +128,6 @@ def codegen_host(top, module):
         out_str += format_str(
             f"ifile{i}.read(reinterpret_cast<char*>(source_in{i}.data()), {byte_num});"
         )
-
-        # #####################################
-        # if in_dtype in ctype_map:
-        #     in_dtype = ctype_map[in_dtype]
-        # elif in_dtype.startswith("i") or in_dtype.startswith("ui"):
-        #     prefix, bitwidth = in_dtype.split("i")
-        #     if int(bitwidth) == 1:
-        #         in_dtype = "bool"
-        #     else:
-        #         new_int_type = f"{prefix}i{max(get_clostest_pow2(int(bitwidth)), 8)}"
-        #         in_dtype = ctype_map[new_int_type]
-        # elif in_dtype.startswith("fixed") or in_dtype.startswith("ufixed"):
-        #     in_dtype = "float"
-        # else:
-        #     raise ValueError(f"Unsupported input type: {in_dtype}")
-        # out_str += format_str(f'std::ifstream ifile{i}("input{i}.data");')
-        # out_str += format_str(f"if (!ifile{i}.is_open()) {{")
-        # out_str += format_str(
-        #     '  std::cerr << "Error: Could not open input file.\\n";', strip=False
-        # )
-        # out_str += format_str("  return 1;", strip=False)
-        # out_str += format_str("}")
-        # in_shape = [str(i) for i in in_shape]
-        # if len(in_shape) == 0:
-        #     # scalar
-        #     out_str += format_str(f"{in_dtype} source_in{i};")
-        #     # Handle 8-bit types by reading as int first and casting
-        #     if in_dtype in {"int8_t", "uint8_t"}:
-        #         out_str += format_str(f"int temp_in{i};")
-        #         out_str += format_str(f"ifile{i} >> temp_in{i};")
-        #         out_str += format_str(
-        #             f"source_in{i} = static_cast<{in_dtype}>(temp_in{i});"
-        #         )
-        #     else:
-        #         out_str += format_str(f"ifile{i} >> source_in{i};")
-        # else:
-        # out_str += format_str(
-        #     f"{in_dtype} in_data_{i}[{'*'.join(map(str, in_shape))}];"
-        # )
-        # out_str += format_str(
-        #     f"for (unsigned i = 0; i < {'*'.join(map(str, in_shape))}; i++) {{"
-        # )
-        # # Handle 8-bit types by reading as int first and casting
-        # if in_dtype in {"int8_t", "uint8_t"}:
-        #     out_str += format_str("  int c;", strip=False)
-        #     out_str += format_str(f"  ifile{i} >> c;", strip=False)
-        #     out_str += format_str(
-        #         f"  in_data_{i}[i] = static_cast<{in_dtype}>(c);", strip=False
-        #     )
-        # else:
-        #     out_str += format_str(f"  ifile{i} >> in_data_{i}[i];", strip=False)
-        # out_str += format_str("}")
-        # out_str += format_str(
-        #     f"size_t size_bytes_in{i} = sizeof({in_dtype}) * {' * '.join(in_shape)};",
-        #     strip=False,
-        # )
-        # out_str += format_str(
-        #     f"std::vector<{in_dtype}, aligned_allocator<{in_dtype}> > source_in{i}(in_data_{i}, in_data_{i} + {' * '.join(in_shape)});",
-        #     strip=False,
-        # )
-        # #####################################
     for i, (out_dtype, out_shape) in enumerate(outputs):
         if out_dtype in ctype_map:
             out_dtype = ctype_map[out_dtype]
@@ -271,13 +210,6 @@ def codegen_host(top, module):
             f"OCL_CHECK(err, cl::Buffer buffer_in{i}(context, CL_MEM_USE_HOST_PTR | {flag}, {input_bytes[i]}, source_in{i}.data(), &err));",
             strip=False,
         )
-        # #####################################
-        # if len(in_shape) != 0:
-        #     out_str += format_str(
-        #         f"OCL_CHECK(err, cl::Buffer buffer_in{i}(context, CL_MEM_USE_HOST_PTR | {flag}, size_bytes_in{i}, source_in{i}.data(), &err));",
-        #         strip=False,
-        #     )
-        # #####################################
     for i in range(len(outputs)):
         out_str += format_str(
             f"OCL_CHECK(err, cl::Buffer buffer_out{i}(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, size_bytes_out{i}, source_out{i}.data(), &err));",
@@ -292,20 +224,6 @@ def codegen_host(top, module):
             strip=False,
         )
         buf_str += f"buffer_in{i}, "
-        # #####################################
-        # if len(in_shape) == 0:
-        #     # scalar
-        #     out_str += format_str(
-        #         f"OCL_CHECK(err, err = krnl_{top}.setArg({i}, source_in{i}));",
-        #         strip=False,
-        #     )
-        # else:
-        #     out_str += format_str(
-        #         f"OCL_CHECK(err, err = krnl_{top}.setArg({i}, buffer_in{i}));",
-        #         strip=False,
-        #     )
-        #     buf_str += f"buffer_in{i}, "
-        # #####################################
     for i in range(len(outputs)):
         out_str += format_str(
             f"OCL_CHECK(err, err = krnl_{top}.setArg({len(inputs) + i}, buffer_out{i}));",
