@@ -10,24 +10,6 @@ VLEN = 256
 ENTRY_SIZE = 64
 ELEN = 32
 
-import sys
-
-# def kernel(A: uint2[10], B: int32[10]):
-#     for i in range(10):
-#         B[i][0:2] = A[i]
-#         B[i][2:4] = A[i]
-
-# s = allo.customize(kernel)
-# np_A = np.random.randint(0, 4, size=(10,))
-# np_B = np.zeros_like(np_A)
-# # np_A = np.random.randint(2, size=(10,))
-# # np_B = np.random.randint(7, size=(10,))
-# golden = (np_A) | (np_A << 2)
-# mod = s.build()
-# mod(np_A, np_B)
-# assert np.array_equal(golden, np_B)
-# sys.exit(0)
-
 
 def pack_i32_to_i256(arr):
     arr = np.array(arr, dtype=np.uint32)
@@ -58,30 +40,43 @@ def unpack_i256_to_i32(packed):
     return np.array(result, dtype=np.uint32)
 
 
-@df.region()
-def top():
-    @df.kernel(mapping=[1])
-    def gemm0(
-        A: uint64[VLEN // ENTRY_SIZE],
-        B: uint64[VLEN // ENTRY_SIZE],
-        C: uint64[VLEN // ENTRY_SIZE],
-    ):
-        for i in range(VLEN // ENTRY_SIZE):
-            for j in range(ENTRY_SIZE // ELEN):
+def test_vadd():
+
+    @df.region()
+    def top():
+        @df.kernel(mapping=[1])
+        def VEC(
+            A: uint64[VLEN // ENTRY_SIZE],
+            B: uint64[VLEN // ENTRY_SIZE],
+            C: uint64[VLEN // ENTRY_SIZE],
+        ):
+            for i, j in allo.grid(
+                VLEN // ENTRY_SIZE, ENTRY_SIZE // ELEN, name="vec_nest"
+            ):
                 C[i][j * ELEN : (j + 1) * ELEN] = (
                     A[i][j * ELEN : (j + 1) * ELEN] + B[i][j * ELEN : (j + 1) * ELEN]
                 )
 
+    A = np.random.randint(0, 64, (VLEN // ELEN,)).astype(np.uint32)
+    B = np.random.randint(0, 64, (VLEN // ELEN,)).astype(np.uint32)
+    packed_A = pack_i32_to_i256(A)
+    packed_B = pack_i32_to_i256(B)
+    packed_C = np.zeros((VLEN // ENTRY_SIZE,)).astype(np.uint64)
 
-A = np.random.randint(0, 64, (VLEN // ELEN,)).astype(np.uint32)
-B = np.random.randint(0, 64, (VLEN // ELEN,)).astype(np.uint32)
-packed_A = pack_i32_to_i256(A)
-packed_B = pack_i32_to_i256(B)
-packed_C = np.zeros((VLEN // ENTRY_SIZE,)).astype(np.uint64)
+    mod = df.build(top, target="simulator")
+    mod(packed_A, packed_B, packed_C)
+    C_ = unpack_i256_to_i32(packed_C)
+    np.testing.assert_allclose(A + B, C_, rtol=1e-5, atol=1e-5)
+    print("PASSED!")
 
-# mod = df.build(top)
-mod = df.build(top, target="simulator")
-mod(packed_A, packed_B, packed_C)
-C_ = unpack_i256_to_i32(packed_C)
-np.testing.assert_allclose(A + B, C_, rtol=1e-5, atol=1e-5)
-print("PASSED!")
+    s = df.customize(top)
+    # unroll the lanes
+    nest_loop_i = s.get_loops("VEC_0")["vec_nest"]["i"]
+    s.unroll(nest_loop_i)
+    nest_loop_j = s.get_loops("VEC_0")["vec_nest"]["j"]
+    s.unroll(nest_loop_j)
+    print(s.module)
+
+
+if __name__ == "__main__":
+    test_vadd()
