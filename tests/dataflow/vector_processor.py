@@ -374,8 +374,6 @@ def test_vec():
     np.testing.assert_allclose(np.sum(B), unpacked_C[0], rtol=1e-5, atol=1e-5)
     print("PASSED VV REDSUM TEST!")
 
-    return
-
     s = df.customize(top)
 
     s.unroll(s.get_loops("VEC_0")["scalar_to_vector_8"]["i"])
@@ -394,8 +392,8 @@ def test_vec():
         print("Starting Test...")
         mod = s.build(
             target="vitis_hls",
-            mode="hw",
-            project=f"vec_hw.prj",
+            mode="hw_emu",
+            project=f"vec_hw_emu.prj",
             wrap_io=False,
         )
         inst = np.array([VMUL], dtype=np.uint8)
