@@ -222,6 +222,19 @@ def test_vec():
     print("PASSED VECTOR TEST!")
 
     s = df.customize(top)
+
+    # s.unroll(s.get_loops("VEC_0")["scalar_to_vector_8"]["i"])
+    # s.unroll(s.get_loops("VEC_0")["scalar_to_vector_16"]["i"])
+    # s.unroll(s.get_loops("VEC_0")["scalar_to_vector_32"]["i"])
+
+    # s.unroll(s.get_loops("VEC_0")["min_max_8"]["i"])
+    # s.unroll(s.get_loops("VEC_0")["min_max_16"]["i"])
+    # s.unroll(s.get_loops("VEC_0")["min_max_32"]["i"])
+
+    # s.unroll(s.get_loops("VEC_0")["arith_8"]["i"])
+    # s.unroll(s.get_loops("VEC_0")["arith_16"]["i"])
+    # s.unroll(s.get_loops("VEC_0")["arith_32"]["i"])
+
     if hls.is_available("vitis_hls"):
         print("Starting Test...")
         mod = s.build(
