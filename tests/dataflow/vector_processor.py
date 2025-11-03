@@ -63,9 +63,14 @@ def test_vadd():
         print("Passed Test!")
 
 
-# ############################
-# Scalar type
-# ############################
+# [NOTE] reference: https://github.com/riscvarchive/riscv-v-spec/releases/tag/v1.0
+
+# VLEN: The number of bits in a single vector register
+VLEN = 256
+# ELEN: The number of bits in an element within a vector register
+ELEN = 32
+
+# EEW: effective element width, the size of all the elements within a vector register
 EEW8 = 0  # 8bits
 EEW16 = 1  # 16bits
 EEW32 = 2  # 32bits
@@ -75,30 +80,31 @@ EEW32 = 2  # 32bits
 # Vector Instructions
 # ############################
 # - min/max
-# VMAX_VV = 0b0000
-# VMAX_VX = 0b0001
-# VMIN_VV = 0b0010
-# VMIN_VX = 0b0011
+#   vmax.vv: vector-vector element-wise signed maximum
+#   vmax.vx: vector-scalar element-wise signed maximum
 VMAX = 0
+#   vmin.vv: vector-vector element-wise signed minimum
+#   vmin.vx: vector-scalar element-wise signed minimum
 VMIN = 1
 
 # - add/sub
-# VADD_VV = 0b0100
-# VADD_VX = 0b0101
-# # VADD_VI = 6
-# VSUB_VV = 0b0110
-# VSUB_VX = 0b0111
+#   vadd.vv: vector-vector element-wise add
+#   vadd.vx: vector-scalar element-wise add
 VADD = 2
+#   vsub.vv: vector-vector element-wise subtract
+#   vsub.vx: vector-scalar element-wise subtract vd[i] = vs2[i] - rs1
 VSUB = 3
 
 # - mul
-# VMUL_VV = 0b1000
-# VMUL_VX = 0b1001
+#   vmul.vv: vector-vector element-wise multiply
+#   vmul.vx: vector-scalar element-wise multiply
 VMUL = 4
 
 # - reduction
-VREDMAX = 5  # vd[0] = maxu( vs1[0] , vs2[*] )
-VREDSUM = 6  # vd[0] = sum( vs1[0] , vs2[*] )
+#   vredmax.vs: vd[0] = max( vs1[0] , vs2[*] )
+VREDMAX = 5
+#   vredsum.vs: vd[0] = sum( vs1[0] , vs2[*] )
+VREDSUM = 6
 # ############################
 
 
@@ -107,13 +113,13 @@ def test_vec():
     def top():
         @df.kernel(mapping=[1])
         def VEC(
-            inst: uint8[1],
-            ele_type: uint8[1],
-            vv: bool[1],
-            vs1: uint256[1],
-            vs2: uint256[1],
-            rs1: uint32[1],
-            vd: uint256[1],
+            inst: uint8[1],  # instruction
+            ele_type: uint8[1],  # EEW: effective element width
+            vv: bool[1],  # vector-vector (True) or vector-scalar (False)
+            vs1: uint256[1],  # input vector register
+            vs2: uint256[1],  # input vector register
+            rs1: uint32[1],  # input scalar
+            vd: uint256[1],  # output vector register
         ):
             # prepare operand
             operand1_8b: uint256
