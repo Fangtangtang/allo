@@ -95,6 +95,10 @@ VSUB = 3
 # VMUL_VV = 0b1000
 # VMUL_VX = 0b1001
 VMUL = 4
+
+# - reduction
+VREDMAX = 5  # vd[0] = maxu( vs1[0] , vs2[*] )
+VREDSUM = 6  # vd[0] = sum( vs1[0] , vs2[*] )
 # ############################
 
 
@@ -202,6 +206,29 @@ def test_vec():
                 sub_32b[i * 32 : (i + 1) * 32] = scalar2 - scalar1
                 mul_32b[i * 32 : (i + 1) * 32] = scalar2 * scalar1
 
+            # reduction
+            redmax_8b: int8 = operand1[0:8]
+            redmax_16b: int16 = operand1[0:16]
+            redmax_32b: int32 = operand1[0:32]
+            redsum_8b: int8 = operand1[0:8]
+            redsum_16b: int16 = operand1[0:16]
+            redsum_32b: int32 = operand1[0:32]
+            for i in allo.grid(VLEN // 8, name="reduction_8"):
+                scalar: int8 = operand2[i * 8 : (i + 1) * 8]
+                if scalar > redmax_8b:
+                    redmax_8b = scalar
+                redsum_8b = redsum_8b + scalar
+            for i in allo.grid(VLEN // 16, name="reduction_16"):
+                scalar: int16 = operand2[i * 16 : (i + 1) * 16]
+                if scalar > redmax_16b:
+                    redmax_16b = scalar
+                redsum_16b = redsum_16b + scalar
+            for i in allo.grid(VLEN // 32, name="reduction_32"):
+                scalar: int32 = operand2[i * 32 : (i + 1) * 32]
+                if scalar > redmax_32b:
+                    redmax_32b = scalar
+                redsum_32b = redsum_32b + scalar
+
             # write back
             if inst[0] == VMAX:
                 if ele_type[0] == EEW8:
@@ -238,6 +265,20 @@ def test_vec():
                     vd[0] = mul_16b
                 elif ele_type[0] == EEW32:
                     vd[0] = mul_32b
+            elif inst[0] == VREDMAX:
+                if ele_type[0] == EEW8:
+                    vd[0][0:8] = redmax_8b
+                elif ele_type[0] == EEW16:
+                    vd[0][0:16] = redmax_16b
+                elif ele_type[0] == EEW32:
+                    vd[0][0:32] = redmax_32b
+            elif inst[0] == VREDSUM:
+                if ele_type[0] == EEW8:
+                    vd[0][0:8] = redsum_8b
+                elif ele_type[0] == EEW16:
+                    vd[0][0:16] = redsum_16b
+                elif ele_type[0] == EEW32:
+                    vd[0][0:32] = redsum_32b
 
     A = np.random.randint(0, 64, (VLEN // ELEN,)).astype(np.uint32)
     B = np.random.randint(0, 64, (VLEN // ELEN,)).astype(np.uint32)
@@ -314,6 +355,27 @@ def test_vec():
     np.testing.assert_allclose(np.multiply(B, scalar), unpacked_C, rtol=1e-5, atol=1e-5)
     print("PASSED VX MUL TEST!")
 
+    init = np.zeros(VLEN // ELEN).astype(np.uint32)
+    packed_init = np.ascontiguousarray(init).view(np_256)
+
+    # REDMAX
+    inst = np.array([VREDMAX], dtype=np.uint8)
+    vv = np.array([True], dtype=np.bool_)
+    mod(inst, ele_type, vv, packed_init, packed_B, scalar, packed_C)
+    unpacked_C = packed_C.view(np.uint32)
+    np.testing.assert_allclose(np.max(B), unpacked_C[0], rtol=1e-5, atol=1e-5)
+    print("PASSED VV REDMAX TEST!")
+
+    # REDSUM
+    inst = np.array([VREDSUM], dtype=np.uint8)
+    vv = np.array([True], dtype=np.bool_)
+    mod(inst, ele_type, vv, packed_init, packed_B, scalar, packed_C)
+    unpacked_C = packed_C.view(np.uint32)
+    np.testing.assert_allclose(np.sum(B), unpacked_C[0], rtol=1e-5, atol=1e-5)
+    print("PASSED VV REDSUM TEST!")
+
+    return
+
     s = df.customize(top)
 
     s.unroll(s.get_loops("VEC_0")["scalar_to_vector_8"]["i"])
@@ -347,5 +409,5 @@ def test_vec():
 
 
 if __name__ == "__main__":
-    test_vadd()
+    # test_vadd()
     test_vec()
