@@ -85,10 +85,12 @@ class CodeGenerator:
         core_func_args: dict[str, dict[int, tuple[Argument, bool]]],
         streams: dict[str, Stream],
         virtual_computation_graph: ComputationGraph = None,
+        log_dir: str = None,
     ):
         self.device_type = device_type
         self.device_config = device_config_map[device_type]
         assert self.device_config is not None, "Unsupported device type"
+        self.log_dir: str = log_dir
 
         self.global_tensors: dict[int, DTensor] = global_tensors
         self.arg_slots_in_runtime_args: dict[int, tuple[int, int]] = {}
@@ -1300,6 +1302,17 @@ class CodeGenerator:
                     print(contiguous_interface)
                 print("===== contiguous_interfaces =====\n")
             global_dma_tasks[idx] = contiguous_interfaces
+
+        if self.log_dir is not None and os.getenv("DEBUG") == "1":
+            self.virtual_computation_graph.dump_full_graph(
+                self.log_dir, global_tensors, arg_idx_to_interface
+            )
+            for idx, contiguous_interfaces in global_dma_tasks.items():
+                for contiguous_interface in contiguous_interfaces:
+                    print("<<<Adjacent>>>")
+                    for interface in contiguous_interface.interface_list:
+                        print("\t", interface)
+                print()
 
         # ####################
         # # HACK: an aggressive strategy to fully utilize interface ports (may be problematic)

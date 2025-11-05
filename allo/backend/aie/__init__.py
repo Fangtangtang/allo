@@ -795,6 +795,7 @@ class AIE_MLIRModule:
             self.core_func_args,
             self.streams,
             self.virtual_computation_graph,
+            self.project_dir,
         )
         (
             self.aie_module,

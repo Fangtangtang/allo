@@ -1083,3 +1083,47 @@ class ComputationGraph:
         for edge in self.edges.values():
             dot.edge(edge.src, edge.dst, label=edge.name)
         dot.render(file_name, directory=output_dir, format="pdf")
+
+    def dump_full_graph(
+        self,
+        output_dir,
+        global_tile_io,
+        arg_idx_to_interface,
+        file_name="full_virtual_graph",
+    ):
+        dot = Digraph(comment="Virtual Computation Graph")
+        dot.attr(rankdir="LR")
+        for node in self.nodes.values():
+            dot.node(
+                node.meta_data.name,
+                label=node.meta_data.name,
+                style="filled",
+                fillcolor="lightblue",
+            )
+        for edge in self.edges.values():
+            dot.edge(edge.src, edge.dst, label=edge.name)
+        for func_name, io_info in global_tile_io.items():
+            arg_idx_to_interface_ = arg_idx_to_interface[func_name]
+            plotted: set[int] = set()
+            for arg_idx, tiles in io_info.items():
+                interface_idx = arg_idx_to_interface_[arg_idx]
+                if interface_idx in plotted:
+                    continue
+                min_value: LiveDTensorTile = tiles.dtensor_groups[
+                    min(tiles.dtensor_groups)
+                ][0]
+                dot.node(
+                    f"{func_name}[{interface_idx}]",
+                    label=f"{func_name}[{interface_idx}]",
+                    shape="box",
+                    style="dashed",
+                )
+                if min_value.is_input:
+                    dot.edge(
+                        f"{func_name}[{interface_idx}]", func_name, style="dashed,bold"
+                    )
+                else:
+                    dot.edge(
+                        func_name, f"{func_name}[{interface_idx}]", style="dashed,bold"
+                    )
+        dot.render(file_name, directory=output_dir, format="pdf")
