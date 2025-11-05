@@ -1310,8 +1310,10 @@ class CodeGenerator:
             for idx, contiguous_interfaces in global_dma_tasks.items():
                 for contiguous_interface in contiguous_interfaces:
                     print("<<<Adjacent>>>")
-                    for interface in contiguous_interface.interface_list:
-                        print("\t", interface)
+                    for id_, interface in enumerate(
+                        contiguous_interface.interface_list
+                    ):
+                        print("\t", id_, interface)
                 print()
 
         # ####################
