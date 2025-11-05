@@ -86,6 +86,8 @@ def move_stream_to_interface(
                     if with_extra_info:
                         extra_stream_info[func_name_] = {}
                     new_func_args[func_name_] = new_func_args[func_name].copy()
+        else:
+            s.func_instances[func_name] = {(): func_name}
         for op in func.entry_block.operations:
             if isinstance(op, allo_d.StreamConstructOp):
                 stream_ops.append(op)
@@ -457,12 +459,13 @@ def build(
 
     if target == "aie":
         global_vars = get_global_vars(func)
+        unroll_flag = False
         # [NOTE]: set unroll = False to improve compilation efficiency
         s: Schedule = _customize(
-            func, global_vars=global_vars, enable_tensor=False, unroll=False
+            func, global_vars=global_vars, enable_tensor=False, unroll=unroll_flag
         )
         stream_info, stream_types_dict, extra_stream_info = move_stream_to_interface(
-            s, with_stream_type=True, with_extra_info=True, unroll=False
+            s, with_stream_type=True, with_extra_info=True, unroll=unroll_flag
         )
         parameter_list, s = _build_top(
             s, stream_info, target=target, get_parameter_list=True

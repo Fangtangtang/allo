@@ -1286,13 +1286,16 @@ def customize(
         verbose=verbose,
     )
     module = ASTTransformer()(ctx, tree, file_name)
-    func_instances = {
-        orig_name: {
-            dim: f"{orig_name}_{str(freeze_list(predicate_tag))}"
-            for dim, predicate_tag in kernel_instance_info.items()
+    if not unroll:
+        func_instances = {
+            orig_name: {
+                dim: f"{orig_name}_{str(freeze_list(predicate_tag))}"
+                for dim, predicate_tag in kernel_instance_info.items()
+            }
+            for orig_name, kernel_instance_info in ctx.func_predicate_tags.items()
         }
-        for orig_name, kernel_instance_info in ctx.func_predicate_tags.items()
-    }
+    else:
+        func_instances = {}
     if lower_linalg:
         lower_linalg_and_attach_names(module)
         ctx.top_func = find_func_in_module(module, fn.__name__)

@@ -1752,6 +1752,8 @@ class ASTTransformer(ASTBuilder):
                                     ctx.func_tag2instance[orig_name][
                                         predicate_tag
                                     ] = func_op
+                                else:
+                                    func_op.attributes["tag"] = func_op.name
                             return
         else:
             old_ctx = None

@@ -492,7 +492,9 @@ def freeze_list(x):
 
 
 def construct_kernel_name(prefix: str, ids: tuple[int]):
-    return f"{prefix}_{"_".join(map(str, ids))}"
+    if len(ids) > 0:
+        return f"{prefix}_{"_".join(map(str, ids))}"
+    return prefix
 
 
 def parse_kernel_name(name: str):
