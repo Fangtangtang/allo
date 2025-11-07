@@ -63,6 +63,56 @@ def test_vadd():
         print("Passed Test!")
 
 
+def test_multi_vadd():
+    INST_NUM = 4
+
+    @df.region()
+    def top():
+        @df.kernel(mapping=[1])
+        def VEC(
+            A: uint256[INST_NUM],
+            B: uint256[INST_NUM],
+            C: uint256[INST_NUM],
+        ):
+            for outer in allo.grid(INST_NUM, name="inst_outer"):
+                for i in allo.grid(VLEN // ELEN, name="vec_nest"):
+                    C[outer][i * ELEN : (i + 1) * ELEN] = (
+                        A[outer][i * ELEN : (i + 1) * ELEN]
+                        + B[outer][i * ELEN : (i + 1) * ELEN]
+                    )
+
+    A = np.random.randint(0, 64, (INST_NUM, VLEN // ELEN)).astype(np.uint32)
+    B = np.random.randint(0, 64, (INST_NUM, VLEN // ELEN)).astype(np.uint32)
+    C = np.zeros((INST_NUM, VLEN // ELEN)).astype(np.uint32)
+    packed_A = np.ascontiguousarray(A).view(np_256).reshape(INST_NUM)
+    packed_B = np.ascontiguousarray(B).view(np_256).reshape(INST_NUM)
+    packed_C = np.ascontiguousarray(C).view(np_256).reshape(INST_NUM)
+
+    mod = df.build(top, target="simulator")
+    mod(packed_A, packed_B, packed_C)
+    unpacked_C = packed_C.view(np.uint32).reshape(INST_NUM, VLEN // ELEN)
+    np.testing.assert_allclose(A + B, unpacked_C, rtol=1e-5, atol=1e-5)
+    print("PASSED!")
+
+    s = df.customize(top)
+    s.pipeline(s.get_loops("VEC_0")["inst_outer"]["outer"])
+    print(s.module)
+
+    if hls.is_available("vitis_hls"):
+        print("Starting Test...")
+        mod = s.build(
+            target="vitis_hls",
+            mode="hw_emu",
+            project=f"vec_adv_hw_emu.prj",
+            wrap_io=False,
+        )
+        mod(packed_A, packed_B, packed_C)
+        unpacked_C = packed_C.view(np.uint32).reshape(INST_NUM, VLEN // ELEN)
+        np.testing.assert_allclose(A + B, unpacked_C, rtol=1e-5, atol=1e-5)
+        print(unpacked_C)
+        print("Passed Test!")
+
+
 # [NOTE] reference: https://github.com/riscvarchive/riscv-v-spec/releases/tag/v1.0
 
 # VLEN: The number of bits in a single vector register
@@ -394,6 +444,10 @@ def test_vec():
     s.unroll(s.get_loops("VEC_0")["arith_16"]["i"])
     s.unroll(s.get_loops("VEC_0")["arith_32"]["i"])
 
+    s.unroll(s.get_loops("VEC_0")["reduction_8"]["i"])
+    s.unroll(s.get_loops("VEC_0")["reduction_16"]["i"])
+    s.unroll(s.get_loops("VEC_0")["reduction_32"]["i"])
+
     if hls.is_available("vitis_hls"):
         print("Starting Test...")
         mod = s.build(
@@ -413,5 +467,6 @@ def test_vec():
 
 
 if __name__ == "__main__":
-    # test_vadd()
+    test_vadd()
+    test_multi_vadd()
     test_vec()

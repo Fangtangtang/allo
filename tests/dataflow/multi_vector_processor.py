@@ -381,8 +381,9 @@ def test_vec():
     s.unroll(s.get_loops("VEC_0")["arith_16"]["i"])
     s.unroll(s.get_loops("VEC_0")["arith_32"]["i"])
 
-    s.pipeline(s.get_loops("DECODE_0")["inst_loop"]["i"])
-    s.pipeline(s.get_loops("OUTPUT_0")["output_loop"]["i"])
+    s.pipeline(s.get_loops("VEC_0")["reduction_8"]["i"])
+    s.pipeline(s.get_loops("VEC_0")["reduction_16"]["i"])
+    s.pipeline(s.get_loops("VEC_0")["reduction_32"]["i"])
 
     if hls.is_available("vitis_hls"):
         print("Starting Test...")
