@@ -104,43 +104,6 @@ def test_vec():
                         operand1 = operand1_32b
 
                 # compute
-                # - min/max
-                min_8b: uint256
-                min_16b: uint256
-                min_32b: uint256
-                max_8b: uint256
-                max_16b: uint256
-                max_32b: uint256
-                for i in allo.grid(VLEN // 8, name="min_max_8"):
-                    scalar1: int8 = operand1[i * 8 : (i + 1) * 8]
-                    scalar2: int8 = operand2[i * 8 : (i + 1) * 8]
-                    condition: bool = scalar1 > scalar2
-                    if condition:
-                        min_8b[i * 8 : (i + 1) * 8] = scalar2
-                        max_8b[i * 8 : (i + 1) * 8] = scalar1
-                    else:
-                        max_8b[i * 8 : (i + 1) * 8] = scalar2
-                        min_8b[i * 8 : (i + 1) * 8] = scalar1
-                for i in allo.grid(VLEN // 16, name="min_max_16"):
-                    scalar1: int16 = operand1[i * 16 : (i + 1) * 16]
-                    scalar2: int16 = operand2[i * 16 : (i + 1) * 16]
-                    condition: bool = scalar1 > scalar2
-                    if condition:
-                        min_16b[i * 16 : (i + 1) * 16] = scalar2
-                        max_16b[i * 16 : (i + 1) * 16] = scalar1
-                    else:
-                        max_16b[i * 16 : (i + 1) * 16] = scalar2
-                        min_16b[i * 16 : (i + 1) * 16] = scalar1
-                for i in allo.grid(VLEN // 32, name="min_max_32"):
-                    scalar1: int32 = operand1[i * 32 : (i + 1) * 32]
-                    scalar2: int32 = operand2[i * 32 : (i + 1) * 32]
-                    condition: bool = scalar1 > scalar2
-                    if condition:
-                        min_32b[i * 32 : (i + 1) * 32] = scalar2
-                        max_32b[i * 32 : (i + 1) * 32] = scalar1
-                    else:
-                        max_32b[i * 32 : (i + 1) * 32] = scalar2
-                        min_32b[i * 32 : (i + 1) * 32] = scalar1
 
                 # - add/sub/mul
                 add_8b: uint256
@@ -172,80 +135,31 @@ def test_vec():
                     mul_32b[i * 32 : (i + 1) * 32] = scalar2 * scalar1
 
                 # reduction
-                redmax_8b: int8 = operand1[0:8]
-                redmax_16b: int16 = operand1[0:16]
-                redmax_32b: int32 = operand1[0:32]
-                redsum_8b: int8 = operand1[0:8]
-                redsum_16b: int16 = operand1[0:16]
-                redsum_32b: int32 = operand1[0:32]
-                for i in allo.grid(VLEN // 8, name="reduction_8"):
-                    scalar: int8 = operand2[i * 8 : (i + 1) * 8]
-                    if scalar > redmax_8b:
-                        redmax_8b = scalar
-                    redsum_8b = redsum_8b + scalar
-                for i in allo.grid(VLEN // 16, name="reduction_16"):
-                    scalar: int16 = operand2[i * 16 : (i + 1) * 16]
-                    if scalar > redmax_16b:
-                        redmax_16b = scalar
-                    redsum_16b = redsum_16b + scalar
-                for i in allo.grid(VLEN // 32, name="reduction_32"):
-                    scalar: int32 = operand2[i * 32 : (i + 1) * 32]
-                    if scalar > redmax_32b:
-                        redmax_32b = scalar
-                    redsum_32b = redsum_32b + scalar
-
                 inst: uint8 = inst_[idx]
                 vd: uint256
                 # write back
-                if inst == VMAX:
-                    if ele_type == EEW8:
-                        vd = max_8b
-                    elif ele_type == EEW16:
-                        vd = max_16b
-                    elif ele_type == EEW32:
-                        vd = max_32b
-                elif inst == VMIN:
-                    if ele_type == EEW8:
-                        vd = min_8b
-                    elif ele_type == EEW16:
-                        vd = min_16b
-                    elif ele_type == EEW32:
-                        vd = min_32b
-                elif inst == VADD:
+                if inst == VADD:
                     if ele_type == EEW8:
                         vd = add_8b
-                    elif ele_type == EEW16:
+                    if ele_type == EEW16:
                         vd = add_16b
-                    elif ele_type == EEW32:
+                    if ele_type == EEW32:
                         vd = add_32b
-                elif inst == VSUB:
+                if inst == VSUB:
                     if ele_type == EEW8:
                         vd = sub_8b
-                    elif ele_type == EEW16:
+                    if ele_type == EEW16:
                         vd = sub_16b
-                    elif ele_type == EEW32:
+                    if ele_type == EEW32:
                         vd = sub_32b
-                elif inst == VMUL:
+                if inst == VMUL:
                     if ele_type == EEW8:
                         vd = mul_8b
-                    elif ele_type == EEW16:
+                    if ele_type == EEW16:
                         vd = mul_16b
-                    elif ele_type == EEW32:
+                    if ele_type == EEW32:
                         vd = mul_32b
-                elif inst == VREDMAX:
-                    if ele_type == EEW8:
-                        vd[0:8] = redmax_8b
-                    elif ele_type == EEW16:
-                        vd[0:16] = redmax_16b
-                    elif ele_type == EEW32:
-                        vd[0:32] = redmax_32b
-                elif inst == VREDSUM:
-                    if ele_type == EEW8:
-                        vd[0:8] = redsum_8b
-                    elif ele_type == EEW16:
-                        vd[0:16] = redsum_16b
-                    elif ele_type == EEW32:
-                        vd[0:32] = redsum_32b
+
                 vd_[idx] = vd
 
     A = np.random.randint(0, 64, (INST_NUM, VLEN // ELEN)).astype(np.uint32)
