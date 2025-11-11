@@ -23,6 +23,8 @@ from .types import (
     UFixed,
     Index,
     uint1,
+    int4,
+    int8,
     int32,
     float16,
     float32,
@@ -1214,6 +1216,9 @@ class TypeInferer(ASTVisitor):
             argAshape = new_args[0].shape
             argBshape = new_args[1].shape
             node.dtype = new_args[0].dtype
+            # FIXME (shihan): aie matmul
+            if not ctx.unroll and node.dtype == int4:
+                node.dtype = int8
             if op_name == "conv2d":
                 node.shape = (
                     argAshape[0],
