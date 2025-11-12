@@ -22,9 +22,9 @@ os.environ["ENABLE_AGGRESSIVE_PORT_UTILIZATION_PATCH"] = "1"
 N = 1024
 D = 64
 
-Q = np.random.randn(N, D) * 0.5
-K = np.random.randn(N, D) * 0.5
-V = np.random.randn(N, D) * 0.5
+Q = np.random.randn(N, D)
+K = np.random.randn(N, D)
+V = np.random.randn(N, D)
 
 
 # ===============================================================================
