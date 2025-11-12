@@ -1161,6 +1161,9 @@ def codegen_host(global_tensors: dict[int, DTensor], runtime_args: list[RuntimeA
                 code += format_str(
                     "npu_time_min = (npu_time < npu_time_min) ? npu_time : npu_time_min;"
                 )
+                code += format_str(
+                    'std::cout << "NPU execution time: " << npu_time << "us\\n";'
+                )
             code += format_str("}")
             code += format_str(
                 'std::cout << "Avg NPU execution time: " << total_npu_time / n_test_iterations << "us\\n";'
