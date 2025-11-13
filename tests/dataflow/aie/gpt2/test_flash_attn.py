@@ -288,7 +288,7 @@ if __name__ == "__main__":
     os.environ["COALESCE_MORE"] = "1"
     os.environ["FORCE_UNROLL_INDEX"] = "0"
 
-    seq_len_list = [512, 1024, 2048]
+    seq_len_list = [128, 256, 512, 1024, 2048]
     for seq_len in seq_len_list:
         test_flash_attention(seq_len, 64, seq_len, q_chunk_size=32, kv_chunk_size=32)
         # _profil_from_prj(seq_len, 64)
