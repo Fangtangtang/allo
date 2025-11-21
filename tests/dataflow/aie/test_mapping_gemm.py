@@ -86,7 +86,7 @@ def _test_gemm_2D_v2():
 def _test_pingpong_gemm_2x2x2():
 
     Ty = int16
-    M, N, K = 32, 32, 32
+    M, N, K = 64, 64, 128
     Pm, Pn, Pk = 2, 2, 2
     Mt, Nt, Kt = M // Pm, N // Pn, K // Pk
 

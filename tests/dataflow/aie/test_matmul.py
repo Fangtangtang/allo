@@ -1,9 +1,10 @@
 import allo
 import json
 import subprocess
-from allo.ir.types import int8, int16, int32
+from allo.ir.types import int8, int16, bfloat16
 import allo.dataflow as df
 import numpy as np
+from ml_dtypes import bfloat16 as np_bfloat16
 
 PRJ_DIR = "matmul.prj"
 
@@ -23,18 +24,29 @@ def _test_gemm_1D(M, N, K, Ty):
         A = np.random.randint(0, 64, (M, K)).astype(np.int16)
         B = np.random.randint(0, 64, (K, N)).astype(np.int16)
         C = np.zeros((M, N)).astype(np.int16)
+    elif Ty == bfloat16:
+        A = (np.random.random((M, K)) * 0.1).astype(np_bfloat16)
+        B = (np.random.random((K, N)) * 0.1).astype(np_bfloat16)
+        C = np.zeros((M, N)).astype(np_bfloat16)
     mod(A, B, C)
-    np.testing.assert_allclose(C, A @ B, atol=1e-5)
+    if Ty is bfloat16:
+        np.testing.assert_allclose(
+            C.astype(np.float32), (A @ B).astype(np.float32), atol=1e-1
+        )
+    else:
+        np.testing.assert_allclose(C, A @ B, atol=1e-5)
     print("PASSED!")
 
 
 if __name__ == "__main__":
-    m, n, k = 8, 8, 4
-    for M in range(m, 1024, m):
-        for N in range(n, 64, n):
-            for K in range(k, 64, k):
+    m, n, k = 16, 16, 8
+    for M in range(m, 512, m):
+        for N in range(n, 512, n):
+            dead = 0
+            for K in range(k, 512, k):
                 try:
-                    _test_gemm_1D(M, N, K, int16)
+                    M, N, K = 64, 64, 64
+                    _test_gemm_1D(M, N, K, bfloat16)
                     cmd = f"cd {PRJ_DIR} &&  ~/usr/mlir-aie/programming_examples/utils/parse_trace.py --filename trace.txt --mlir top.mlir --colshift 1 > trace.json"
                     with subprocess.Popen(cmd, shell=True) as process:
                         process.wait()
@@ -56,9 +68,12 @@ if __name__ == "__main__":
                     print(cycle_cnt)
                     avg = sum(cycle_cnt) / len(cycle_cnt)
                     with open("avg.txt", "a") as f:
-                        f.write(f"{M}, {N}, {K}, {avg}, {(M*N*K/64)/avg}\n")
+                        f.write(f"{M}, {N}, {K}, {avg}, {(M*N*K/128)/avg}\n")
                 except:
-                    break
-
-                    # import sys
-                    # sys.exit(0)
+                    dead += 1
+                    if dead > 3:
+                        break
+                #     import sys
+                #     sys.exit(0)
+                # import sys
+                # sys.exit(0)
