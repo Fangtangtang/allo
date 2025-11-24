@@ -45,7 +45,7 @@ if __name__ == "__main__":
             dead = 0
             for K in range(k, 512, k):
                 try:
-                    M, N, K = 64, 64, 64
+                    M, N, K = 64, 16, 56
                     _test_gemm_1D(M, N, K, bfloat16)
                     cmd = f"cd {PRJ_DIR} &&  ~/usr/mlir-aie/programming_examples/utils/parse_trace.py --filename trace.txt --mlir top.mlir --colshift 1 > trace.json"
                     with subprocess.Popen(cmd, shell=True) as process:
@@ -73,7 +73,9 @@ if __name__ == "__main__":
                     dead += 1
                     if dead > 3:
                         break
-                #     import sys
-                #     sys.exit(0)
-                # import sys
-                # sys.exit(0)
+                    import sys
+
+                    sys.exit(0)
+                import sys
+
+                sys.exit(0)
