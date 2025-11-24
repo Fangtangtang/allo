@@ -1093,6 +1093,7 @@ class ComputationGraph:
     ):
         dot = Digraph(comment="Virtual Computation Graph")
         dot.attr(rankdir="LR")
+        json_graph = {"nodes": [], "edges": []}
         for node in self.nodes.values():
             dot.node(
                 node.meta_data.name,
@@ -1100,8 +1101,12 @@ class ComputationGraph:
                 style="filled",
                 fillcolor="lightblue",
             )
+            json_graph["nodes"].append({"id": node.meta_data.name, "type": "task"})
         for edge in self.edges.values():
             dot.edge(edge.src, edge.dst, label=edge.name)
+            json_graph["edges"].append(
+                {"src": edge.src, "dst": edge.dst, "label": edge.name}
+            )
         for func_name, io_info in global_tile_io.items():
             arg_idx_to_interface_ = arg_idx_to_interface[func_name]
             plotted: set[int] = set()
@@ -1118,12 +1123,33 @@ class ComputationGraph:
                     shape="box",
                     style="dashed",
                 )
+                json_graph["nodes"].append(
+                    {"id": f"{func_name}[{interface_idx}]", "type": "data"}
+                )
                 if min_value.is_input:
                     dot.edge(
                         f"{func_name}[{interface_idx}]", func_name, style="dashed,bold"
+                    )
+                    json_graph["edges"].append(
+                        {
+                            "src": f"{func_name}[{interface_idx}]",
+                            "dst": func_name,
+                            "label": f"{func_name}[{interface_idx}]",
+                        }
                     )
                 else:
                     dot.edge(
                         func_name, f"{func_name}[{interface_idx}]", style="dashed,bold"
                     )
+                    json_graph["edges"].append(
+                        {
+                            "src": func_name,
+                            "dst": f"{func_name}[{interface_idx}]",
+                            "label": f"{func_name}[{interface_idx}]",
+                        }
+                    )
         dot.render(file_name, directory=output_dir, format="pdf")
+        import json
+
+        with open(f"{output_dir}/graph.json", "w") as f:
+            json.dump(json_graph, f, indent=2)

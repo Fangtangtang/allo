@@ -1315,6 +1315,16 @@ class CodeGenerator:
                     ):
                         print("\t", id_, interface)
                 print()
+            output_file = f"{self.log_dir}/adjacent_interfaces.txt"
+            with open(output_file, "w") as f:
+                for idx, contiguous_interfaces in global_dma_tasks.items():
+                    for contiguous_interface in contiguous_interfaces:
+                        f.write("<<<Adjacent>>>\n")
+                        for id_, interface in enumerate(
+                            contiguous_interface.interface_list
+                        ):
+                            f.write(f"\t{id_} {interface}\n")
+                    f.write("\n")
 
         # ####################
         # # HACK: an aggressive strategy to fully utilize interface ports (may be problematic)
