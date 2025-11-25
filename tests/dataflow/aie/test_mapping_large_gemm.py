@@ -159,8 +159,8 @@ if __name__ == "__main__":
     except:
         print("[NOTE]: bfloat16 have accuracy issue")
 
-    # # - i4
-    # dir_path = os.path.dirname(os.path.abspath(__file__))
-    # os.environ["ALLO_EXTERNAL_KERNEL_DIR"] = f"{dir_path}/../../../allo/library/aie/"
-    # _test_pingpong_gemm(M, N, K, M // m, N // n, K // k, int4, int8)
-    # del os.environ["ALLO_EXTERNAL_KERNEL_DIR"]
+    # - i4
+    dir_path = os.path.dirname(os.path.abspath(__file__))
+    os.environ["ALLO_EXTERNAL_KERNEL_DIR"] = f"{dir_path}/../../../allo/library/aie/"
+    _test_pingpong_gemm(M, N, K, M // m, N // n, K // k, int4, int8)
+    del os.environ["ALLO_EXTERNAL_KERNEL_DIR"]
