@@ -134,7 +134,9 @@ def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
     else:
         raise ValueError(f"unsupported data type {TyI}")
     # mod(A, B, C)
-    allo.backend.aie._call_prj("top.prj", [bfloat16, bfloat16,bfloat16],65536, [0, 1], [2],A, B, C)
+    allo.backend.aie._call_prj(
+        "top.prj", [bfloat16, bfloat16, bfloat16], 65536, [0, 1], [2], A, B, C
+    )
     if TyI is bfloat16:
         np.testing.assert_allclose(
             C.astype(np.float32), (A @ B).astype(np.float32), atol=1e-1
