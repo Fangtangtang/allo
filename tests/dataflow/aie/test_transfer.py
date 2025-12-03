@@ -94,10 +94,11 @@ def test_matmul():
                 cores.append(f"core_{i + j}")
             groups.append(tuple(cores))
         mod = df.build(
-            top, target="aie",
+            top,
+            target="aie",
             mapping_primitives=[
                 ("bundle", groups),
-            ]
+            ],
         )
         mod(A, B, C)
 

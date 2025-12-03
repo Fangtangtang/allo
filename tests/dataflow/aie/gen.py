@@ -72,7 +72,7 @@ def my_matmul(M, K, N, m, k, n, dtype_in_str, dtype_out_str, trace_size):
             shim_tile = tile(1, 0)
             mem_tile = tile(0, 1)
             mem_tile_3 = tile(3, 1)
-            compute_tile2_col, compute_tile2_row = 0, 2
+            compute_tile2_col, compute_tile2_row = 0, 3
             compute_tile2 = tile(compute_tile2_col, compute_tile2_row)
             compute_tile3 = tile(1, 4)
 
@@ -82,7 +82,7 @@ def my_matmul(M, K, N, m, k, n, dtype_in_str, dtype_out_str, trace_size):
                 # compute_tile3,
                 mem_tile,
                 # mem_tile_3,
-                shim_tile_0,
+                # shim_tile_0,
             ]
             if trace_size > 0:
                 trace_utils.configure_packet_tracing_flow(tiles_to_trace, shim_tile)
@@ -145,11 +145,11 @@ def my_matmul(M, K, N, m, k, n, dtype_in_str, dtype_out_str, trace_size):
                                 trace_utils.MemTileEvent.PORT_RUNNING_5, 3, False
                             ),  # slave(3)
                             trace_utils.MemTilePortEvent(
-                                trace_utils.MemTileEvent.PORT_RUNNING_6, 4, False
+                                trace_utils.MemTileEvent.PORT_RUNNING_6, 1, True
                             ),  # slave(4)
                             trace_utils.MemTilePortEvent(
-                                trace_utils.MemTileEvent.PORT_RUNNING_7, 5, False
-                            ),  # slave(5)
+                                trace_utils.MemTileEvent.PORT_RUNNING_7, 2, True
+                            ),  # slave(1)
                         ],
                     )
 
