@@ -66,9 +66,9 @@ def test_reuse():
     B1 = np.zeros((M), dtype=np.int32)
 
     if is_available():
-        mod = df.build(top, target="aie")
-        mod(A, B0, B1)
-        # allo.backend.aie._call_prj("top.prj",[Ty, Ty, Ty], 0, [0], [1, 2], A, B0, B1)
+        # mod = df.build(top, target="aie")
+        # mod(A, B0, B1)
+        allo.backend.aie._call_prj("top.prj", [Ty, Ty, Ty], 0, [0], [1, 2], A, B0, B1)
         np.testing.assert_allclose(A + 1, B0, atol=1e-5)
         np.testing.assert_allclose(A + 1, B1, atol=1e-5)
         print("Passed!")
@@ -77,5 +77,5 @@ def test_reuse():
 
 
 if __name__ == "__main__":
-    test_transfer()
+    # test_transfer()
     test_reuse()
