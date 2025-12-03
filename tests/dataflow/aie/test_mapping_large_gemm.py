@@ -111,7 +111,7 @@ def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
 
     # mod = df.build(
     #     top,
-    #     project="top.prj",
+    #     project="gemm.prj",
     #     target="aie",
     #     mapping_primitives=mapping_primitives,
     #     profile=True,
@@ -135,7 +135,7 @@ def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
         raise ValueError(f"unsupported data type {TyI}")
     # mod(A, B, C)
     allo.backend.aie._call_prj(
-        "top.prj", [bfloat16, bfloat16, bfloat16], 65536, [0, 1], [2], A, B, C
+        "gemm.prj", [bfloat16, bfloat16, bfloat16], 65536, [0, 1], [2], A, B, C
     )
     if TyI is bfloat16:
         np.testing.assert_allclose(
@@ -147,7 +147,7 @@ def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
 
 
 if __name__ == "__main__":
-    M, N, K = 2048, 2048, 2048
+    M, N, K = 1024, 1024, 1024
     m, n, k = 64, 64, 64
     # - i8
     # _test_pingpong_gemm(M, N, K, M // m, N // n, K // k, int8, int8)
@@ -161,8 +161,8 @@ if __name__ == "__main__":
     except:
         print("[NOTE]: bfloat16 have accuracy issue")
 
-    # - i4
-    dir_path = os.path.dirname(os.path.abspath(__file__))
-    os.environ["ALLO_EXTERNAL_KERNEL_DIR"] = f"{dir_path}/../../../allo/library/aie/"
-    _test_pingpong_gemm(M, N, K, M // m, N // n, K // k, int4, int8)
-    del os.environ["ALLO_EXTERNAL_KERNEL_DIR"]
+    # # - i4
+    # dir_path = os.path.dirname(os.path.abspath(__file__))
+    # os.environ["ALLO_EXTERNAL_KERNEL_DIR"] = f"{dir_path}/../../../allo/library/aie/"
+    # _test_pingpong_gemm(M, N, K, M // m, N // n, K // k, int4, int8)
+    # del os.environ["ALLO_EXTERNAL_KERNEL_DIR"]

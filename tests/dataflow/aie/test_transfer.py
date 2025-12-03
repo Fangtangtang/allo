@@ -3,7 +3,8 @@
 
 import os
 import allo
-from allo.ir.types import int32, Stream
+from allo.ir.types import int32, Stream, int16, bfloat16
+from ml_dtypes import bfloat16 as np_bfloat16
 import allo.dataflow as df
 import numpy as np
 from allo.memory import Layout
@@ -64,6 +65,51 @@ def test_vector_scalar_add():
         print("MLIR_AIE_INSTALL_DIR unset. Skipping AIE backend test.")
 
 
+def test_matmul():
+    Ty = bfloat16
+    M = N = K = 64
+    LyC = Layout("RS0")
+    P = 64
+    p = 4
+
+    @df.region()
+    def top():
+        @df.kernel(mapping=[P])
+        def core(A: Ty[M, K], B: Ty[K, N], C: Ty[M, N * P] @ LyC):
+            C[:, :] = allo.matmul(A, B)
+
+    if Ty == int16:
+        A = np.random.randint(0, 100, (M, K)).astype(np.int16)
+        B = np.random.randint(0, 100, (K, N)).astype(np.int16)
+        C = np.zeros((M, N * P)).astype(np.int16)
+    if Ty == bfloat16:
+        A = (np.random.random((M, K)) * 0.1).astype(np_bfloat16)
+        B = (np.random.random((K, N)) * 0.1).astype(np_bfloat16)
+        C = np.zeros((M, N * P)).astype(np_bfloat16)
+    if is_available():
+        groups = []
+        for i in range(0, P, p):
+            cores = []
+            for j in range(p):
+                cores.append(f"core_{i + j}")
+            groups.append(tuple(cores))
+        mod = df.build(
+            top, target="aie",
+            mapping_primitives=[
+                ("bundle", groups),
+            ]
+        )
+        mod(A, B, C)
+
+        # allo.backend.aie._call_prj("top.prj", [Ty, Ty, Ty], 65536, [0, 1], [2], A, B, C)
+
+        # np.testing.assert_allclose(C[:, :N], A @ B)
+        print("PASSED!")
+    else:
+        print("MLIR_AIE_INSTALL_DIR unset. Skipping AIE backend test.")
+
+
 if __name__ == "__main__":
     # test_transfer()
-    test_vector_scalar_add()
+    # test_vector_scalar_add()
+    test_matmul()

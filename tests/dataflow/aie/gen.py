@@ -69,19 +69,19 @@ def my_matmul(M, K, N, m, k, n, dtype_in_str, dtype_out_str, trace_size):
         def device_body():
             # Tile declarations
             shim_tile_0 = tile(0, 0)
-            shim_tile = tile(2, 0)
+            shim_tile = tile(1, 0)
             mem_tile = tile(0, 1)
             mem_tile_3 = tile(3, 1)
             compute_tile2_col, compute_tile2_row = 0, 2
             compute_tile2 = tile(compute_tile2_col, compute_tile2_row)
-            compute_tile3 = tile(3, compute_tile2_row)
+            compute_tile3 = tile(1, 4)
 
             # fixme: use the tiles you want to trace
             tiles_to_trace = [
                 compute_tile2,
-                compute_tile3,
+                # compute_tile3,
                 mem_tile,
-                mem_tile_3,
+                # mem_tile_3,
                 shim_tile_0,
             ]
             if trace_size > 0:
@@ -129,27 +129,27 @@ def my_matmul(M, K, N, m, k, n, dtype_in_str, dtype_out_str, trace_size):
                             trace_utils.MemTilePortEvent(
                                 trace_utils.MemTileEvent.PORT_RUNNING_0, 0, True
                             ),  # master(0)
-                            # trace_utils.MemTilePortEvent(
-                            #     trace_utils.MemTileEvent.PORT_RUNNING_1, 14, False
-                            # ),  # slave(14/ north1)
-                            # trace_utils.MemTilePortEvent(
-                            #     trace_utils.MemTileEvent.PORT_RUNNING_2, 0, False
-                            # ),  # slave(0)
-                            # trace_utils.MemTilePortEvent(
-                            #     trace_utils.MemTileEvent.PORT_RUNNING_3, 1, False
-                            # ),  # slave(1)
-                            # trace_utils.MemTilePortEvent(
-                            #     trace_utils.MemTileEvent.PORT_RUNNING_4, 2, False
-                            # ),  # slave(2)
-                            # trace_utils.MemTilePortEvent(
-                            #     trace_utils.MemTileEvent.PORT_RUNNING_5, 3, False
-                            # ),  # slave(3)
-                            # trace_utils.MemTilePortEvent(
-                            #     trace_utils.MemTileEvent.PORT_RUNNING_6, 4, False
-                            # ),  # slave(4)
-                            # trace_utils.MemTilePortEvent(
-                            #     trace_utils.MemTileEvent.PORT_RUNNING_7, 5, False
-                            # ),  # slave(5)
+                            trace_utils.MemTilePortEvent(
+                                trace_utils.MemTileEvent.PORT_RUNNING_1, 14, False
+                            ),  # slave(14/ north1)
+                            trace_utils.MemTilePortEvent(
+                                trace_utils.MemTileEvent.PORT_RUNNING_2, 0, False
+                            ),  # slave(0)
+                            trace_utils.MemTilePortEvent(
+                                trace_utils.MemTileEvent.PORT_RUNNING_3, 1, False
+                            ),  # slave(1)
+                            trace_utils.MemTilePortEvent(
+                                trace_utils.MemTileEvent.PORT_RUNNING_4, 2, False
+                            ),  # slave(2)
+                            trace_utils.MemTilePortEvent(
+                                trace_utils.MemTileEvent.PORT_RUNNING_5, 3, False
+                            ),  # slave(3)
+                            trace_utils.MemTilePortEvent(
+                                trace_utils.MemTileEvent.PORT_RUNNING_6, 4, False
+                            ),  # slave(4)
+                            trace_utils.MemTilePortEvent(
+                                trace_utils.MemTileEvent.PORT_RUNNING_7, 5, False
+                            ),  # slave(5)
                         ],
                     )
 
