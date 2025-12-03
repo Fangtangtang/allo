@@ -69,17 +69,21 @@ def my_matmul(M, K, N, m, k, n, dtype_in_str, dtype_out_str, trace_size):
         def device_body():
             # Tile declarations
             shim_tile_0 = tile(0, 0)
-            shim_tile = tile(1, 0)
+            shim_tile = tile(2, 0)
             mem_tile = tile(0, 1)
             mem_tile_3 = tile(3, 1)
-            compute_tile2_col, compute_tile2_row = 0, 3
+            compute_tile2_col, compute_tile2_row = 0, 2
             compute_tile2 = tile(compute_tile2_col, compute_tile2_row)
-            compute_tile3 = tile(1, 4)
+            compute_tile3 = tile(0, 3)
+            compute_tile4 = tile(0, 4)
+            compute_tile5 = tile(0, 5)
 
             # fixme: use the tiles you want to trace
             tiles_to_trace = [
                 compute_tile2,
-                # compute_tile3,
+                compute_tile3,
+                compute_tile4,
+                compute_tile5,
                 mem_tile,
                 # mem_tile_3,
                 # shim_tile_0,

@@ -107,18 +107,18 @@ def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
             with allo.meta_elif(pk == Pk - 1):
                 C[:, :] = C_out
 
-    mapping_primitives = gen_gemm_mapping_primitive(Pm, Pn, Pk, col_num=2)
+    mapping_primitives = gen_gemm_mapping_primitive(Pm, Pn, Pk)
 
-    # mod = df.build(
-    #     top,
-    #     project="gemm.prj",
-    #     target="aie",
-    #     mapping_primitives=mapping_primitives,
-    #     profile=True,
-    #     warmup=200,
-    #     num_iters=1000,
-    #     device_type="npu1_3col",
-    # )
+    mod = df.build(
+        top,
+        project="gemm.prj",
+        target="aie",
+        mapping_primitives=mapping_primitives,
+        profile=True,
+        warmup=200,
+        num_iters=1000,
+        # device_type="npu1_3col",
+    )
     if TyI is bfloat16:
         A = (np.random.random((M, K)) * 0.1).astype(np_bfloat16)
         B = (np.random.random((K, N)) * 0.1).astype(np_bfloat16)
@@ -133,10 +133,10 @@ def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
         C = np.zeros((M, N)).astype(np.int16)
     else:
         raise ValueError(f"unsupported data type {TyI}")
-    # mod(A, B, C)
-    allo.backend.aie._call_prj(
-        "gemm.prj", [bfloat16, bfloat16, bfloat16], 65536, [0, 1], [2], A, B, C
-    )
+    mod(A, B, C)
+    # allo.backend.aie._call_prj(
+    #     "gemm.prj", [bfloat16, bfloat16, bfloat16], 65536, [0, 1], [2], A, B, C
+    # )
     if TyI is bfloat16:
         np.testing.assert_allclose(
             C.astype(np.float32), (A @ B).astype(np.float32), atol=1e-1
@@ -147,7 +147,7 @@ def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
 
 
 if __name__ == "__main__":
-    M, N, K = 256, 256, 512
+    M, N, K = 2048, 2048, 512
     m, n, k = 64, 64, 64
     # - i8
     # _test_pingpong_gemm(M, N, K, M // m, N // n, K // k, int8, int8)
