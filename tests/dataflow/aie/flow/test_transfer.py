@@ -76,6 +76,49 @@ def test_reuse():
         print("MLIR_AIE_INSTALL_DIR unset. Skipping AIE backend test.")
 
 
+def test_reuse_scale_up():
+    Ty = int32
+    M = 16
+    P = 64
+    Ly = Layout("S0")
+
+    @df.region()
+    def top():
+        pipe: Stream[Ty[M], 2][P]
+
+        @df.kernel(mapping=[P])
+        def producer(A: Ty[M * P] @ Ly, B0: Ty[M * P] @ Ly):
+            B0[:] = allo.add(A, 1)
+            # send data
+            p = df.get_pid()
+            pipe[p].put(A)
+
+        @df.kernel(mapping=[P])
+        def consumer(B1: Ty[M * P] @ Ly):
+            p = df.get_pid()
+            # receive data
+            B1[:] = allo.add(pipe[p].get(), 1)
+
+    A = np.random.randint(0, 64, (M * P,)).astype(np.int32)
+    B0 = np.zeros((M * P,), dtype=np.int32)
+    B1 = np.zeros((M * P,), dtype=np.int32)
+
+    if is_available():
+        groups = []
+        for i in range(P):
+            groups.append((f"producer_{i}", f"consumer_{i}"))
+        mod = df.build(top, target="aie", mapping_primitives=[("bundle", groups)])
+        mod(A, B0, B1)
+
+        # allo.backend.aie._call_prj("top.prj", [Ty, Ty, Ty], 65536, [0], [1, 2], A, B0, B1)
+        np.testing.assert_allclose(A + 1, B0, atol=1e-5)
+        np.testing.assert_allclose(A + 1, B1, atol=1e-5)
+        print("Passed!")
+    else:
+        print("MLIR_AIE_INSTALL_DIR unset. Skipping AIE backend test.")
+
+
 if __name__ == "__main__":
-    # test_transfer()
+    test_transfer()
     test_reuse()
+    test_reuse_scale_up()
