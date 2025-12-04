@@ -68,7 +68,7 @@ def my_matmul(M, K, N, m, k, n, dtype_in_str, dtype_out_str, trace_size):
         @device(AIEDevice.npu1_4col)
         def device_body():
             # Tile declarations
-            shim_tile_0 = tile(0, 0)
+            shim_tile_0 = tile(1, 0)
             shim_tile = tile(2, 0)
             mem_tile = tile(0, 1)
             mem_tile_3 = tile(3, 1)
@@ -82,8 +82,8 @@ def my_matmul(M, K, N, m, k, n, dtype_in_str, dtype_out_str, trace_size):
             tiles_to_trace = [
                 compute_tile2,
                 compute_tile3,
-                compute_tile4,
-                compute_tile5,
+                # compute_tile4,
+                # compute_tile5,
                 mem_tile,
                 # mem_tile_3,
                 # shim_tile_0,

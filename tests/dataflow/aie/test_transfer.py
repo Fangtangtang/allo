@@ -65,12 +65,56 @@ def test_vector_scalar_add():
         print("MLIR_AIE_INSTALL_DIR unset. Skipping AIE backend test.")
 
 
-def test_matmul():
+def test_single_input_matmul():
     Ty = bfloat16
     M = N = K = 64
     LyC = Layout("RS0")
-    P = 64
+    P = 32
     p = 2
+
+    @df.region()
+    def top():
+        @df.kernel(mapping=[P])
+        def core(A: Ty[M, K], C: Ty[M, N * P] @ LyC):
+            B: Ty[K, N] = 1
+            C[:, :] = allo.matmul(A, B)
+
+    if Ty == int16:
+        A = np.random.randint(0, 100, (M, K)).astype(np.int16)
+        C = np.zeros((M, N * P)).astype(np.int16)
+    if Ty == bfloat16:
+        A = (np.random.random((M, K)) * 0.1).astype(np_bfloat16)
+        C = np.zeros((M, N * P)).astype(np_bfloat16)
+
+    groups = []
+    for i in range(0, P, p):
+        cores = []
+        for j in range(p):
+            cores.append(f"core_{i + j}")
+        groups.append(tuple(cores))
+    # os.environ["ENABLE_AGGRESSIVE_PORT_UTILIZATION_PATCH"] = "1"
+    # os.environ["COALESCE_MORE"] = "1"
+    # mod = df.build(
+    #     top,
+    #     target="aie",
+    #     mapping_primitives=[
+    #         ("bundle", groups),
+    #     ],
+    # )
+    # mod(A, C)
+    # del os.environ["ENABLE_AGGRESSIVE_PORT_UTILIZATION_PATCH"]
+    # del os.environ["COALESCE_MORE"]
+
+    allo.backend.aie._call_prj("top.prj", [Ty, Ty], 65536, [0], [1], A, C)
+    print("PASSED!")
+
+
+def test_single_matmul():
+    Ty = bfloat16
+    M = N = K = 64
+    LyC = Layout("RS0")
+    P = 32
+    p = 4
 
     @df.region()
     def top():
@@ -78,59 +122,105 @@ def test_matmul():
         def core(A: Ty[M, K], B: Ty[K, N], C: Ty[M, N * P] @ LyC):
             C[:, :] = allo.matmul(A, B)
 
-        @df.kernel(mapping=[P])
-        def cor(A_: Ty[M, K], B_: Ty[K, N], C_: Ty[M, N * P] @ LyC):
-            C_[:, :] = allo.matmul(A_, B_)
-
     if Ty == int16:
         A = np.random.randint(0, 100, (M, K)).astype(np.int16)
         B = np.random.randint(0, 100, (K, N)).astype(np.int16)
         C = np.zeros((M, N * P)).astype(np.int16)
-        C_ = np.zeros((M, N * P)).astype(np.int16)
     if Ty == bfloat16:
         A = (np.random.random((M, K)) * 0.1).astype(np_bfloat16)
         B = (np.random.random((K, N)) * 0.1).astype(np_bfloat16)
         C = np.zeros((M, N * P)).astype(np_bfloat16)
+
+    groups = []
+    for i in range(0, P, p):
+        cores = []
+        for j in range(p):
+            cores.append(f"core_{i + j}")
+        groups.append(tuple(cores))
+    # os.environ["ENABLE_AGGRESSIVE_PORT_UTILIZATION_PATCH"] = "1"
+    # os.environ["COALESCE_MORE"] = "1"
+    # mod = df.build(
+    #     top,
+    #     project="single_matmul.prj",
+    #     target="aie",
+    #     mapping_primitives=[
+    #         ("bundle", groups),
+    #     ],
+    # )
+    # mod(A, B, C)
+    # del os.environ["ENABLE_AGGRESSIVE_PORT_UTILIZATION_PATCH"]
+    # del os.environ["COALESCE_MORE"]
+    allo.backend.aie._call_prj(
+        "single_matmul.prj", [Ty, Ty, Ty], 65536, [0, 1], [2], A, B, C
+    )
+    print("PASSED!")
+
+
+def test_matmul():
+    Ty = int16
+    M = N = K = 64
+    LyC = Layout("RS0")
+    P = 32
+    p = 2
+
+    @df.region()
+    def top():
+        @df.kernel(mapping=[P])
+        def core(A: Ty[M, K], C: Ty[M, N * P] @ LyC):
+            B: Ty[K, N] = 1
+            C[:, :] = allo.matmul(A, B)
+
+        @df.kernel(mapping=[P])
+        def cor(A_: Ty[M, K], C_: Ty[M, N * P] @ LyC):
+            B: Ty[K, N] = 1
+            C_[:, :] = allo.matmul(A_, B)
+
+    if Ty == int16:
+        A = np.random.randint(0, 100, (M, K)).astype(np.int16)
+        C = np.zeros((M, N * P)).astype(np.int16)
+        C_ = np.zeros((M, N * P)).astype(np.int16)
+    if Ty == bfloat16:
+        A = (np.random.random((M, K)) * 0.1).astype(np_bfloat16)
+        C = np.zeros((M, N * P)).astype(np_bfloat16)
         C_ = np.zeros((M, N * P)).astype(np_bfloat16)
-    if is_available():
-        # groups, groups_ = [], []
-        # for i in range(0, P, p):
-        #     cores, cores_ = [], []
-        #     for j in range(p):
-        #         cores.append(f"core_{i + j}")
-        #         cores_.append(f"cor_{i + j}")
-        #     groups.append(tuple(cores))
-        #     groups_.append(tuple(cores_))
-        # mod = df.build(
-        #     top,
-        #     target="aie",
-        #     mapping_primitives=[
-        #         ("bundle", groups), ("bundle", groups_),
-        #     ],
-        # )
-        # mod(A, B, C, A, B, C_)
 
-        allo.backend.aie._call_prj(
-            "top.prj",
-            [Ty, Ty, Ty, Ty, Ty, Ty],
-            65536,
-            [0, 1, 3, 4],
-            [2, 5],
-            A,
-            B,
-            C,
-            A,
-            B,
-            C_,
-        )
+    groups, groups_ = [], []
+    for i in range(0, P, p):
+        cores, cores_ = [], []
+        for j in range(p):
+            cores.append(f"core_{i + j}")
+            cores_.append(f"cor_{i + j}")
+        groups.append(tuple(cores))
+        groups_.append(tuple(cores_))
+    # mod = df.build(
+    #     top,
+    #     target="aie",
+    #     mapping_primitives=[
+    #         ("bundle", groups),
+    #         ("bundle", groups_),
+    #     ],
+    # )
+    # mod(A, C, A, C_)
 
-        # np.testing.assert_allclose(C[:, :N], A @ B)
-        print("PASSED!")
-    else:
-        print("MLIR_AIE_INSTALL_DIR unset. Skipping AIE backend test.")
+    allo.backend.aie._call_prj(
+        "top.prj",
+        [Ty, Ty, Ty, Ty, Ty, Ty],
+        0,
+        [0, 2],
+        [1, 3],
+        A,
+        C,
+        A,
+        C_,
+    )
+
+    # np.testing.assert_allclose(C[:, :N], A)
+    print("PASSED!")
 
 
 if __name__ == "__main__":
     # test_transfer()
     # test_vector_scalar_add()
-    test_matmul()
+    test_single_matmul()
+    # test_single_input_matmul()
+    # test_matmul()
