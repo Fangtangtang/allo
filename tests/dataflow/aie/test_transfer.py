@@ -70,7 +70,7 @@ def test_single_input_matmul():
     M = N = K = 64
     LyC = Layout("RS0")
     P = 64
-    p = 4
+    p = 8
 
     @df.region()
     def top():
@@ -92,18 +92,18 @@ def test_single_input_matmul():
         for j in range(p):
             cores.append(f"core_{i + j}")
         groups.append(tuple(cores))
-    # os.environ["ENABLE_AGGRESSIVE_PORT_UTILIZATION_PATCH"] = "1"
-    # os.environ["COALESCE_MORE"] = "1"
-    # mod = df.build(
-    #     top,
-    #     target="aie",
-    #     mapping_primitives=[
-    #         ("bundle", groups),
-    #     ],
-    # )
-    # mod(A, C)
-    # del os.environ["ENABLE_AGGRESSIVE_PORT_UTILIZATION_PATCH"]
-    # del os.environ["COALESCE_MORE"]
+    os.environ["ENABLE_AGGRESSIVE_PORT_UTILIZATION_PATCH"] = "1"
+    os.environ["COALESCE_MORE"] = "1"
+    mod = df.build(
+        top,
+        target="aie",
+        mapping_primitives=[
+            ("bundle", groups),
+        ],
+    )
+    mod(A, C)
+    del os.environ["ENABLE_AGGRESSIVE_PORT_UTILIZATION_PATCH"]
+    del os.environ["COALESCE_MORE"]
 
     allo.backend.aie._call_prj("top.prj", [Ty, Ty], 65536, [0], [1], A, C)
     print("PASSED!")

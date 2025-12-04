@@ -69,7 +69,7 @@ def my_matmul(M, K, N, m, k, n, dtype_in_str, dtype_out_str, trace_size):
         def device_body():
             # Tile declarations
             shim_tile_0 = tile(1, 0)
-            shim_tile = tile(2, 0)
+            shim_tile = tile(3, 0)
             mem_tile = tile(0, 1)
             mem_tile_3 = tile(3, 1)
             compute_tile2_col, compute_tile2_row = 0, 2
