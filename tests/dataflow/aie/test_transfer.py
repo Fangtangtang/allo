@@ -69,8 +69,8 @@ def test_single_input_matmul():
     Ty = bfloat16
     M = N = K = 64
     LyC = Layout("RS0")
-    P = 32
-    p = 2
+    P = 64
+    p = 4
 
     @df.region()
     def top():
@@ -157,7 +157,7 @@ def test_single_matmul():
 
 
 def test_matmul():
-    Ty = int16
+    Ty = bfloat16
     M = N = K = 64
     LyC = Layout("RS0")
     P = 32
@@ -192,6 +192,9 @@ def test_matmul():
             cores_.append(f"cor_{i + j}")
         groups.append(tuple(cores))
         groups_.append(tuple(cores_))
+
+    # os.environ["ENABLE_AGGRESSIVE_PORT_UTILIZATION_PATCH"] = "1"
+    # os.environ["COALESCE_MORE"] = "1"
     # mod = df.build(
     #     top,
     #     target="aie",
@@ -201,11 +204,13 @@ def test_matmul():
     #     ],
     # )
     # mod(A, C, A, C_)
+    # del os.environ["ENABLE_AGGRESSIVE_PORT_UTILIZATION_PATCH"]
+    # del os.environ["COALESCE_MORE"]
 
     allo.backend.aie._call_prj(
         "top.prj",
-        [Ty, Ty, Ty, Ty, Ty, Ty],
-        0,
+        [Ty, Ty, Ty, Ty],
+        65536,
         [0, 2],
         [1, 3],
         A,
@@ -221,6 +226,6 @@ def test_matmul():
 if __name__ == "__main__":
     # test_transfer()
     # test_vector_scalar_add()
-    test_single_matmul()
-    # test_single_input_matmul()
+    # test_single_matmul()
+    test_single_input_matmul()
     # test_matmul()

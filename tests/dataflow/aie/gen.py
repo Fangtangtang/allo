@@ -82,8 +82,8 @@ def my_matmul(M, K, N, m, k, n, dtype_in_str, dtype_out_str, trace_size):
             tiles_to_trace = [
                 compute_tile2,
                 compute_tile3,
-                # compute_tile4,
-                # compute_tile5,
+                compute_tile4,
+                compute_tile5,
                 mem_tile,
                 # mem_tile_3,
                 # shim_tile_0,
