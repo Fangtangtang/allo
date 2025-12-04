@@ -671,7 +671,7 @@ class AIE_MLIRModule:
             if isinstance(func, allo_func_d.FuncOp) and "df.kernel" in func.attributes:
                 simplify_matmul_accumulate(func)
                 allo_d.copy_on_write_on_function(func)
-                vectorize_matmul(func)
+                # vectorize_matmul(func)
                 optimize_layout_transformation(func)
 
         pipeline = "builtin.module(canonicalize)"

@@ -118,7 +118,55 @@ def test_reuse_scale_up():
         print("MLIR_AIE_INSTALL_DIR unset. Skipping AIE backend test.")
 
 
+def test_cooperate_gemm():
+    Ty = bfloat16
+    M = K = N = 32
+    P = 4
+
+    Ly = Layout("RS0")
+
+    @df.region()
+    def top():
+        pipe_A: Stream[Ty[M, K], 2][P]
+        pipe_B: Stream[Ty[K, N], 2][P]
+
+        @df.kernel(mapping=[P])
+        def producer(A: Ty[M, K], B: Ty[K, N], C: Ty[M, N * P] @ Ly):
+            C[:, :] = allo.matmul(A, B)
+            # send data
+            p = df.get_pid()
+            pipe_A[p].put(A)
+            pipe_B[p].put(B)
+
+        @df.kernel(mapping=[P])
+        def consumer(C_: Ty[M, N * P] @ Ly):
+            p = df.get_pid()
+            # receive data
+            C_[:, :] = allo.matmul(pipe_A[p].get(), pipe_B[p].get())
+
+    A = (np.random.random((M, K)) * 0.1).astype(np_bfloat16)
+    B = (np.random.random((K, N)) * 0.1).astype(np_bfloat16)
+    C = np.zeros((M, N * P)).astype(np_bfloat16)
+    C_ = np.zeros((M, N * P)).astype(np_bfloat16)
+
+    if is_available():
+        groups = []
+        for i in range(P):
+            groups.append((f"producer_{i}", f"consumer_{i}"))
+        # mod = df.build(top, target="aie", mapping_primitives=[("bundle", groups)])
+        # mod(A, B, C, C_)
+
+        allo.backend.aie._call_prj(
+            "top.prj", [Ty, Ty, Ty, Ty], 65536, [0, 1], [2, 3], A, B, C, C_
+        )
+
+        print("[Warning]: dataflow test only, output won't be correct!")
+    else:
+        print("MLIR_AIE_INSTALL_DIR unset. Skipping AIE backend test.")
+
+
 if __name__ == "__main__":
     test_transfer()
     test_reuse()
     test_reuse_scale_up()
+    test_cooperate_gemm()
