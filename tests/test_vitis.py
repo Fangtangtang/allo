@@ -3,7 +3,7 @@
 
 import numpy as np
 import allo
-from allo.ir.types import uint64, uint256, int32, float32, int512, bool
+from allo.ir.types import uint64, uint256, int32, float16, float32, int512, bool
 from allo.utils import get_np_struct_type
 import allo.dataflow as df
 from allo.backend import hls
@@ -368,18 +368,68 @@ def test_hbm_mapping_function():
     print("generate_hbm_config test passed!")
 
 
+def test_exp():
+    def top(A: float16[32]) -> float16[32]:
+        B: float16[32] = allo.exp(A)
+        return B
+
+    s = allo.customize(top)
+    print(s.module)
+    mod = s.build(
+        target="vitis_hls",
+        mode="csyn",
+        project="top.prj",
+    )
+    mod()
+    print("Vitis HLS synthesis complete!")
+
+
+def test_float16():
+    def top(A: float16[32]) -> float16[32]:
+        B: float16[32]
+        for i in range(32):
+            if A[i] > 0:
+                B[i] = A[i]
+            else:
+                B[i] = -A[i]
+        return B
+
+    s = allo.customize(top)
+    print(s.module)
+    mod = s.build(
+        target="vitis_hls",
+        mode="csyn",
+        project="top.prj",
+    )
+    mod()
+    print("Vitis HLS synthesis complete!")
+
+    if hls.is_available("vitis_hls"):
+        mod = s.build(
+            target="vitis_hls", mode="sw_emu", project="top.prj"
+        )
+        np_A = np.random.random(size=(32,)).astype(np.float16)
+        np_B = np.zeros((32,)).astype(np.float16)
+        mod(np_A, np_B)
+        np.testing.assert_allclose(np.abs(np_A), np_B, rtol=1e-4)
+        print("Passed!")
+
+
 if __name__ == "__main__":
-    test_grid_for_gemm()
-    test_vitis_gemm_template_int32()
-    test_vitis_gemm_template_float32()
-    test_vitis_io_stream()
-    test_scalar()
-    test_pointer_generation()
-    test_bool_array()
+    # test_grid_for_gemm()
+    # test_vitis_gemm_template_int32()
+    # test_vitis_gemm_template_float32()
+    # test_vitis_io_stream()
+    # test_scalar()
+    # test_pointer_generation()
+    # test_bool_array()
 
-    test_vadd()
-    test_packed_add()
+    # test_vadd()
+    # test_packed_add()
 
-    # Test HBM mapping
-    test_hbm_mapping_function()
-    test_hbm_mapping_config()
+    test_exp()
+    # test_float16()
+
+    # # Test HBM mapping
+    # test_hbm_mapping_function()
+    # test_hbm_mapping_config()
