@@ -362,7 +362,7 @@ def test_vec():
         mod = s.build(
             target="vitis_hls",
             mode="hw_emu",
-            project=f"vec.prj",
+            project=f"vec2.prj",
             wrap_io=False,
         )
         inst = np.array([VMUL] * INST_NUM, dtype=np.uint8)
