@@ -87,12 +87,23 @@ ELEN = 8
 #     (COPY_FROM_MEM, 0, 0, 1),
 #     (COPY_FROM_MEM, 2, 0, 0),
 # ]
+
+# instructions = [
+#     (ALLOC, 0, 4, 0),  # 100 00000000 0000
+#     (COPY_TO_MEM, 0, 0, 0),
+#     (COPY_TO_MEM, 1, 0, 1),
+#     (VEC_ADD, 0, 1, 2),
+#     (COPY_FROM_MEM, 2, 0, 0),
+# ]
+
 instructions = [
     (ALLOC, 0, 4, 0),  # 100 00000000 0000
     (COPY_TO_MEM, 0, 0, 0),
     (COPY_TO_MEM, 1, 0, 1),
     (VEC_ADD, 0, 1, 2),
+    (VEC_ADD, 1, 2, 3),
     (COPY_FROM_MEM, 2, 0, 0),
+    (COPY_FROM_MEM, 3, 0, 1),
 ]
 
 encoded_instructions = [
