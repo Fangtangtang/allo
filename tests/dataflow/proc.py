@@ -76,9 +76,9 @@ ELEN = 8
 instructions = [
     (ALLOC, 0, 4, 0), # 100 00000000 0000
     (COPY_TO_MEM, 0, 0, 0),
-    (COPY_TO_MEM, 1, 1, 0),
+    (COPY_TO_MEM, 1, 2, 0),
     (COPY_FROM_MEM, 0, 1, 0),
-    (COPY_FROM_MEM, 1, 0, 0),
+    (COPY_FROM_MEM, 2, 0, 0),
 ]
 encoded_instructions = [
     encode(inst[1], inst[2], inst[3], inst[0]) for inst in instructions
@@ -103,10 +103,10 @@ def top():
     def DECODER(insts: uint32[INST_NUM]):
         for i in range(INST_NUM):
             inst: uint32 = insts[i]
-            rs1_addr: UInt(8) = inst[4:12]
+            rs1_addr: UInt(8) = inst[20:28]
             rs2_addr: UInt(8) = inst[12:20]
-            rd_addr: UInt(8) = inst[20:28]
-            opcode: UInt(4) = inst[28:32]
+            rd_addr: UInt(8) = inst[4:12]
+            opcode: UInt(4) = inst[0:4]
             if opcode == ALLOC or opcode == COPY_TO_MEM or opcode == COPY_FROM_MEM:
                 mem_inst_: UInt(8) = opcode
                 mem_inst.put(mem_inst_)
@@ -162,9 +162,11 @@ print(input_)
 
 packed_input = np.ascontiguousarray(input_).view(np_256).reshape((HEIGHT,))
 packed_output = np.ascontiguousarray(output_).view(np_256).reshape((HEIGHT,))
+packed_instructions = np.array(encoded_instructions, dtype=np.uint32)
+print(packed_instructions.shape)
 
 mod = df.build(top, target="simulator")
 print("start simulation")
-mod(np.array(encoded_instructions, dtype=np.uint32), packed_input, packed_output)
+mod(packed_instructions, packed_input, packed_output)
 unpacked_output = packed_output.view(np.int8).reshape(HEIGHT, VLEN // 8)
 print(unpacked_output)
