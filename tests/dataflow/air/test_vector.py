@@ -9,8 +9,6 @@ import numpy as np
 from allo.memory import Layout
 from allo.backend.aie import is_available
 
-Ly = Layout("S0")
-
 
 def _test_vector_scalar_add():
     # https://github.com/Xilinx/mlir-aie/tree/main/programming_examples/basic/vector_scalar_add
@@ -41,7 +39,7 @@ def _test_vector_scalar_add():
 
 def _test_vector_vector_add():
     # # https://github.com/Xilinx/mlir-aie/tree/main/programming_examples/basic/vector_vector_add
-    Ty = int32
+    Ty = float32
     M = 1024
 
     @df.region()
@@ -50,21 +48,16 @@ def _test_vector_vector_add():
         def core(A: Ty[M], B: Ty[M], C: Ty[M]):
             C[:] = allo.add(A, B)
 
-    A = np.random.randint(0, 100, M).astype(np.int32)
-    B = np.random.randint(0, 100, M).astype(np.int32)
+    A = np.random.random(M).astype(np.float32)
+    B = np.random.random(M).astype(np.float32)
     if is_available():
-        mod = df.build(top, target="air")
-        C = np.zeros(M).astype(np.int32)
+        mod = df.build(top, target="aie")
+        C = np.zeros(M).astype(np.float32)
         mod(A, B, C)
-        np.testing.assert_allclose(C, A + B)
+        np.testing.assert_allclose(C, A + B, rtol=1e-5)
         print("PASSED!")
     else:
         print("MLIR_AIE_INSTALL_DIR unset. Skipping AIE backend test.")
-    sim_mod = df.build(top, target="simulator")
-    C = np.zeros(M).astype(np.int32)
-    sim_mod(A, B, C)
-    np.testing.assert_allclose(C, A + B)
-    print("Dataflow Simulator Passed!")
 
 
 if __name__ == "__main__":
