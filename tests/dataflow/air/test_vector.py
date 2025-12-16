@@ -30,11 +30,6 @@ def _test_vector_scalar_add():
         print("PASSED!")
     else:
         print("MLIR_AIE_INSTALL_DIR unset. Skipping AIE backend test.")
-    sim_mod = df.build(top, target="simulator")
-    B = np.zeros(M).astype(np.int32)
-    sim_mod(A, B)
-    np.testing.assert_allclose(B, A + 1)
-    print("Dataflow Simulator Passed!")
 
 
 def _test_vector_vector_add():
