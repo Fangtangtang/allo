@@ -12,7 +12,7 @@ def _test_external_kernel():
     A = np.random.random(M).astype(np.uint8)
     if is_available():
         B = np.zeros(M).astype(np.uint8)
-        air._call_prj("external_prj", [1], A, B)
+        air._call_prj("external.prj", [1], A, B)
         np.testing.assert_allclose(A, B, rtol=1e-5)
         print("PASSED!")
     else:

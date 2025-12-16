@@ -13,7 +13,7 @@ def _test_vector_vector_add():
     B = np.random.random(M).astype(np.float32)
     if is_available():
         C = np.zeros(M).astype(np.float32)
-        air._call_prj("vadd_prj", [2], A, B, C)
+        air._call_prj("vadd.prj", [2], A, B, C)
         np.testing.assert_allclose(C, A + B, rtol=1e-5)
         print("PASSED!")
     else:
