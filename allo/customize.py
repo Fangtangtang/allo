@@ -1244,7 +1244,9 @@ class Schedule:
         import importlib
 
         try:
-            backend_module = importlib.import_module(f".backend.{target}", package="allo")
+            backend_module = importlib.import_module(
+                f".backend.{target}", package="allo"
+            )
         except ImportError as e:
             raise NotImplementedError(
                 f"Target '{target}' is not supported. "
