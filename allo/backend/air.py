@@ -18,11 +18,15 @@ def _call_prj(project: str, output_idx: list[int], *args):
     with Context() as ctx, Location.unknown():
         mlir_module = Module.parse(content)
 
+    #  compile
     compiled_module = backend.compile(mlir_module)
+
+    # execute
     with filelock.FileLock("/tmp/npu.lock"):
         module_function = backend.load(compiled_module)
         actual_outputs = module_function(*args)
-
     backend.unload()
+
+    # copy the module execution outputs to args
     for idx in output_idx:
         args[idx][:] = actual_outputs[idx]
