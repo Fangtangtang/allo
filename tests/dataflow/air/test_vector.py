@@ -51,7 +51,7 @@ def _test_vector_vector_add():
     A = np.random.random(M).astype(np.float32)
     B = np.random.random(M).astype(np.float32)
     if is_available():
-        mod = df.build(top, target="aie")
+        mod = df.build(top, target="air")
         C = np.zeros(M).astype(np.float32)
         mod(A, B, C)
         np.testing.assert_allclose(C, A + B, rtol=1e-5)
