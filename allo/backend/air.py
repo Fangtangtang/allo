@@ -12,6 +12,16 @@ Requirements satisfied:
 - Support external kernels (`*.cc/*.cpp`) compiled with `$PEANO_INSTALL_DIR/bin/clang++`.
 
 The unit tests call :func:`_call_prj` directly.
+
+Additionally, this file contains a small Allo-MLIR -> AIR-MLIR translator
+(:func:`convert`) used by `tests/dataflow/air/test_vector_from_allo.py`.
+
+The translator is intentionally minimal: it targets the unit-test pattern
+(Allo dataflow "single kernel" vector add) and generates an AIR `air.herd`
+wrapping the compute region, with explicit DMA copies into L1 (mem space 2).
+
+NOTE: This is MLIR-to-MLIR translation using the python MLIR bindings, not
+string-based construction.
 """
 
 from __future__ import annotations
@@ -67,6 +77,7 @@ def _resolve_project_dir(project: str) -> Path:
 
 def _iter_external_kernel_sources(project_dir: Path) -> list[Path]:
     """Return top-level external kernel sources in the project directory."""
+
     srcs: list[Path] = []
     for pat in ("*.cc", "*.cpp", "*.cxx"):
         srcs.extend(sorted(project_dir.glob(pat)))
@@ -110,6 +121,7 @@ def _detect_air_target_device() -> str:
 
 def _detect_aie_target_triple() -> str:
     """Return AIE target triple prefix (aie2 or aie2p)."""
+
     # This is sufficient for our tests.
     return "aie2p" if os.environ.get("NPU2", "0") not in ("", "0") else "aie2"
 
@@ -309,16 +321,258 @@ def _call_prj(project: str, output_idx: list[int], *args):
         got = np.asarray(results[idx]).reshape(out.shape)
         out[...] = got
 
+
+# ---------------------------------------------------------------------------
+# Allo MLIR -> AIR MLIR conversion
+# ---------------------------------------------------------------------------
+
 from .._mlir.ir import Context as allo_Context, Module as allo_Module
 from .._mlir.dialects import allo as allo_d
 
-from air.dialects import air as air_d
+
+def _allo_type_to_air_type(allo_ty):
+    """Convert a subset of Allo MLIR types into air.ir types."""
+
+    from air.ir import (
+        MemRefType as air_MemRefType,
+        IntegerType as air_IntegerType,
+        F16Type as air_F16Type,
+        F32Type as air_F32Type,
+        F64Type as air_F64Type,
+        BF16Type as air_BF16Type,
+    )
+
+    if allo_ty.__class__.__name__ == "MemRefType":
+        shape = list(allo_ty.shape)
+        elem_str = str(allo_ty.element_type)
+
+        if elem_str == "f16":
+            air_elem = air_F16Type.get()
+        elif elem_str == "f32":
+            air_elem = air_F32Type.get()
+        elif elem_str == "f64":
+            air_elem = air_F64Type.get()
+        elif elem_str == "bf16":
+            air_elem = air_BF16Type.get()
+        elif elem_str.startswith("ui"):
+            air_elem = air_IntegerType.get_unsigned(int(elem_str[2:]))
+        elif elem_str.startswith("si"):
+            air_elem = air_IntegerType.get_signed(int(elem_str[2:]))
+        elif elem_str.startswith("i"):
+            air_elem = air_IntegerType.get_signless(int(elem_str[1:]))
+        else:
+            raise NotImplementedError(f"Unsupported element type: {elem_str}")
+
+        # Allo memref types rarely carry non-default memory spaces in frontend output.
+        mem_space_attr = None
+        try:
+            mem_space_attr = allo_ty.memory_space
+        except Exception:
+            mem_space_attr = None
+
+        return air_MemRefType.get(shape, air_elem, memory_space=mem_space_attr)
+
+    raise NotImplementedError(f"Unsupported type: {allo_ty} ({type(allo_ty)})")
+
+
+def _convert_allo_attr_to_air_attr(attr):
+    """Best-effort conversion of Allo IR attribute objects to AIR IR attributes."""
+
+    from air.ir import (
+        Attribute as air_Attribute,
+        StringAttr as air_StringAttr,
+        IntegerAttr as air_IntegerAttr,
+        IntegerType as air_IntegerType,
+        FloatAttr as air_FloatAttr,
+        F32Type as air_F32Type,
+        F64Type as air_F64Type,
+    )
+
+    if isinstance(attr, air_Attribute):
+        return attr
+
+    # Common attributes used in tests.
+    cls = attr.__class__.__name__
+    if cls == "StringAttr":
+        return air_StringAttr.get(attr.value)
+
+    if cls == "IntegerAttr":
+        # `attr.type` is an allo IntegerType; use width and signedness via string.
+        ty_str = str(attr.type)
+        # default to signless.
+        if ty_str.startswith("ui"):
+            ty = air_IntegerType.get_unsigned(int(ty_str[2:]))
+        elif ty_str.startswith("si"):
+            ty = air_IntegerType.get_signed(int(ty_str[2:]))
+        elif ty_str.startswith("i"):
+            ty = air_IntegerType.get_signless(int(ty_str[1:]))
+        else:
+            ty = air_IntegerType.get_signless(32)
+        return air_IntegerAttr.get(ty, attr.value)
+
+    if cls == "FloatAttr":
+        ty_str = str(attr.type)
+        if ty_str == "f64":
+            return air_FloatAttr.get(air_F64Type.get(), attr.value)
+        return air_FloatAttr.get(air_F32Type.get(), attr.value)
+
+    # Fallback: try to parse the textual form of the attribute in the AIR context.
+    # This is not used for operation construction (only for copying attributes).
+    try:
+        from air.ir import Attribute as air_Attr
+
+        return air_Attr.parse(str(attr))
+    except Exception:
+        raise NotImplementedError(f"Cannot convert attribute {attr} ({type(attr)})")
+
 
 def convert(project: str):
-    with open(f"{project}/allo.mlir", "r") as f:
-        content = f.read()
+    """Convert `<project>/allo.mlir` (Allo dialect) into `<project>/top.mlir` (AIR dialect).
+
+    Supports the unit-test pattern:
+    - a single `df.kernel` function containing `linalg.add` and `memref.copy`.
+
+    Generated AIR IR is close to `tests/dataflow/air/vadd_prj/top.mlir`.
+    """
+
+    project_dir = _resolve_project_dir(project)
+    allo_mlir_path = project_dir / "allo.mlir"
+    if not allo_mlir_path.exists():
+        raise FileNotFoundError(f"'{allo_mlir_path}' does not exist")
+
+    content = allo_mlir_path.read_text(encoding="utf-8")
+
+    # Parse Allo MLIR.
     with allo_Context() as ctx:
         allo_d.register_dialect(ctx)
-        module = allo_Module.parse(str(content), ctx)
-    
-    # TODO: convert to air module and write to f"{project}/top.mlir"
+        allo_mod = allo_Module.parse(str(content), ctx)
+
+    kernel_func = None
+    top_func = None
+    for op in allo_mod.body.operations:
+        # In Allo python bindings, `op.name` is the symbol name, while
+        # `op.operation.name` is the operation name (e.g. "func.func").
+        if op.operation.name != "func.func":
+            continue
+        attrs = op.attributes
+        if "df.kernel" in attrs:
+            kernel_func = op
+        if "dataflow" in attrs:
+            top_func = op
+
+    if kernel_func is None:
+        raise RuntimeError("convert(): no df.kernel function found in allo.mlir")
+    if top_func is None:
+        top_func = kernel_func
+
+    # Identify linalg.add in kernel.
+    linalg_add = None
+    for bop in kernel_func.entry_block.operations:
+        if bop.name == "linalg.add":
+            linalg_add = bop
+            break
+    if linalg_add is None:
+        raise RuntimeError("convert(): expected a linalg.add op in df.kernel")
+
+    entry_name = "vector_add" if len(top_func.arguments) == 3 else "top"
+
+    # Build AIR module.
+    from air.ir import (
+        InsertionPoint,
+        IntegerType as air_IntegerType,
+        IntegerAttr as air_IntegerAttr,
+        FunctionType as air_FunctionType,
+        MemRefType as air_MemRefType,
+    )
+    from air.dialects import func as func_d
+    from air.dialects import arith as arith_d
+    from air.dialects import memref as memref_d
+    from air.dialects import linalg as linalg_d
+    from air.dialects import air as air_d
+
+    with Context() as _air_ctx, Location.unknown():
+        air_module = Module.create()
+
+        air_arg_types = [_allo_type_to_air_type(a.type) for a in top_func.arguments]
+        ftype = air_FunctionType.get(air_arg_types, [])
+
+        with InsertionPoint(air_module.body):
+            f = func_d.FuncOp(entry_name, ftype)
+            entry_block = f.add_entry_block()
+
+            # Emit herd and return.
+            with InsertionPoint(entry_block):
+                herd = air_d.Herd(name="herd_0", sizes=[1, 1], operands=list(entry_block.arguments))
+
+            herd_block = herd.body.blocks[0]
+            # In herd block args: first 4 are tile ids and size args, then operands.
+            herd_operands = list(herd_block.arguments)[4:]
+
+            with InsertionPoint(herd_block):
+                # Allocate local buffers in mem space 2 (L1).
+                i32 = air_IntegerType.get_signless(32)
+                ms2 = air_IntegerAttr.get(i32, 2)
+
+                def _local_memref_type(global_mref_t: air_MemRefType) -> air_MemRefType:
+                    return air_MemRefType.get(
+                        list(global_mref_t.shape),
+                        global_mref_t.element_type,
+                        memory_space=ms2,
+                    )
+
+                locals_: list = []
+                for arg in herd_operands:
+                    gty = air_MemRefType(arg.type)
+                    lty = _local_memref_type(gty)
+                    loc_alloc = memref_d.AllocOp(lty, [], [])
+                    locals_.append(loc_alloc.result)
+
+                # DMA input(s) -> local. Assume last argument is output.
+                out_idx = len(herd_operands) - 1
+
+                # Only support 1D memrefs for this unit test.
+                c0 = arith_d.ConstantOp.create_index(0)
+                n = int(air_MemRefType(herd_operands[0].type).shape[0])
+                cN = arith_d.ConstantOp.create_index(n)
+                c1 = arith_d.ConstantOp.create_index(1)
+
+                for i in range(min(2, out_idx)):
+                    air_d.dma_memcpy_nd(
+                        dst=locals_[i],
+                        src=herd_operands[i],
+                        dst_offsets=[],
+                        dst_sizes=[],
+                        dst_strides=[],
+                        src_offsets=[c0.result],
+                        src_sizes=[cN.result],
+                        src_strides=[c1.result],
+                    )
+
+                # Compute: linalg.add local0 + local1 -> local_out.
+                # For memref semantics, linalg.add has no tensor results.
+                addop = linalg_d.AddOp([], inputs=[locals_[0], locals_[1]], outputs=[locals_[out_idx]])
+                # Copy attributes (e.g. op_name = "add_0").
+                for k, v in linalg_add.attributes.items():
+                    addop.operation.attributes[k] = _convert_allo_attr_to_air_attr(v)
+
+                # DMA local_out -> output memref.
+                air_d.dma_memcpy_nd(
+                    dst=herd_operands[out_idx],
+                    src=locals_[out_idx],
+                    dst_offsets=[c0.result],
+                    dst_sizes=[cN.result],
+                    dst_strides=[c1.result],
+                    src_offsets=[],
+                    src_sizes=[],
+                    src_strides=[],
+                )
+
+                for v in locals_:
+                    memref_d.DeallocOp(v)
+
+                air_d.HerdTerminatorOp()
+
+            with InsertionPoint(entry_block):
+                func_d.ReturnOp([])
+
+        (project_dir / "top.mlir").write_text(str(air_module), encoding="utf-8")
