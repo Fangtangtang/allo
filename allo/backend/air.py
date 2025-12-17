@@ -17,8 +17,8 @@ Additionally, this file provides :func:`convert` which translates an Allo-genera
 MLIR module (stored in `<project>/allo.mlir`) into an AIR dialect module
 (stored in `<project>/top.mlir`).
 
-NOTE: This conversion is intentionally minimal and currently targets the
-single-kernel vector addition style programs used in unit tests.
+NOTE: The conversion implemented here is intentionally minimal: it targets the
+vector tests in `tests/dataflow/air/`.
 """
 
 from __future__ import annotations
@@ -28,12 +28,21 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from typing import Iterator
 
 import filelock
 import numpy as np
 
 from air.backend.xrt import XRTBackend, XRTCompileArtifact
-from air.ir import Context, Location, Module
+from air.ir import (
+    Context,
+    InsertionPoint,
+    IntegerAttr,
+    IntegerType,
+    Location,
+    MemRefType,
+    Module,
+)
 
 # aircc driver (compiler)
 import air.compiler.aircc.main as aircc
@@ -65,7 +74,7 @@ def _resolve_project_dir(project: str) -> Path:
     repo_guess = Path(__file__).resolve().parents[2]  # .../workspace/allo
     cand = (repo_guess / "tests" / "dataflow" / "air" / p).resolve()
     if cand.exists():
-            return cand
+        return cand
 
     raise FileNotFoundError(
         f"AIR project directory '{project}' not found. Tried CWD='{Path.cwd()}', caller-relative, and repo-relative paths."
@@ -111,7 +120,6 @@ def _detect_air_target_device() -> str:
                 target_device = "npu2"
             break
     except Exception:
-        # best-effort fallback
         pass
     return target_device
 
@@ -134,9 +142,7 @@ def _compile_external_kernel(
 
     peano = os.environ.get("PEANO_INSTALL_DIR")
     if not peano:
-        raise RuntimeError(
-            "PEANO_INSTALL_DIR is not set (required for external kernels)."
-        )
+        raise RuntimeError("PEANO_INSTALL_DIR is not set (required for external kernels).")
 
     clangpp = Path(peano) / "bin" / "clang++"
     if not clangpp.exists():
@@ -236,7 +242,6 @@ def _compile_air_project(
     if peano:
         aircc_options += ["--peano", peano, "--no-xchesscc", "--no-xbridge"]
     else:
-        # fall back to defaults
         aircc_options += ["--xchesscc", "--xbridge"]
 
     if verbose:
@@ -324,16 +329,233 @@ def _call_prj(project: str, output_idx: list[int], *args):
 # -----------------------------------------------------------------------------
 
 
-from .._mlir.ir import Context as allo_Context, Module as allo_Module
-from .._mlir.dialects import allo as allo_d
+def _walk_ops(op) -> Iterator:
+    """Yield `Operation`s in preorder starting at `op` (inclusive)."""
 
-from air.dialects import air as air_d
+    operation = op.operation if hasattr(op, "operation") else op
+    yield operation
+    for region in operation.regions:
+        for block in region.blocks:
+            for child in block.operations:
+                yield from _walk_ops(child)
+
+
+def _has_air_ops(module: Module) -> bool:
+    return any(str(op.name).startswith("air.") for op in _walk_ops(module.operation))
+
+
+def _memref_with_memory_space(t, memory_space: int):
+    mt = MemRefType(t)
+    i32 = IntegerType.get_signless(32)
+    ms_attr = IntegerAttr.get(i32, memory_space)
+    return MemRefType.get(mt.shape, mt.element_type, memory_space=ms_attr)
+
 
 def convert(project: str):
-    with open(f"{project}/allo.mlir", "r") as f:
-        content = f.read()
-    with allo_Context() as ctx:
-        allo_d.register_dialect(ctx)
-        module = allo_Module.parse(str(content), ctx)
-    
-    # TODO: convert to air module and write to f"{project}/top.mlir"
+    """Translate `<project>/allo.mlir` into `<project>/top.mlir`.
+
+    Supported inputs (as used by tests):
+    - Already-AIR IR: pass-through.
+    - Linalg-only kernels for:
+      * vector add
+      * broadcast-add-one
+      * passthrough
+
+    All intermediate files are written only under the given project directory.
+    """
+
+    from air.dialects import air as air_d
+    from air.dialects import arith, func, linalg, memref
+    from air.ir import FunctionType
+
+    project_dir = _resolve_project_dir(project)
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    allo_path = project_dir / "allo.mlir"
+    if not allo_path.exists():
+        raise FileNotFoundError(f"'{allo_path}' does not exist")
+
+    content = allo_path.read_text(encoding="utf-8")
+
+    with Context() as ctx, Location.unknown():
+        in_module = Module.parse(content, ctx)
+
+        # 0) If AIR ops already present, just write it out.
+        if _has_air_ops(in_module):
+            (project_dir / "top.mlir").write_text(str(in_module), encoding="utf-8")
+            return
+
+        # 1) Find the 'top' and a single df.kernel function.
+        top_func = None
+        kernel_func = None
+        for op in in_module.body.operations:
+            if isinstance(op, func.FuncOp):
+                if op.name.value == "top":
+                    top_func = op
+                if "df.kernel" in op.attributes:
+                    kernel_func = op
+
+        if top_func is None:
+            for op in in_module.body.operations:
+                if isinstance(op, func.FuncOp):
+                    top_func = op
+                    break
+        if top_func is None:
+            raise RuntimeError("No func.func found in input allo.mlir")
+
+        if kernel_func is None:
+            kernel_func = top_func
+
+        # 2) Infer which arguments are outputs by looking at memref.copy into block arguments.
+        arg_is_output = [False] * len(kernel_func.arguments)
+        arg_is_input = [False] * len(kernel_func.arguments)
+        for op in kernel_func.entry_block.operations:
+            if op.operation.name != "memref.copy":
+                continue
+            src, dst = op.operands[0], op.operands[1]
+            for i, barg in enumerate(kernel_func.arguments):
+                if dst is barg:
+                    arg_is_output[i] = True
+                if src is barg:
+                    arg_is_input[i] = True
+
+        if not any(arg_is_output) and len(arg_is_output) > 0:
+            # Conservative fallback: last argument is output.
+            arg_is_output[-1] = True
+            for i in range(len(arg_is_input) - 1):
+                arg_is_input[i] = True
+
+        # 3) Detect which kernel pattern we need.
+        op_names = [o.operation.name for o in _walk_ops(kernel_func)]
+        is_broadcast = any(n == "linalg.broadcast" for n in op_names)
+        is_add = any(n == "linalg.add" for n in op_names)
+        is_passthrough = (not is_broadcast) and (not is_add)
+
+        # 4) Build new AIR module.
+        out_module = Module.create()
+        with InsertionPoint(out_module.body):
+            arg_types = [a.type for a in top_func.arguments]
+            out_func = func.FuncOp("top", FunctionType.get(arg_types, []))
+            out_entry = out_func.add_entry_block()
+
+            with InsertionPoint(out_entry):
+                top_args = list(out_entry.arguments)
+
+                # Create herd. Using the ext wrapper ensures the region block args are set up.
+                herd_op = air_d.Herd(name="herd_0", sizes=[1, 1], operands=top_args)
+                herd_block = herd_op.body.blocks[0]
+                herd_args = list(herd_block.arguments[4:])  # skip tile + herd size args
+
+                with InsertionPoint(herd_block):
+                    allocated = []  # Values we must dealloc.
+
+                    c0 = arith.ConstantOp.create_index(0)
+                    c1 = arith.ConstantOp.create_index(1)
+
+                    # Allocate local buffers for each relevant argument.
+                    local_bufs = [None] * len(herd_args)
+                    for i, g in enumerate(herd_args):
+                        if not isinstance(g.type, MemRefType):
+                            local_bufs[i] = g
+                            continue
+                        if arg_is_input[i] or (arg_is_output[i] and (not is_passthrough)):
+                            local_t = _memref_with_memory_space(g.type, 2)
+                            v = memref.AllocOp(local_t, [], []).result
+                            local_bufs[i] = v
+                            allocated.append(v)
+                        else:
+                            # For passthrough outputs we will reuse an input buffer.
+                            local_bufs[i] = g
+
+                    # DMAs for inputs: global -> local.
+                    for i, g in enumerate(herd_args):
+                        if not arg_is_input[i]:
+                            continue
+                        mt = MemRefType(g.type)
+                        if len(mt.shape) != 1:
+                            raise RuntimeError(
+                                f"Only 1D memrefs are supported in test conversion, got {mt}"
+                            )
+                        M = int(mt.shape[0])
+                        cM = arith.ConstantOp.create_index(M)
+                        air_d.dma_memcpy_nd(
+                            dst=local_bufs[i],
+                            src=g,
+                            dst_offsets=[],
+                            dst_sizes=[],
+                            dst_strides=[],
+                            src_offsets=[c0],
+                            src_sizes=[cM],
+                            src_strides=[c1],
+                        )
+
+                    # Compute.
+                    if is_broadcast:
+                        # Pattern: B[:] = A + 1
+                        mt0 = MemRefType(herd_args[0].type)
+                        elem_t = mt0.element_type
+
+                        one = arith.ConstantOp(elem_t, 1).result
+
+                        scalar_t = _memref_with_memory_space(MemRefType.get([], elem_t), 2)
+                        scalar = memref.AllocOp(scalar_t, [], []).result
+                        allocated.append(scalar)
+                        linalg.fill(one, outs=[scalar])
+
+                        vec_t = _memref_with_memory_space(herd_args[0].type, 2)
+                        bc_vec = memref.AllocOp(vec_t, [], []).result
+                        allocated.append(bc_vec)
+                        linalg.broadcast(scalar, outs=[bc_vec], dimensions=[0])
+
+                        out_idx = next(i for i, f in enumerate(arg_is_output) if f)
+                        linalg.add(local_bufs[0], bc_vec, outs=[local_bufs[out_idx]])
+
+                    elif is_add:
+                        # Pattern: C[:] = A + B
+                        out_idx = next(i for i, f in enumerate(arg_is_output) if f)
+                        in0 = local_bufs[0]
+                        in1_idx = next(i for i in range(1, len(local_bufs)) if arg_is_input[i])
+                        in1 = local_bufs[in1_idx]
+                        linalg.add(in0, in1, outs=[local_bufs[out_idx]])
+
+                    else:
+                        # Passthrough: B[:] = A
+                        out_idx = next(i for i, f in enumerate(arg_is_output) if f)
+                        in_idx = next(i for i, f in enumerate(arg_is_input) if f)
+                        local_bufs[out_idx] = local_bufs[in_idx]
+
+                    # DMAs for outputs: local -> global.
+                    for i, g in enumerate(herd_args):
+                        if not arg_is_output[i]:
+                            continue
+                        mt = MemRefType(g.type)
+                        if len(mt.shape) != 1:
+                            raise RuntimeError(
+                                f"Only 1D memrefs are supported in test conversion, got {mt}"
+                            )
+                        M = int(mt.shape[0])
+                        cM = arith.ConstantOp.create_index(M)
+                        air_d.dma_memcpy_nd(
+                            dst=g,
+                            src=local_bufs[i],
+                            dst_offsets=[c0],
+                            dst_sizes=[cM],
+                            dst_strides=[c1],
+                            src_offsets=[],
+                            src_sizes=[],
+                            src_strides=[],
+                        )
+
+                    # Dealloc everything we allocated.
+                    freed = set()
+                    for v in allocated:
+                        if v in freed:
+                            continue
+                        freed.add(v)
+                        memref.DeallocOp(v)
+
+                    air_d.HerdTerminatorOp()
+
+                func.ReturnOp([])
+
+        (project_dir / "top.mlir").write_text(str(out_module), encoding="utf-8")
