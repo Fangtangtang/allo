@@ -308,3 +308,17 @@ def _call_prj(project: str, output_idx: list[int], *args):
         out = np_args[idx]
         got = np.asarray(results[idx]).reshape(out.shape)
         out[...] = got
+
+from .._mlir.ir import Context as allo_Context, Module as allo_Module
+from .._mlir.dialects import allo as allo_d
+
+from air.dialects import air as air_d
+
+def convert(project: str):
+    with open(f"{project}/allo.mlir", "r") as f:
+        content = f.read()
+    with allo_Context() as ctx:
+        allo_d.register_dialect(ctx)
+        module = allo_Module.parse(str(content), ctx)
+    
+    # TODO: convert to air module and write to f"{project}/top.mlir"
