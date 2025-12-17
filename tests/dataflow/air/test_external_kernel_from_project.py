@@ -9,7 +9,7 @@ from allo.backend import air
 def _test_external_kernel():
     M = 4096
 
-    A = np.random.random(M).astype(np.uint8)
+    A = np.random.randint(0, 100, M).astype(np.uint8)
     if is_available():
         B = np.zeros(M).astype(np.uint8)
         air._call_prj("external.prj", [1], A, B)
