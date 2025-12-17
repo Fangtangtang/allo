@@ -1,85 +1,92 @@
 # Copyright Allo authors. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""MLIR-AIR backend helpers used by Allo tests.
+"""MLIR-AIR backend helpers.
 
-The public entry used in tests is :func:`_call_prj`.
+This module implements a minimal project-based runner used by unit tests.
 
-Design goals for `_call_prj` (tests/dataflow/air/*_from_project.py):
-  * Never emit compilation artifacts outside the provided `project` directory.
-  * Support external AIE kernels referenced by AIR MLIR via `link_with = "..."`.
+Requirements satisfied:
+- Read AIR dialect MLIR from `<project>/top.mlir`.
+- Compile using mlir-air's compiler driver (aircc) and run via XRT.
+- Keep *all* intermediate files under the given project directory.
+- Support external kernels (`*.cc/*.cpp`) compiled with `$PEANO_INSTALL_DIR/bin/clang++`.
 
-We rely on the upstream mlir-air python bindings for running on XRT.
+The unit tests call :func:`_call_prj` directly.
 """
 
 from __future__ import annotations
 
-import contextlib
+import inspect
 import os
 import re
-import shutil
 import subprocess
 from pathlib import Path
 
 import filelock
+import numpy as np
 
 from air.backend.xrt import XRTBackend, XRTCompileArtifact
 from air.ir import Context, Location, Module
 
-
-@contextlib.contextmanager
-def _pushd(new_dir: str | os.PathLike):
-    """Temporarily change working directory."""
-    prev = os.getcwd()
-    os.chdir(new_dir)
-    try:
-        yield
-    finally:
-        os.chdir(prev)
-
-
-def _repo_root_from_this_file() -> Path:
-    # allo/backend/air.py -> <repo_root>/allo/backend/air.py; repo_root is 3 levels up.
-    return Path(__file__).resolve().parents[2]
+# aircc driver (compiler)
+import air.compiler.aircc.main as aircc
 
 
 def _resolve_project_dir(project: str) -> Path:
-    """Resolve `project` to an existing directory.
+    """Resolve a project directory from a potentially relative name."""
 
-    Tests pass relative names like "vadd_prj" or "external_prj".
-    Depending on how the test is launched, the CWD may vary.
-
-    We attempt:
-      1) `project` as given (relative to CWD)
-      2) relative to <repo_root>/tests/dataflow/air
-    """
     p = Path(project)
-    if p.is_dir():
+    if p.is_absolute():
+        return p
+
+    # 1) relative to CWD
+    if p.exists():
         return p.resolve()
 
-    candidate = _repo_root_from_this_file() / "tests" / "dataflow" / "air" / project
-    if candidate.is_dir():
-        return candidate.resolve()
+    # 2) relative to caller file directory
+    for frame_info in inspect.stack()[1:]:
+        f = frame_info.filename
+        if not f:
+            continue
+        if Path(f).resolve() == Path(__file__).resolve():
+            continue
+        cand = (Path(f).resolve().parent / p).resolve()
+        if cand.exists():
+            return cand
+
+    # 3) best-effort repo-relative guess
+    repo_guess = Path(__file__).resolve().parents[2]  # .../workspace/allo
+    cand = (repo_guess / "tests" / "dataflow" / "air" / p).resolve()
+    if cand.exists():
+        return cand
 
     raise FileNotFoundError(
-        f"Project directory '{project}' not found. Tried '{p.resolve()}' and '{candidate}'."
+        f"AIR project directory '{project}' not found. Tried CWD='{Path.cwd()}', caller-relative, and repo-relative paths."
     )
 
 
-def _detect_target_device() -> str:
-    """Best-effort detection of the NPU model for aircc."""
+def _iter_external_kernel_sources(project_dir: Path) -> list[Path]:
+    """Return top-level external kernel sources in the project directory."""
+    srcs: list[Path] = []
+    for pat in ("*.cc", "*.cpp", "*.cxx"):
+        srcs.extend(sorted(project_dir.glob(pat)))
+    return [p for p in srcs if p.is_file() and p.parent == project_dir]
+
+
+def _detect_air_target_device() -> str:
+    """Detect whether we target npu1 or npu2.
+
+    Keep it lightweight: follow mlir-air's own XRTBackend heuristic by probing xrt-smi.
+    If anything fails, default to npu2.
+    """
+
     target_device = "npu2"
-    xrtsmi = "/opt/xilinx/xrt/bin/xrt-smi"
     try:
-        if not os.path.exists(xrtsmi):
-            return target_device
+        xrtsmi = "/opt/xilinx/xrt/bin/xrt-smi"
         result = subprocess.run(
-            [xrtsmi, "examine"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
+            [xrtsmi, "examine"], stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
-        out = result.stdout.decode("utf-8", errors="ignore").splitlines()
+        out = result.stdout.decode("utf-8").split("\n")
         p = re.compile(r"[\|]?(\[.+:.+:.+\]).+\|(RyzenAI-(npu\d)|NPU (\w+))\W*\|")
         for l in out:
             m = p.match(l)
@@ -96,229 +103,208 @@ def _detect_target_device() -> str:
                 target_device = "npu2"
             break
     except Exception:
+        # best-effort fallback
         pass
-
     return target_device
 
 
-def _infer_bit_width_from_mlir(mlir_text: str) -> int:
-    # Tiny heuristic sufficient for the unit tests.
-    if re.search(r"(ui8|i8)\b", mlir_text):
-        return 8
-    if re.search(r"(ui16|i16|f16|bf16)\b", mlir_text):
-        return 16
-    return 32
+def _detect_aie_target_triple() -> str:
+    """Return AIE target triple prefix (aie2 or aie2p)."""
+    # This is sufficient for our tests.
+    return "aie2p" if os.environ.get("NPU2", "0") not in ("", "0") else "aie2"
 
 
-def _extract_link_with_objects(mlir_text: str) -> list[str]:
-    # Example: attributes {link_with = "passThrough.cc.o"}
-    return re.findall(r'link_with\s*=\s*"([^"]+)"', mlir_text)
+def _compile_external_kernel(
+    src: Path, project_dir: Path, *, verbose: bool = False
+) -> Path:
+    """Compile a single external kernel source to an object file.
 
-
-def _maybe_compile_external_kernel_objects(
-    *,
-    project_dir: Path,
-    build_dir: Path,
-    mlir_text: str,
-):
-    """Compile external kernel source files referenced by `link_with`.
-
-    For the tests, top.mlir references `passThrough.cc.o` and the source
-    `passThrough.cc` lives under the project directory.
-
-    We compile into <project>/build to keep artifacts inside the project.
+    Object naming is important: mlir-air expects `passThrough.cc.o` if the IR
+    says `link_with = "passThrough.cc.o"`.
     """
 
-    obj_names = _extract_link_with_objects(mlir_text)
-    if not obj_names:
-        return
-
-    peano = os.environ.get("PEANO_INSTALL_DIR", "")
-    clangpp = os.path.join(peano, "bin", "clang++") if peano else ""
-    if not (clangpp and os.path.isfile(clangpp)):
+    peano = os.environ.get("PEANO_INSTALL_DIR")
+    if not peano:
         raise RuntimeError(
-            "External kernels detected (link_with=...), but PEANO_INSTALL_DIR/bin/clang++ was not found."
+            "PEANO_INSTALL_DIR is not set (required for external kernels)."
         )
 
-    aie_opt = shutil.which("aie-opt")
-    if not aie_opt:
+    clangpp = Path(peano) / "bin" / "clang++"
+    if not clangpp.exists():
+        raise RuntimeError(f"Cannot find '{clangpp}'.")
+
+    mlir_aie = os.environ.get("MLIR_AIE_INSTALL_DIR", "")
+    if not mlir_aie:
         raise RuntimeError(
-            "External kernels detected, but 'aie-opt' was not found in PATH."
+            "MLIR_AIE_INSTALL_DIR is not set (required for external kernel includes)."
         )
-    aieopt_dir = str(Path(aie_opt).resolve().parent.parent)
 
-    target_device = _detect_target_device()
-    aie_target = "aie2p" if target_device == "npu2" else "aie2"
-    bit_width = _infer_bit_width_from_mlir(mlir_text)
+    mlir_aie_kernels = os.environ.get("MLIR_AIE_EXTERNAL_KERNEL_DIR", "")
 
-    warning_flags = [
+    obj = project_dir / f"{src.name}.o"
+
+    target = _detect_aie_target_triple()
+    triple_flag = f"--target={target}-none-unknown-elf"
+
+    cmd: list[str] = [
+        str(clangpp),
+        "-O2",
+        "-std=c++20",
+        triple_flag,
         "-Wno-parentheses",
         "-Wno-attributes",
         "-Wno-macro-redefined",
-        "-Wno-empty-body",
+        "-DNDEBUG",
+        "-I",
+        str(Path(mlir_aie) / "include"),
+        "-I",
+        str(project_dir),
     ]
+    if mlir_aie_kernels:
+        cmd += ["-I", mlir_aie_kernels]
+    cmd += ["-c", str(src), "-o", str(obj)]
 
-    for obj in obj_names:
-        out_obj = build_dir / obj
-        if out_obj.exists():
-            continue
+    if verbose:
+        print("[allo.air]", " ".join(cmd))
 
-        # Infer source file from the object file name.
-        src_candidates: list[Path] = []
-        if obj.endswith(".cc.o"):
-            src_candidates.append(project_dir / obj[: -len(".o")])
-        elif obj.endswith(".cpp.o"):
-            src_candidates.append(project_dir / obj[: -len(".o")])
-        elif obj.endswith(".c.o"):
-            src_candidates.append(project_dir / obj[: -len(".o")])
-        elif obj.endswith(".o"):
-            stem = obj[:-2]
-            src_candidates.extend(
-                [
-                    project_dir / f"{stem}.cc",
-                    project_dir / f"{stem}.cpp",
-                    project_dir / f"{stem}.c",
-                    project_dir / stem,
-                ]
-            )
-        else:
-            src_candidates.append(project_dir / obj)
-
-        src = next((p for p in src_candidates if p.exists()), None)
-        if src is None:
-            raise FileNotFoundError(
-                f"MLIR requests link_with='{obj}' but no source found. Tried: {', '.join(str(p) for p in src_candidates)}"
-            )
-
-        cmd = [
-            clangpp,
-            "-O2",
-            "-std=c++20",
-            f"--target={aie_target}-none-unknown-elf",
-            *warning_flags,
-            "-DNDEBUG",
-            f"-I{aieopt_dir}/include",
-            f"-DBIT_WIDTH={bit_width}",
-            "-c",
-            str(src),
-            "-o",
-            str(out_obj),
-        ]
-
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        if proc.returncode != 0:
-            raise RuntimeError(
-                "Failed to compile external kernel object.\n"
-                f"Command: {' '.join(cmd)}\n"
-                f"Output:\n{proc.stdout.decode('utf-8', errors='ignore')}"
-            )
+    proc = subprocess.run(cmd, cwd=str(project_dir), capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "Failed to compile external kernel.\n"
+            f"cmd: {' '.join(cmd)}\n"
+            f"stdout:\n{proc.stdout}\n"
+            f"stderr:\n{proc.stderr}\n"
+        )
+    return obj
 
 
-def _compile_air_module_to_project_build(
+def _compile_external_kernels_if_needed(
+    project_dir: Path, *, verbose: bool = False
+) -> None:
+    srcs = _iter_external_kernel_sources(project_dir)
+    if not srcs:
+        return
+    for src in srcs:
+        _compile_external_kernel(src, project_dir, verbose=verbose)
+
+
+def _compile_air_project(
+    air_module: Module,
     *,
-    mlir_module: Module,
+    project_dir: Path,
     build_dir: Path,
-    xclbin_name: str = "air.xclbin",
-    insts_name: str = "air.insts.bin",
+    xclbin_path: Path,
+    insts_path: Path,
     kernel: str = "MLIR_AIE",
+    verbose: bool = False,
 ) -> XRTCompileArtifact:
-    """Compile AIR module using aircc but force all outputs under build_dir.
+    """Compile AIR module to xclbin+insts, writing everything under project_dir."""
 
-    We cannot rely on XRTBackend.compile() directly because it does not expose
-    aircc's --tmpdir, and the test environment blocks relative-path writes.
+    build_dir.mkdir(parents=True, exist_ok=True)
 
-    This function also mirrors XRTBackend.compile's peano/xchesscc selection.
-    """
+    # Absolute tmpdir to satisfy sandboxing (relative paths can be blocked by LD_PRELOAD).
+    tmpdir = build_dir / "aircc_tmp"
+    tmpdir.mkdir(parents=True, exist_ok=True)
 
-    import air.compiler.aircc.main as aircc
+    target_device = _detect_air_target_device()
 
-    target_device = _detect_target_device()
-
-    # Absolute paths to satisfy sandbox rules.
-    tmpdir = str((build_dir / "air_project").resolve())
-    xclbin_path = str((build_dir / xclbin_name).resolve())
-    insts_path = str((build_dir / insts_name).resolve())
-
-    # aircc.run uses this only for naming intermediate files.
-    air_mlir_file = str((build_dir / "air.mlir").resolve())
-
-    aircc_args = [
+    aircc_options: list[str] = [
         "--device",
         target_device,
+        "air.mlir",  # only used for naming; the module is passed in-memory
         "--tmpdir",
-        tmpdir,
-        air_mlir_file,
+        str(tmpdir),
         "-o",
-        xclbin_path,
+        str(xclbin_path),
         "-i",
-        insts_path,
+        str(insts_path),
+        "--output-format",
+        "xclbin",
     ]
 
-    # Ensure peano toolchain is used when available (matches XRTBackend.compile).
-    peano_install_dir = os.environ.get("PEANO_INSTALL_DIR", "")
-    if peano_install_dir and os.path.isdir(peano_install_dir):
-        aircc_args += ["--peano", peano_install_dir, "--no-xchesscc", "--no-xbridge"]
+    # Use peano toolchain if available (common in RyzenAI setups)
+    peano = os.environ.get("PEANO_INSTALL_DIR", "")
+    if peano:
+        aircc_options += ["--peano", peano, "--no-xchesscc", "--no-xbridge"]
     else:
-        aircc_args += ["--xchesscc", "--xbridge"]
+        # fall back to defaults
+        aircc_options += ["--xchesscc", "--xbridge"]
 
-    aircc.run(mlir_module, aircc_args)
+    if verbose:
+        aircc_options += ["-v"]
 
-    return XRTCompileArtifact(xclbin=xclbin_path, kernel=kernel, insts=insts_path)
+    # Run aircc from the *project* directory so relative `link_with = "*.o"`
+    # resolves to the object files we compiled into project_dir.
+    old_cwd = os.getcwd()
+    try:
+        os.chdir(str(project_dir))
+        aircc.run(air_module, aircc_options)
+    finally:
+        os.chdir(old_cwd)
+
+    return XRTCompileArtifact(str(xclbin_path), kernel, str(insts_path))
 
 
 def _call_prj(project: str, output_idx: list[int], *args):
-    """Compile and run an AIR project directory.
+    """Compile and execute an AIR project.
 
-    Parameters
-    ----------
-    project:
-        Path or name of a directory containing `top.mlir` and optionally
-        external kernel sources.
-    output_idx:
-        Indices in `args` that correspond to output buffers.
-    args:
-        Numpy arrays, matching the compiled module interface.
+    `args` are numpy arrays, including both inputs and pre-allocated outputs.
+    For every index listed in `output_idx`, this function overwrites `args[idx]`
+    in-place with the produced output.
 
-    Guarantees
-    ----------
-    All compilation artifacts are emitted under <project>/build.
+    All intermediate files are written under the project directory.
     """
 
     project_dir = _resolve_project_dir(project)
-    top_mlir_path = project_dir / "top.mlir"
-    if not top_mlir_path.exists():
-        raise FileNotFoundError(f"Missing '{top_mlir_path}'.")
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    top_mlir = project_dir / "top.mlir"
+    if not top_mlir.exists():
+        raise FileNotFoundError(f"'{top_mlir}' does not exist")
+
+    np_args: list[np.ndarray] = []
+    for a in args:
+        if not isinstance(a, np.ndarray):
+            raise TypeError(f"AIR backend expects numpy.ndarray args, got {type(a)}")
+        np_args.append(a)
 
     build_dir = project_dir / "build"
     build_dir.mkdir(parents=True, exist_ok=True)
 
-    mlir_text = top_mlir_path.read_text(encoding="utf-8")
+    # Locks live in the project directory (not /tmp).
+    prj_lock_path = project_dir / ".allo_air_prj.lock"
+    npu_lock_path = project_dir / ".allo_npu.lock"
 
-    # External kernels (if any) must be compiled into build_dir so that aiecc
-    # can find them when linking.
-    _maybe_compile_external_kernel_objects(
-        project_dir=project_dir, build_dir=build_dir, mlir_text=mlir_text
-    )
+    xclbin_path = build_dir / "final.xclbin"
+    insts_path = build_dir / "insts.bin"
 
-    with Context() as _ctx, Location.unknown():
-        mlir_module = Module.parse(mlir_text)
+    with filelock.FileLock(str(prj_lock_path)):
+        # 1) Compile external kernels if any.
+        _compile_external_kernels_if_needed(project_dir)
 
-    # Compile (forces outputs into build_dir).
-    with _pushd(build_dir):
-        artifact = _compile_air_module_to_project_build(
-            mlir_module=mlir_module, build_dir=build_dir
+        # 2) Parse MLIR.
+        mlir_txt = top_mlir.read_text(encoding="utf-8")
+        with Context() as ctx, Location.unknown():
+            air_module = Module.parse(mlir_txt, ctx)
+
+        # 3) Compile AIR->xclbin/insts (all artifacts under project_dir).
+        artifact = _compile_air_project(
+            air_module,
+            project_dir=project_dir,
+            build_dir=build_dir,
+            xclbin_path=xclbin_path,
+            insts_path=insts_path,
         )
 
-    # Execute.
-    backend = XRTBackend()
-    with filelock.FileLock("/tmp/npu.lock"):
-        module_function = backend.load(artifact)
-        actual_outputs = module_function(*args)
-    backend.unload()
+        # 4) Execute using XRT.
+        backend = XRTBackend(verbose=False)
+        with filelock.FileLock(str(npu_lock_path)):
+            invoker = backend.load(artifact)
+            results = invoker(*np_args)
+        backend.unload()
 
-    # Copy back outputs.
+    # 5) Copy results back.
     for idx in output_idx:
-        try:
-            args[idx][...] = actual_outputs[idx]
-        except Exception:
-            args[idx][:] = actual_outputs[idx]
+        out = np_args[idx]
+        got = np.asarray(results[idx]).reshape(out.shape)
+        out[...] = got
