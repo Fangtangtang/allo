@@ -1,17 +1,35 @@
 # Copyright Allo authors. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import allo
-from allo.ir.types import int32, float32, bfloat16
+from allo.ir.types import int32, float32
 import allo.dataflow as df
 import numpy as np
-from allo.memory import Layout
 from allo.backend.aie import is_available
 
 
+def _test_passthrough():
+    Ty = int32
+    M = 1024
+
+    @df.region()
+    def top():
+        @df.kernel(mapping=[1])
+        def core(A: Ty[M], B: Ty[M]):
+            B[:] = A
+
+    A = np.random.randint(0, 100, M).astype(np.int32)
+    if is_available():
+        mod = df.build(top, target="air")
+        B = np.zeros(M).astype(np.int32)
+        mod(A, B)
+        np.testing.assert_allclose(B, A)
+        print("PASSED!")
+    else:
+        print("MLIR_AIE_INSTALL_DIR unset. Skipping AIE backend test.")
+
+
 def _test_vector_scalar_add():
-    # https://github.com/Xilinx/mlir-aie/tree/main/programming_examples/basic/vector_scalar_add
     Ty = int32
     M = 1024
 
@@ -33,7 +51,6 @@ def _test_vector_scalar_add():
 
 
 def _test_vector_vector_add():
-    # # https://github.com/Xilinx/mlir-aie/tree/main/programming_examples/basic/vector_vector_add
     Ty = float32
     M = 1024
 
@@ -56,5 +73,6 @@ def _test_vector_vector_add():
 
 
 if __name__ == "__main__":
-    _test_vector_scalar_add()
+    _test_passthrough()
     _test_vector_vector_add()
+    _test_vector_scalar_add()
