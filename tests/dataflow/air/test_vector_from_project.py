@@ -26,7 +26,7 @@ def _test_vector_scalar_add():
     A = np.random.randint(0, 100, M).astype(np.int32)
     if is_available():
         C = np.zeros(M).astype(np.int32)
-        air._call_prj("broadcast.prj", [1], A,  C)
+        air._call_prj("broadcast.prj", [1], A, C)
         np.testing.assert_allclose(C, A + 1, rtol=1e-5)
         print("PASSED!")
     else:

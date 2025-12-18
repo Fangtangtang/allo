@@ -13,7 +13,7 @@ def _test_passthrough():
     if is_available():
         C = np.zeros(M).astype(np.int32)
         air.convert("passthrough.prj")
-        air._call_prj("passthrough.prj", [1], A,  C)
+        air._call_prj("passthrough.prj", [1], A, C)
         np.testing.assert_allclose(C, A, rtol=1e-5)
         print("PASSED!")
     else:

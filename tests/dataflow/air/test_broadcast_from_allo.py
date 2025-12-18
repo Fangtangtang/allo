@@ -13,7 +13,7 @@ def _test_broadcast():
     if is_available():
         C = np.zeros(M).astype(np.int32)
         air.convert("broadcast.prj")
-        air._call_prj("broadcast.prj", [1], A,  C)
+        air._call_prj("broadcast.prj", [1], A, C)
         np.testing.assert_allclose(C, A + 1, rtol=1e-5)
         print("PASSED!")
     else:

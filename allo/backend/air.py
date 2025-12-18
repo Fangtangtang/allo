@@ -5,21 +5,25 @@
 
 This module implements a minimal project-based runner used by unit tests.
 
-Requirements satisfied:
-- Read AIR dialect MLIR from `<project>/top.mlir`.
-- Compile using mlir-air's compiler driver (aircc) and run via XRT.
-- Keep *all* intermediate files under the given project directory.
-- Support external kernels (`*.cc/*.cpp`) compiled with `$PEANO_INSTALL_DIR/bin/clang++`.
-
-The unit tests call :func:`_call_prj` directly.
-
-Additionally, this file provides :func:`convert` which translates an Allo-generated
+Additionally, it provides :func:`convert` which translates an Allo-generated
 MLIR module (stored in `<project>/allo.mlir`) into an AIR dialect module
 (stored in `<project>/top.mlir`).
 
-NOTE: This conversion is intentionally minimal and currently targets the
-single-kernel vector addition / broadcast / passthrough style programs used in
-unit tests.
+The conversion implemented here is intentionally minimal and targets the unit
+tests under `tests/dataflow/air`.
+
+Key points
+----------
+- We construct the surrounding `air.herd` using the MLIR parser (not the python
+  op builders) to avoid fragile region terminator bindings.
+- Inside the herd, we build DMA + compute by cloning ops and (for outputs)
+  rewriting `memref.copy` into `air.dma_memcpy_nd`.
+
+Supported patterns (unit tests)
+------------------------------
+- passthrough: memref.copy(arg0 -> arg1)
+- vadd: linalg.add + memref.copy(tmp -> arg2)
+- broadcast: linalg.fill/broadcast/add + memref.copy(tmp -> arg1)
 """
 
 from __future__ import annotations
@@ -34,7 +38,16 @@ import filelock
 import numpy as np
 
 from air.backend.xrt import XRTBackend, XRTCompileArtifact
-from air.ir import Context, Location, Module
+from air.ir import (
+    Context,
+    IndexType,
+    InsertionPoint,
+    IntegerAttr,
+    IntegerType,
+    Location,
+    MemRefType,
+    Module,
+)
 
 # aircc driver (compiler)
 import air.compiler.aircc.main as aircc
@@ -83,11 +96,7 @@ def _iter_external_kernel_sources(project_dir: Path) -> list[Path]:
 
 
 def _detect_air_target_device() -> str:
-    """Detect whether we target npu1 or npu2.
-
-    Keep it lightweight: follow mlir-air's own XRTBackend heuristic by probing xrt-smi.
-    If anything fails, default to npu2.
-    """
+    """Detect whether we target npu1 or npu2."""
 
     target_device = "npu2"
     try:
@@ -112,26 +121,18 @@ def _detect_air_target_device() -> str:
                 target_device = "npu2"
             break
     except Exception:
-        # best-effort fallback
         pass
     return target_device
 
 
 def _detect_aie_target_triple() -> str:
-    """Return AIE target triple prefix (aie2 or aie2p)."""
-
-    # This is sufficient for our tests.
     return "aie2p" if os.environ.get("NPU2", "0") not in ("", "0") else "aie2"
 
 
 def _compile_external_kernel(
     src: Path, project_dir: Path, *, verbose: bool = False
 ) -> Path:
-    """Compile a single external kernel source to an object file.
-
-    Object naming is important: mlir-air expects `passThrough.cc.o` if the IR
-    says `link_with = "passThrough.cc.o"`.
-    """
+    """Compile a single external kernel source to an object file."""
 
     peano = os.environ.get("PEANO_INSTALL_DIR")
     if not peano:
@@ -191,10 +192,7 @@ def _compile_external_kernel(
 def _compile_external_kernels_if_needed(
     project_dir: Path, *, verbose: bool = False
 ) -> None:
-    srcs = _iter_external_kernel_sources(project_dir)
-    if not srcs:
-        return
-    for src in srcs:
+    for src in _iter_external_kernel_sources(project_dir):
         _compile_external_kernel(src, project_dir, verbose=verbose)
 
 
@@ -212,7 +210,6 @@ def _compile_air_project(
 
     build_dir.mkdir(parents=True, exist_ok=True)
 
-    # Absolute tmpdir to satisfy sandboxing (relative paths can be blocked by LD_PRELOAD).
     tmpdir = build_dir / "aircc_tmp"
     tmpdir.mkdir(parents=True, exist_ok=True)
 
@@ -221,7 +218,7 @@ def _compile_air_project(
     aircc_options: list[str] = [
         "--device",
         target_device,
-        "air.mlir",  # only used for naming; the module is passed in-memory
+        "air.mlir",  # naming only; module passed in-memory
         "--tmpdir",
         str(tmpdir),
         "-o",
@@ -232,19 +229,15 @@ def _compile_air_project(
         "xclbin",
     ]
 
-    # Use peano toolchain if available (common in RyzenAI setups)
     peano = os.environ.get("PEANO_INSTALL_DIR", "")
     if peano:
         aircc_options += ["--peano", peano, "--no-xchesscc", "--no-xbridge"]
     else:
-        # fall back to defaults
         aircc_options += ["--xchesscc", "--xbridge"]
 
     if verbose:
         aircc_options += ["-v"]
 
-    # Run aircc from the *project* directory so relative `link_with = "*.o"`
-    # resolves to the object files we compiled into project_dir.
     old_cwd = os.getcwd()
     try:
         os.chdir(str(project_dir))
@@ -256,14 +249,7 @@ def _compile_air_project(
 
 
 def _call_prj(project: str, output_idx: list[int], *args):
-    """Compile and execute an AIR project.
-
-    `args` are numpy arrays, including both inputs and pre-allocated outputs.
-    For every index listed in `output_idx`, this function overwrites `args[idx]`
-    in-place with the produced output.
-
-    All intermediate files are written under the project directory.
-    """
+    """Compile and execute an AIR project."""
 
     project_dir = _resolve_project_dir(project)
     project_dir.mkdir(parents=True, exist_ok=True)
@@ -281,7 +267,6 @@ def _call_prj(project: str, output_idx: list[int], *args):
     build_dir = project_dir / "build"
     build_dir.mkdir(parents=True, exist_ok=True)
 
-    # Locks live in the project directory (not /tmp).
     prj_lock_path = project_dir / ".allo_air_prj.lock"
     npu_lock_path = project_dir / ".allo_npu.lock"
 
@@ -289,15 +274,12 @@ def _call_prj(project: str, output_idx: list[int], *args):
     insts_path = build_dir / "insts.bin"
 
     with filelock.FileLock(str(prj_lock_path)):
-        # 1) Compile external kernels if any.
         _compile_external_kernels_if_needed(project_dir)
 
-        # 2) Parse MLIR.
         mlir_txt = top_mlir.read_text(encoding="utf-8")
         with Context() as ctx, Location.unknown():
             air_module = Module.parse(mlir_txt, ctx)
 
-        # 3) Compile AIR->xclbin/insts (all artifacts under project_dir).
         artifact = _compile_air_project(
             air_module,
             project_dir=project_dir,
@@ -306,14 +288,12 @@ def _call_prj(project: str, output_idx: list[int], *args):
             insts_path=insts_path,
         )
 
-        # 4) Execute using XRT.
         backend = XRTBackend(verbose=False)
         with filelock.FileLock(str(npu_lock_path)):
             invoker = backend.load(artifact)
             results = invoker(*np_args)
         backend.unload()
 
-    # 5) Copy results back.
     for idx in output_idx:
         out = np_args[idx]
         got = np.asarray(results[idx]).reshape(out.shape)
@@ -325,216 +305,277 @@ def _call_prj(project: str, output_idx: list[int], *args):
 # -----------------------------------------------------------------------------
 
 
-def _append_air_dialect_registry(ctx: Context) -> None:
-    """Append AIR's DialectRegistry to the given context."""
-
-    from air._mlir_libs import get_dialect_registry
-
-    ctx.append_dialect_registry(get_dialect_registry())
+from air.dialects import air as air_d
+from air.dialects import arith, func, linalg, memref
 
 
-def _memref_type_with_memory_space_2(t):
-    """Return a MemRefType identical to `t` but in memory space `2 : i32`."""
+def _contiguous_strides(shape: list[int]) -> list[int]:
+    stride = 1
+    strides = [0] * len(shape)
+    for i in range(len(shape) - 1, -1, -1):
+        strides[i] = stride
+        stride *= int(shape[i])
+    return strides
 
-    from air.ir import IntegerAttr, IntegerType, MemRefType
 
+def _as_air_memref_type_with_space2(t) -> MemRefType:
     mt = MemRefType(t)
-    if mt.memory_space is not None:
-        return mt
-    ms2 = IntegerAttr.get(IntegerType.get_signless(32), 2)
-    return MemRefType.get(mt.shape, mt.element_type, mt.layout, memory_space=ms2)
+    i32 = IntegerType.get_signless(32)
+    ms2 = IntegerAttr.get(i32, 2)
+    return MemRefType.get(mt.shape, mt.element_type, layout=mt.layout, memory_space=ms2)
 
 
-def _block_arg_number(v) -> int | None:
-    """Return arg number if `v` is a block argument, else None."""
-
-    try:
-        from air.ir import BlockArgument
-
-        if isinstance(v, BlockArgument):
-            return int(v.arg_number)
-    except Exception:
-        pass
+def _find_first_op(block, opname: str):
+    for op in block.operations:
+        if op.operation.name == opname:
+            return op
     return None
 
 
+def _infer_output_arg_positions(src_kernel) -> set[int]:
+    """Infer output argument indices from `memref.copy` ops."""
+
+    outs: set[int] = set()
+    entry = src_kernel.entry_block
+    args = list(src_kernel.arguments)
+    for op in entry.operations:
+        if op.operation.name != "memref.copy":
+            continue
+        dst = op.operation.operands[1]
+        for i, a in enumerate(args):
+            if dst == a:
+                outs.add(i)
+                break
+    return outs
+
+
+def _make_wrapper_mlir_for_top(arg_types: list[str]) -> str:
+    """Create a minimal AIR module with @top containing an empty 1x1 herd."""
+
+    args_sig = ", ".join([f"%arg{i}: {t}" for i, t in enumerate(arg_types)])
+    herd_args = ", ".join([f"%ha{i}=%arg{i}" for i in range(len(arg_types))])
+    herd_types = ", ".join(arg_types)
+
+    return (
+        "module {\n"
+        f"  func.func @top({args_sig}) {{\n"
+        "    %c1 = arith.constant 1 : index\n"
+        f"    air.herd @herd_0 tile (%tx, %ty) in (%sx=%c1, %sy=%c1) "
+        f"args({herd_args}) : {herd_types} {{\n"
+        "      air.herd_terminator\n"
+        "    }\n"
+        "    return\n"
+        "  }\n"
+        "}\n"
+    )
+
+
+def _filter_memref_block_args(block_args):
+    return [a for a in block_args if MemRefType.isinstance(a.type)]
+
+
 def convert(project: str):
-    """Convert `<project>/allo.mlir` (Allo-generated MLIR) into AIR dialect `top.mlir`.
-
-    This is a *dialect-to-dialect* transformation at the MLIR level.
-
-    For the current unit tests, the input module has:
-      - exactly one `df.kernel` function (`@core_0`) implementing the compute
-      - a `@top` function that is essentially a signature carrier
-
-    The output AIR module wraps the kernel in an `air.herd` and inserts DMA copies
-    between external memrefs (top args) and L1 memrefs (memory space 2).
-    """
+    """Translate `<project>/allo.mlir` to `<project>/top.mlir` (AIR dialect)."""
 
     project_dir = _resolve_project_dir(project)
-    allo_mlir_path = project_dir / "allo.mlir"
-    if not allo_mlir_path.exists():
-        raise FileNotFoundError(f"'{allo_mlir_path}' does not exist")
+    allo_mlir = project_dir / "allo.mlir"
+    if not allo_mlir.exists():
+        raise FileNotFoundError(f"'{allo_mlir}' does not exist")
 
-    content = allo_mlir_path.read_text(encoding="utf-8")
+    src_txt = allo_mlir.read_text(encoding="utf-8")
 
-    # Parse the input module using the AIR python bindings so we can clone ops and
-    # create AIR ops in the same context.
     with Context() as ctx, Location.unknown():
-        _append_air_dialect_registry(ctx)
-        # Make sure builtin dialects needed by the input are available.
-        ctx.load_all_available_dialects()
-        src_module = Module.parse(content, ctx)
+        src_mod = Module.parse(src_txt, ctx)
 
-        from air.dialects import func as func_d
-
-        core_func = None
-        top_func = None
-        for op in src_module.body.operations:
-            if not isinstance(op, func_d.FuncOp):
+        # Locate @top and the single kernel (df.kernel).
+        src_top = None
+        src_kernel = None
+        for op in src_mod.body.operations:
+            if op.operation.name != "func.func":
                 continue
-            if "df.kernel" in op.attributes:
-                core_func = op
-            else:
-                if op.name.value == "top":
-                    top_func = op
-                elif top_func is None:
-                    top_func = op
+            name = op.operation.attributes["sym_name"].value
+            if name == "top":
+                src_top = op
+            if src_kernel is None and "df.kernel" in op.operation.attributes:
+                src_kernel = op
 
-        if core_func is None:
-            raise ValueError(
-                "Cannot find a kernel function (expected a func.func with 'df.kernel' attribute)."
+        if src_top is None:
+            raise RuntimeError("convert: cannot find func.func @top in allo.mlir")
+        if src_kernel is None:
+            raise RuntimeError(
+                "convert: cannot find a kernel function (func.func with attribute 'df.kernel') in allo.mlir"
             )
-        if top_func is None:
-            raise ValueError("Cannot find a top-level function to use as entry.")
 
-        # Detect outputs by looking for `memref.copy` whose dst is a block argument.
-        output_arg_numbers: set[int] = set()
-        for op in core_func.entry_block.operations:
-            if op.operation.name != "memref.copy":
-                continue
-            dst = op.operands[1]
-            an = _block_arg_number(dst)
-            if an is not None:
-                output_arg_numbers.add(an)
+        out_arg_pos = _infer_output_arg_positions(src_kernel)
 
-        # Build destination module.
-        dst_module = Module.create()
+        # Parse a wrapper AIR module that contains a well-formed herd terminator.
+        top_arg_types = [str(a.type) for a in src_top.arguments]
+        dst_mod = Module.parse(_make_wrapper_mlir_for_top(top_arg_types), ctx)
 
-        from air.dialects import air as air_d
-        from air.dialects import arith, memref
-        from air.dialects import func as air_func
-        from air.ir import InsertionPoint, MemRefType
+        dst_top = None
+        for op in dst_mod.body.operations:
+            if (
+                op.operation.name == "func.func"
+                and op.operation.attributes["sym_name"].value == "top"
+            ):
+                dst_top = op
+                break
+        if dst_top is None:
+            raise RuntimeError("convert: internal error: wrapper @top not found")
 
-        with InsertionPoint(dst_module.body):
-            entry = air_func.FuncOp(top_func.name.value, top_func.type)
-            entry_block = entry.add_entry_block()
+        herd = _find_first_op(dst_top.entry_block, "air.herd")
+        if herd is None:
+            raise RuntimeError("convert: internal error: wrapper air.herd not found")
 
-            with InsertionPoint(entry_block):
-                c1 = arith.ConstantOp.create_index(1)
-                herd_op = air_d.Herd(
-                    name="herd_0",
-                    sizes=[c1, c1],
-                    operands=list(entry_block.arguments),
+        herd_block = herd.body.blocks[0]
+        herd_term = herd_block.operations[-1]
+
+        # Choose memref-typed block args as kernel interface.
+        herd_kernel_args = _filter_memref_block_args(herd_block.arguments)
+        if len(herd_kernel_args) != len(src_kernel.arguments):
+            raise RuntimeError(
+                "convert: cannot match kernel arguments to herd block arguments. "
+                f"kernel_args={len(src_kernel.arguments)} herd_memref_args={len(herd_kernel_args)}"
+            )
+
+        i32_t = IntegerType.get_signless(32)
+        ms2 = IntegerAttr.get(i32_t, 2)
+        idx_t = IndexType.get()
+
+        # Insert before herd terminator.
+        with InsertionPoint(herd_term):
+            c0 = arith.ConstantOp(idx_t, IntegerAttr.get(idx_t, 0))
+
+            value_map = {}
+            allocs_to_dealloc: list = []
+
+            # Precompute dst slice descriptors for each output arg.
+            out_slice_desc: dict[int, tuple[list, list, list]] = {}
+            for out_i in out_arg_pos:
+                mt = MemRefType(herd_kernel_args[out_i].type)
+                shape = [int(d) for d in mt.shape]
+                strides = _contiguous_strides(shape)
+                size_consts = [
+                    arith.ConstantOp(idx_t, IntegerAttr.get(idx_t, int(d))).result
+                    for d in shape
+                ]
+                stride_consts = [
+                    arith.ConstantOp(idx_t, IntegerAttr.get(idx_t, int(s))).result
+                    for s in strides
+                ]
+                offset_consts = [c0.result for _ in shape]
+                out_slice_desc[out_i] = (offset_consts, size_consts, stride_consts)
+
+            # Allocate interface buffers.
+            for arg_i, (src_arg, herd_arg) in enumerate(
+                zip(src_kernel.arguments, herd_kernel_args)
+            ):
+                src_mt = MemRefType(herd_arg.type)
+                if any(int(d) < 0 for d in src_mt.shape):
+                    raise RuntimeError(
+                        f"convert: dynamic shapes not supported in unit tests (got {src_mt})"
+                    )
+
+                if arg_i in out_arg_pos:
+                    # Outputs are written via rewritten DMA; map arg to the global memref.
+                    value_map[src_arg] = herd_arg
+                    continue
+
+                # Inputs: DMA global->local.
+                local_t = MemRefType.get(
+                    src_mt.shape,
+                    src_mt.element_type,
+                    layout=src_mt.layout,
+                    memory_space=ms2,
+                )
+                local_alloc = memref.AllocOp(local_t, [], [])
+                allocs_to_dealloc.append(local_alloc.result)
+
+                shape = [int(d) for d in src_mt.shape]
+                strides = _contiguous_strides(shape)
+                size_consts = [
+                    arith.ConstantOp(idx_t, IntegerAttr.get(idx_t, int(d))).result
+                    for d in shape
+                ]
+                stride_consts = [
+                    arith.ConstantOp(idx_t, IntegerAttr.get(idx_t, int(s))).result
+                    for s in strides
+                ]
+                offset_consts = [c0.result for _ in shape]
+
+                air_d.DmaMemcpyNdOp(
+                    None,
+                    [],
+                    local_alloc.result,
+                    [],
+                    [],
+                    [],
+                    herd_arg,
+                    offset_consts,
+                    size_consts,
+                    stride_consts,
                 )
 
-                herd_block = herd_op.body.blocks[0]
-                herd_operands = herd_block.arguments[4:]
+                value_map[src_arg] = local_alloc.result
 
-                # Map from old SSA values (kernel function args/results) to new SSA values.
-                value_map = {}
-                allocs_to_dealloc: list = []
+            # Clone/rewrite kernel operations into herd body.
+            src_args = list(src_kernel.arguments)
+            for op in src_kernel.entry_block.operations:
+                opname = op.operation.name
+                if opname == "func.return":
+                    continue
 
-                with InsertionPoint(herd_block):
-                    # Constants used inside the herd must be defined inside the herd region.
-                    c0 = arith.ConstantOp.create_index(0)
-                    c1s = arith.ConstantOp.create_index(1)
+                # Convert allocs to L2.
+                if opname == "memref.alloc":
+                    old_res = op.operation.results[0]
+                    new_t = _as_air_memref_type_with_space2(old_res.type)
+                    new_alloc = memref.AllocOp(new_t, [], [])
+                    value_map[old_res] = new_alloc.result
+                    allocs_to_dealloc.append(new_alloc.result)
+                    continue
 
-                    # 1) Allocate L1 buffers for every kernel argument.
-                    for i, barg in enumerate(core_func.entry_block.arguments):
-                        if not isinstance(barg.type, MemRefType):
-                            raise ValueError(
-                                f"Kernel argument {i} must be a memref for AIR conversion, got {barg.type}"
-                            )
-                        local_t = _memref_type_with_memory_space_2(barg.type)
-                        local = memref.AllocOp(local_t, [], []).result
-                        allocs_to_dealloc.append(local)
-                        value_map[barg] = local
-
-                        # Input DMA (skip outputs).
-                        if i not in output_arg_numbers:
-                            mt = MemRefType(barg.type)
-                            rank = mt.rank
-                            offsets = [c0] * rank
-                            sizes = [arith.ConstantOp.create_index(int(d)) for d in mt.shape]
-                            strides = [c1s] * rank
-
-                            air_d.DmaMemcpyNd(
-                                dst=local,
-                                src=herd_operands[i],
-                                dst_offsets=[],
-                                dst_sizes=[],
-                                dst_strides=[],
-                                src_offsets=offsets,
-                                src_sizes=sizes,
-                                src_strides=strides,
-                            )
-
-                    # 2) Clone/translate kernel body operations.
-                    for op in core_func.entry_block.operations:
-                        opname = op.operation.name
-                        if opname == "func.return":
-                            continue
-
-                        if opname == "memref.alloc":
-                            # Allocate in L1 (memory space 2).
-                            t = _memref_type_with_memory_space_2(op.result.type)
-                            new_alloc = memref.AllocOp(t, [], []).result
-                            value_map[op.result] = new_alloc
-                            allocs_to_dealloc.append(new_alloc)
-                            continue
-
-                        if opname == "memref.dealloc":
-                            # We'll emit deallocs at the end.
-                            continue
-
-                        # Default: clone operation and remap operands.
-                        new_op = op.operation.clone()
-                        for idx in range(len(new_op.operands)):
-                            v = new_op.operands[idx]
-                            if v in value_map:
-                                new_op.operands[idx] = value_map[v]
-                        for old_res, new_res in zip(op.results, new_op.results):
-                            value_map[old_res] = new_res
-
-                    # 3) DMA outputs back to external memory.
-                    for i, barg in enumerate(core_func.entry_block.arguments):
-                        if i not in output_arg_numbers:
-                            continue
-                        mt = MemRefType(barg.type)
-                        rank = mt.rank
-                        offsets = [c0] * rank
-                        sizes = [arith.ConstantOp.create_index(int(d)) for d in mt.shape]
-                        strides = [c1s] * rank
-
-                        air_d.DmaMemcpyNd(
-                            dst=herd_operands[i],
-                            src=value_map[barg],
-                            dst_offsets=offsets,
-                            dst_sizes=sizes,
-                            dst_strides=strides,
-                            src_offsets=[],
-                            src_sizes=[],
-                            src_strides=[],
+                # Rewrite output copies to DMA.
+                if opname == "memref.copy":
+                    src_v = op.operation.operands[0]
+                    dst_v = op.operation.operands[1]
+                    out_idx = None
+                    for i, a in enumerate(src_args):
+                        if dst_v == a:
+                            out_idx = i
+                            break
+                    if out_idx is not None and out_idx in out_arg_pos:
+                        # dst is an output argument: emit DMA to global output.
+                        dma_src = value_map.get(src_v, src_v)
+                        dst_global = herd_kernel_args[out_idx]
+                        offs, sizes, strides = out_slice_desc[out_idx]
+                        air_d.DmaMemcpyNdOp(
+                            None,
+                            [],
+                            dst_global,
+                            offs,
+                            sizes,
+                            strides,
+                            dma_src,
+                            [],
+                            [],
+                            [],
                         )
+                        continue
 
-                    # 4) Dealloc L1 buffers.
-                    for v in allocs_to_dealloc:
-                        memref.DeallocOp(v)
+                # Default: clone and remap operands.
+                new_operation = op.operation.clone()
+                for i in range(len(new_operation.operands)):
+                    v = new_operation.operands[i]
+                    if v in value_map:
+                        new_operation.operands[i] = value_map[v]
+                for old_res, new_res in zip(
+                    op.operation.results, new_operation.results
+                ):
+                    value_map[old_res] = new_res
 
-                    # 5) Terminator.
-                    air_d.HerdTerminatorOp()
+            for v in reversed(allocs_to_dealloc):
+                memref.DeallocOp(v)
 
-                air_func.ReturnOp([])
-
-        (project_dir / "top.mlir").write_text(str(dst_module), encoding="utf-8")
+        # Pretty-print in custom assembly form.
+        top_mlir_txt = dst_mod.operation.get_asm(print_generic_op_form=False)
+        (project_dir / "top.mlir").write_text(top_mlir_txt, encoding="utf-8")
