@@ -42,32 +42,42 @@ from air.ir import (
 import air.compiler.aircc.main as aircc
 
 
+def _resolve_project_dir(project: str) -> Path:
+    """Resolve a project directory from a potentially relative name."""
+
+    p = Path(project)
+    if p.is_absolute():
+        return p
+
+    # 1) relative to CWD
+    if p.exists():
+        return p.resolve()
+
+    # 2) relative to caller file directory
+    for frame_info in inspect.stack()[1:]:
+        f = frame_info.filename
+        if not f:
+            continue
+        if Path(f).resolve() == Path(__file__).resolve():
+            continue
+        cand = (Path(f).resolve().parent / p).resolve()
+        if cand.exists():
+            return cand
+
+    raise FileNotFoundError(
+        f"AIR project directory '{project}' not found. Tried CWD='{Path.cwd()}', caller-relative, and repo-relative paths."
+    )
+
+
 def _call_prj(project: str, output_idx: list[int], *args):
-    def _resolve_project_dir(project: str) -> Path:
-        """Resolve a project directory from a potentially relative name."""
+    """Compile and execute an AIR project.
 
-        p = Path(project)
-        if p.is_absolute():
-            return p
+    `args` are numpy arrays, including both inputs and pre-allocated outputs.
+    For every index listed in `output_idx`, this function overwrites `args[idx]`
+    in-place with the produced output.
 
-        # 1) relative to CWD
-        if p.exists():
-            return p.resolve()
-
-        # 2) relative to caller file directory
-        for frame_info in inspect.stack()[1:]:
-            f = frame_info.filename
-            if not f:
-                continue
-            if Path(f).resolve() == Path(__file__).resolve():
-                continue
-            cand = (Path(f).resolve().parent / p).resolve()
-            if cand.exists():
-                return cand
-
-        raise FileNotFoundError(
-            f"AIR project directory '{project}' not found. Tried CWD='{Path.cwd()}', caller-relative, and repo-relative paths."
-        )
+    All intermediate files are written under the project directory.
+    """
 
     def _compile_external_kernel(src: Path, project_dir: Path) -> Path:
         """Compile a single external kernel source to an object file."""
