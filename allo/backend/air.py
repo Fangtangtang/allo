@@ -142,7 +142,9 @@ def _compile_external_kernel(
 
     peano = os.environ.get("PEANO_INSTALL_DIR")
     if not peano:
-        raise RuntimeError("PEANO_INSTALL_DIR is not set (required for external kernels).")
+        raise RuntimeError(
+            "PEANO_INSTALL_DIR is not set (required for external kernels)."
+        )
 
     clangpp = Path(peano) / "bin" / "clang++"
     if not clangpp.exists():
@@ -458,7 +460,9 @@ def convert(project: str):
                         if not isinstance(g.type, MemRefType):
                             local_bufs[i] = g
                             continue
-                        if arg_is_input[i] or (arg_is_output[i] and (not is_passthrough)):
+                        if arg_is_input[i] or (
+                            arg_is_output[i] and (not is_passthrough)
+                        ):
                             local_t = _memref_with_memory_space(g.type, 2)
                             v = memref.AllocOp(local_t, [], []).result
                             local_bufs[i] = v
@@ -497,7 +501,9 @@ def convert(project: str):
 
                         one = arith.ConstantOp(elem_t, 1).result
 
-                        scalar_t = _memref_with_memory_space(MemRefType.get([], elem_t), 2)
+                        scalar_t = _memref_with_memory_space(
+                            MemRefType.get([], elem_t), 2
+                        )
                         scalar = memref.AllocOp(scalar_t, [], []).result
                         allocated.append(scalar)
                         linalg.fill(one, outs=[scalar])
@@ -514,7 +520,9 @@ def convert(project: str):
                         # Pattern: C[:] = A + B
                         out_idx = next(i for i, f in enumerate(arg_is_output) if f)
                         in0 = local_bufs[0]
-                        in1_idx = next(i for i in range(1, len(local_bufs)) if arg_is_input[i])
+                        in1_idx = next(
+                            i for i in range(1, len(local_bufs)) if arg_is_input[i]
+                        )
                         in1 = local_bufs[in1_idx]
                         linalg.add(in0, in1, outs=[local_bufs[out_idx]])
 
