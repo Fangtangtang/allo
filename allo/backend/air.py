@@ -14,27 +14,28 @@ The unit tests in `tests/dataflow/air/` expect:
 * The returned module object is callable and executes the generated AIR project
   using XRT via :func:`_call_prj`.
 
-Supported patterns (as used in tests)
-------------------------------------
+The translation implemented here targets the vector kernels used by the unit
+tests.
 
-1. Single tile: a single `df.kernel` function.
-2. Multi tile (1D herd): `@df.kernel(mapping=[P])` results in **P** `df.kernel`
-   functions (e.g. `core_0 ... core_{P-1}`) and a top function that calls each.
-
-For multi-tile vector tests, each kernel function is already *sharded* by the
-frontend: kernel arguments are memrefs with shape `M/P`. The AIR backend
-constructs an `air.herd` of shape `1 x P` and generates per-tile DMAs from/to the
-appropriate slice of the global memref.
+Key features
+------------
+* Single dataflow region with a **single kernel** conceptually.
+* Supports `@df.kernel(mapping=[N])` where the frontend materializes
+  `N` kernel functions (`core_0`, `core_1`, ...).
+* Sharded (layout annotated) 1D memrefs are sliced by tile id; replicated inputs
+  are broadcast to all tiles.
 
 Implementation notes
 --------------------
-
-We avoid string matching and parsing for MLIR operation construction:
+We avoid string matching for *operation construction*.
 
 * Kernel compute ops are cloned into the AIR herd body using `op.clone()`.
 * Buffer allocations are re-created (not cloned) to change memory space to 2.
 * `memref.copy` *into an output argument* is not cloned; instead we translate it
   into the final output DMA source.
+
+We additionally insert `air.wait_all` after async DMAs to make the translation
+robust w.r.t. runtime scheduling.
 
 """
 
@@ -44,7 +45,7 @@ import inspect
 import os
 import subprocess
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import filelock
 import numpy as np
@@ -56,10 +57,12 @@ from air.ir import Module as AirModuleIR
 
 # Register dialects by importing them.
 from air.dialects import air as air_d  # noqa: F401
+from air.dialects import affine as air_affine  # noqa: F401
 from air.dialects import arith as air_arith
 from air.dialects import func as air_func
 from air.dialects import linalg as air_linalg  # noqa: F401
 from air.dialects import memref as air_memref
+from air.dialects import scf as air_scf  # noqa: F401
 from air.ir import Block as AirBlock
 from air.ir import InsertionPoint
 from air.ir import IndexType
@@ -69,13 +72,10 @@ from air.ir import IntegerType
 # aircc driver (compiler)
 import air.compiler.aircc.main as aircc
 
-# Allo-side helpers (for analysis / sanitization)
-from .._mlir.ir import Context as AlloContext
-from .._mlir.ir import InsertionPoint as AlloInsertionPoint
-from .._mlir.ir import Location as AlloLocation
-from .._mlir.ir import Module as AlloModuleIR
-from .._mlir.dialects import allo as allo_d
+# Allo-side helpers (for analysis)
 from .._mlir.dialects import func as allo_func_d
+from .._mlir.ir import MemRefType as AlloMemRefType
+from .._mlir.ir import IntegerType as AlloIntegerType
 from ..passes import analyze_read_write_patterns
 
 
@@ -150,7 +150,7 @@ def _resolve_project_dir_for_write(project: str) -> Path:
 def _call_prj(project: str, output_idx: list[int], *args):
     """Compile and execute an AIR project."""
 
-    def _compile_external_kernel(src: Path, project_dir: Path) -> None:
+    def _compile_external_kernel(src: Path, project_dir: Path) -> Path:
         clangpp = Path(os.environ.get("PEANO_INSTALL_DIR")) / "bin" / "clang++"
         if not clangpp.exists():
             raise RuntimeError(f"Cannot find '{clangpp}'.")
@@ -280,31 +280,18 @@ def _call_prj(project: str, output_idx: list[int], *args):
 # -----------------------------------------------------------------------------
 
 
-def _iter_allo_funcs(allo_module: AlloModuleIR) -> Iterable[allo_func_d.FuncOp]:
+def _find_allo_kernel_io_from_module(allo_module: Any) -> tuple[list[int], list[int]]:
+    """Return (pure_input_indices, output_indices) for the *first* df.kernel func."""
+
+    top_kernel = None
     for op in allo_module.body.operations:
-        if isinstance(op, allo_func_d.FuncOp):
-            yield op
-
-
-def _find_allo_top_func(allo_module: AlloModuleIR, top_func_name: str) -> allo_func_d.FuncOp:
-    for f in _iter_allo_funcs(allo_module):
-        if f.attributes["sym_name"].value == top_func_name:
-            return f
-    raise RuntimeError(f"AIR backend: cannot find top func '{top_func_name}'")
-
-
-def _find_allo_kernels(allo_module: AlloModuleIR) -> list[allo_func_d.FuncOp]:
-    return [f for f in _iter_allo_funcs(allo_module) if "df.kernel" in f.attributes]
-
-
-def _find_kernel_io_from_module(
-    allo_module: AlloModuleIR,
-) -> tuple[list[int], list[int]]:
-    kernels = _find_allo_kernels(allo_module)
-    if not kernels:
+        if isinstance(op, allo_func_d.FuncOp) and "df.kernel" in op.attributes:
+            top_kernel = op
+            break
+    if top_kernel is None:
         raise RuntimeError("AIR backend: no function with 'df.kernel' attribute found")
-    # The read/write pattern is identical across kernel instances.
-    in_idx, out_idx = analyze_read_write_patterns(kernels[0])
+
+    in_idx, out_idx = analyze_read_write_patterns(top_kernel)
     out_set = set(out_idx)
     in_set = set(in_idx)
     pure_in = sorted(list(in_set - out_set))
@@ -312,102 +299,123 @@ def _find_kernel_io_from_module(
     return pure_in, pure_out
 
 
-def _sanitize_allo_module_for_air_parse(
-    allo_module: AlloModuleIR, top_func_name: str
-) -> str:
-    """Create a *valid* MLIR text module that AIR python bindings can parse.
+def _air_element_type_from_allo(allo_ele_ty):
+    # Use string form as a last resort (stable and small surface).
+    s = str(allo_ele_ty)
+    if s == "f32":
+        from air.ir import F32Type
 
-    The Allo frontend may emit (temporarily) ill-typed `func.call`s in the top
-    function when kernel instances are sharded (top args are global memrefs but
-    kernel args are sharded memrefs). The AIR backend does not need those calls
-    because it reconstructs the herd and DMA transfers itself.
+        return F32Type.get()
+    if s == "f16":
+        from air.ir import F16Type
 
-    We therefore build a new Allo module consisting of:
+        return F16Type.get()
+    if s == "bf16":
+        from air.ir import BF16Type
 
-    * all `df.kernel` functions cloned verbatim
-    * a fresh empty `top` function with the right signature
+        return BF16Type.get()
+    if s == "index":
+        return IndexType.get()
 
-    This keeps operation construction non-stringy while avoiding parsing/verifier
-    failures in the AIR bindings.
-    """
+    # Integers
+    if (
+        isinstance(allo_ele_ty, AlloIntegerType)
+        or s.startswith("i")
+        or s.startswith("ui")
+    ):
+        unsigned = s.startswith("ui")
+        width_str = s[2:] if unsigned else s[1:]
+        width = int(width_str)
+        # AIR uses signless integer types for arithmetic in our tests.
+        return IntegerType.get_signless(width)
 
-    topf = _find_allo_top_func(allo_module, top_func_name)
-    kernels = _find_allo_kernels(allo_module)
+    # Fallback: parse in AIR context.
+    from air.ir import Type
 
-    with allo_module.context, AlloLocation.unknown():
-        new_mod = AlloModuleIR.create()
-        with AlloInsertionPoint(new_mod.body):
-            # Clone kernel functions.
-            for k in kernels:
-                k.operation.clone(AlloInsertionPoint(new_mod.body))
+    return Type.parse(s)
 
-            # Create a dummy top with the right type.
-            new_top = allo_func_d.FuncOp(top_func_name, topf.type)
-            entry = new_top.add_entry_block()
-            with AlloInsertionPoint(entry):
-                allo_func_d.ReturnOp([])
 
-    return str(new_mod)
+def _air_attr_from_allo_attr(allo_attr):
+    """Convert an Allo-side attribute to an AIR-side attribute."""
+
+    if allo_attr is None:
+        return None
+    from air.ir import Attribute
+
+    return Attribute.parse(str(allo_attr))
+
+
+def _air_type_from_allo(allo_ty):
+    if isinstance(allo_ty, AlloMemRefType):
+        mt = AlloMemRefType(allo_ty)
+        return air_memref.MemRefType.get(
+            list(mt.shape),
+            _air_element_type_from_allo(mt.element_type),
+            _air_attr_from_allo_attr(mt.layout),
+            _air_attr_from_allo_attr(mt.memory_space),
+        )
+    return _air_element_type_from_allo(allo_ty)
 
 
 def convert(
     module: Any, top_func_name: str, project_dir: Path
 ) -> tuple[str, list[int]]:
+    """Translate an Allo MLIR module (python object) to an AIR MLIR string."""
+
     project_dir.mkdir(parents=True, exist_ok=True)
 
-    # `module` is expected to be an Allo MLIR module object when called from
-    # `Schedule.build`. For robustness, allow string input.
-    if isinstance(module, AlloModuleIR):
-        allo_mod = module
-    else:
-        with AlloContext() as ctx, AlloLocation.unknown():
-            allo_d.register_dialect(ctx)
-            allo_mod = AlloModuleIR.parse(str(module), ctx)
+    # Analyze kernel IO from the live Allo module object (do not re-parse text).
+    _, output_idx = _find_allo_kernel_io_from_module(module)
 
-    # IO analysis is done on the Allo module object (no re-parsing).
-    _, output_idx = _find_kernel_io_from_module(allo_mod)
+    # Find top func + all kernel funcs from the Allo module.
+    allo_top = None
+    allo_kernels: list[Any] = []
+    for op in module.body.operations:
+        if not isinstance(op, allo_func_d.FuncOp):
+            continue
+        if op.attributes["sym_name"].value == top_func_name:
+            allo_top = op
+        if "df.kernel" in op.attributes:
+            allo_kernels.append(op)
 
-    # Parse a sanitized module into the AIR python bindings.
-    sanitized_txt = _sanitize_allo_module_for_air_parse(allo_mod, top_func_name)
+    if allo_top is None:
+        raise RuntimeError(f"AIR backend: cannot find top func '{top_func_name}'")
+    if not allo_kernels:
+        raise RuntimeError("AIR backend: cannot find df.kernel funcs")
+
+    # Mapping=[N] is materialized as N kernel funcs.
+    num_tiles = len(allo_kernels)
+    base_kernel_allo = allo_kernels[0]
+
+    # Parse *only the kernel* into an AIR context so we can clone its ops.
+    # This avoids parsing invalid top-level func.call sites created by the frontend
+    # for partitioned tensors.
+    kernel_sym = base_kernel_allo.attributes["sym_name"].value
+    kernel_src_txt = "module {\n" + base_kernel_allo.operation.get_asm() + "\n}"
 
     with AirContext() as ctx, AirLocation.unknown():
-        src = AirModuleIR.parse(sanitized_txt, ctx)
+        src_kernel_mod = AirModuleIR.parse(kernel_src_txt, ctx)
 
-        def _find_func(sym_name: str):
-            for op in src.body.operations:
-                if op.operation.name != "func.func":
-                    continue
-                if "sym_name" not in op.attributes:
-                    continue
-                if op.attributes["sym_name"].value == sym_name:
-                    return op
-            return None
+        src_kernel = None
+        for op in src_kernel_mod.body.operations:
+            if op.operation.name != "func.func":
+                continue
+            if (
+                "sym_name" in op.attributes
+                and op.attributes["sym_name"].value == kernel_sym
+            ):
+                src_kernel = op
+                break
+        if src_kernel is None:
+            raise RuntimeError("AIR backend: failed to parse kernel function")
 
-        src_top = _find_func(top_func_name)
-        if src_top is None:
-            raise RuntimeError(f"AIR backend: cannot find top func '{top_func_name}'")
-
-        src_kernels = [
-            op
-            for op in src.body.operations
-            if op.operation.name == "func.func" and "df.kernel" in op.attributes
-        ]
-        if not src_kernels:
-            raise RuntimeError("AIR backend: cannot find df.kernel func")
-
-        # For @df.kernel(mapping=[P]) the frontend produces P kernel functions.
-        # We use a single representative kernel body and execute it on a 1xP herd.
-        src_kernel = src_kernels[0]
-        herd_y = len(src_kernels)
-        herd_x = 1
-
+        # Build destination AIR module from scratch.
         dst = AirModuleIR.create()
 
         idx_ty = IndexType.get()
         const_cache: dict[int, Any] = {}
 
         def cidx(v: int):
-            # cache within a context; insertion point is where this is called.
             if v not in const_cache:
                 const_cache[v] = air_arith.ConstantOp(idx_ty, v)
             return const_cache[v].result
@@ -417,28 +425,32 @@ def convert(
 
         def memref_with_memspace2(memref_ty):
             return air_memref.MemRefType.get(
-                memref_ty.shape,
+                list(memref_ty.shape),
                 memref_ty.element_type,
                 memref_ty.layout,
                 ms2,
             )
 
-        def is_memref_type(ty) -> bool:
-            return ty.__class__.__name__ == "MemRefType"
+        async_tok_ty = air_d.AsyncTokenType.get()
 
-        multi_tile = herd_y > 1
+        # Create top function signature from the Allo top func types.
+        from air.ir import FunctionType
+
+        top_in_types = [_air_type_from_allo(a.type) for a in allo_top.arguments]
+        top_type = FunctionType.get(top_in_types, [])
 
         with InsertionPoint(dst.body):
-            topf = air_func.FuncOp(top_func_name, src_top.type)
+            topf = air_func.FuncOp(top_func_name, top_type)
             entry = topf.add_entry_block()
 
+        # Herd sizes (1 x num_tiles)
         with InsertionPoint(entry):
-            hx = air_arith.ConstantOp(idx_ty, herd_x)
-            hy = air_arith.ConstantOp(idx_ty, herd_y)
+            sx = air_arith.ConstantOp(idx_ty, 1)
+            sy = air_arith.ConstantOp(idx_ty, int(num_tiles))
             herd = air_d.HerdOp(
                 async_token=None,
                 async_dependencies=[],
-                sizes=[hx.result, hy.result],
+                sizes=[sx.result, sy.result],
                 herd_operands=list(entry.arguments),
                 sym_name="herd_0",
             )
@@ -450,88 +462,104 @@ def convert(
             hb = AirBlock.create_at_start(herd.body, herd_arg_types)
             air_func.ReturnOp([])
 
+        # Translate kernel into herd body.
         with InsertionPoint(hb):
             tile_y = hb.arguments[1]
             herd_args = list(hb.arguments[4:])
 
-            # Map values from src_kernel to new values in herd body.
             vmap: dict[Any, Any] = {}
-
-            # Local (memspace=2) buffers for kernel arguments.
             local_kernel_args: list[Any] = []
-            allocs_to_dealloc: list[Any] = []
 
-            # Allocate locals with the *kernel* argument shapes (sharded shape).
-            for i, global_arg in enumerate(herd_args):
-                if i >= len(src_kernel.arguments):
-                    break
-                karg = src_kernel.arguments[i]
-                if not is_memref_type(karg.type):
-                    local_kernel_args.append(global_arg)
-                    vmap[karg] = global_arg
+            # Determine sharding for each memref arg by comparing top vs kernel shapes.
+            sharded: dict[int, bool] = {}
+            local_shapes: dict[int, tuple[int, ...]] = {}
+
+            for i, ha in enumerate(herd_args):
+                if ha.type.__class__.__name__ != "MemRefType":
+                    local_kernel_args.append(ha)
+                    vmap[src_kernel.arguments[i]] = ha
                     continue
 
-                loc_ty = memref_with_memspace2(karg.type)
+                # Kernel expected memref type for arg i.
+                k_arg_ty = src_kernel.arguments[i].type
+                k_shape = tuple(int(d) for d in k_arg_ty.shape)
+                local_shapes[i] = k_shape
+
+                g_shape = tuple(int(d) for d in ha.type.shape)
+                is_shard = False
+                if (
+                    len(g_shape) == len(k_shape) == 1
+                    and g_shape[0] == k_shape[0] * num_tiles
+                ):
+                    is_shard = True
+                sharded[i] = is_shard
+
+                loc_ty = memref_with_memspace2(k_arg_ty)
                 alloc = air_memref.AllocOp(loc_ty, [], [])
                 local_kernel_args.append(alloc.result)
-                vmap[karg] = alloc.result
-                allocs_to_dealloc.append(alloc.result)
+                vmap[src_kernel.arguments[i]] = alloc.result
 
-            # Output bookkeeping.
+            # Determine output args (indices in kernel signature).
             pure_out = set(output_idx)
             final_out_src: dict[int, Any] = {
                 i: local_kernel_args[i] for i in pure_out if i < len(local_kernel_args)
             }
 
-            # ------------------------
-            # Input DMAs (global -> local)
-            # ------------------------
-            for i, global_arg in enumerate(herd_args):
+            # Pre-compute 1D shard offset (tile_y * local_len) for each arg that is sharded.
+            shard_offset: dict[int, Any] = {}
+            for i, is_shard in sharded.items():
+                if not is_shard:
+                    continue
+                local_len = local_shapes[i][0]
+                mul = air_arith.MulIOp(tile_y, cidx(local_len))
+                shard_offset[i] = mul.result
+
+            # Input DMAs (skip pure outputs) - async + wait
+            in_tokens: list[Any] = []
+            for i, ha in enumerate(herd_args):
                 if i in pure_out:
                     continue
-                if i >= len(src_kernel.arguments):
-                    continue
-                karg = src_kernel.arguments[i]
-                if not is_memref_type(karg.type):
-                    continue
-                if not is_memref_type(global_arg.type):
+                if ha.type.__class__.__name__ != "MemRefType":
                     continue
 
-                shape = karg.type.shape
+                shape = tuple(int(d) for d in local_shapes.get(i, ha.type.shape))
                 rank = len(shape)
+                offsets = [cidx(0) for _ in range(rank)]
+                if sharded.get(i, False) and rank >= 1:
+                    offsets[0] = shard_offset[i]
 
-                # Compute base offset for the first dimension: tile_y * local_dim.
-                if multi_tile and rank >= 1:
-                    base_off = air_arith.MulIOp(tile_y, cidx(int(shape[0]))).result
-                    src_offsets = [base_off] + [cidx(0) for _ in range(rank - 1)]
-                else:
-                    src_offsets = [cidx(0) for _ in range(rank)]
-
-                air_d.DmaMemcpyNdOp(
-                    async_token=None,
+                dma = air_d.DmaMemcpyNdOp(
+                    async_token=async_tok_ty,
                     async_dependencies=[],
                     dst=local_kernel_args[i],
                     dst_offsets=[],
                     dst_sizes=[],
                     dst_strides=[],
-                    src=global_arg,
-                    src_offsets=src_offsets,
+                    src=ha,
+                    src_offsets=offsets,
                     src_sizes=[cidx(int(d)) for d in shape],
                     src_strides=[cidx(1) for _ in range(rank)],
                 )
+                in_tokens.append(dma.async_token)
 
-            # ------------------------
-            # Clone kernel compute into herd body
-            # ------------------------
+            if in_tokens:
+                air_d.WaitAllOp(async_token=None, async_dependencies=in_tokens)
+
+            allocs_to_dealloc: list[Any] = [
+                a
+                for a in local_kernel_args
+                if a.type.__class__.__name__ == "MemRefType"
+            ]
+
             kernel_arg_to_idx = {
                 src_kernel.arguments[i]: i for i in range(len(src_kernel.arguments))
             }
 
+            # Clone compute ops from kernel body.
             for op in src_kernel.regions[0].blocks[0].operations:
                 if op.operation.name == "func.return":
                     break
 
-                # Recreate memref.alloc with memspace=2.
                 if op.operation.name == "memref.alloc":
                     old_res = op.results[0]
                     new_ty = memref_with_memspace2(old_res.type)
@@ -542,7 +570,7 @@ def convert(
                     allocs_to_dealloc.append(new_alloc.result)
                     continue
 
-                # Special-case: memref.copy into an output argument.
+                # Translate final store-to-output-arg into output DMA source selection.
                 if op.operation.name == "memref.copy":
                     src_val = vmap.get(op.operands[0], op.operands[0])
                     dst_val = op.operands[1]
@@ -559,32 +587,23 @@ def convert(
                 for old_r, new_r in zip(op.results, cloned.results):
                     vmap[old_r] = new_r
 
-            # ------------------------
-            # Output DMAs (local -> global)
-            # ------------------------
+            # Output DMAs - async + wait
+            out_tokens: list[Any] = []
             for i in sorted(pure_out):
-                if i >= len(src_kernel.arguments):
-                    continue
-                karg = src_kernel.arguments[i]
-                global_arg = herd_args[i]
-                if not is_memref_type(karg.type):
-                    continue
-                if not is_memref_type(global_arg.type):
+                ha = herd_args[i]
+                if ha.type.__class__.__name__ != "MemRefType":
                     continue
 
-                shape = karg.type.shape
+                shape = tuple(int(d) for d in local_shapes.get(i, ha.type.shape))
                 rank = len(shape)
+                dst_offsets = [cidx(0) for _ in range(rank)]
+                if sharded.get(i, False) and rank >= 1:
+                    dst_offsets[0] = shard_offset[i]
 
-                if multi_tile and rank >= 1:
-                    base_off = air_arith.MulIOp(tile_y, cidx(int(shape[0]))).result
-                    dst_offsets = [base_off] + [cidx(0) for _ in range(rank - 1)]
-                else:
-                    dst_offsets = [cidx(0) for _ in range(rank)]
-
-                air_d.DmaMemcpyNdOp(
-                    async_token=None,
+                dma = air_d.DmaMemcpyNdOp(
+                    async_token=async_tok_ty,
                     async_dependencies=[],
-                    dst=global_arg,
+                    dst=ha,
                     dst_offsets=dst_offsets,
                     dst_sizes=[cidx(int(d)) for d in shape],
                     dst_strides=[cidx(1) for _ in range(rank)],
@@ -593,6 +612,10 @@ def convert(
                     src_sizes=[],
                     src_strides=[],
                 )
+                out_tokens.append(dma.async_token)
+
+            if out_tokens:
+                air_d.WaitAllOp(async_token=None, async_dependencies=out_tokens)
 
             for buf in reversed(allocs_to_dealloc):
                 air_memref.DeallocOp(buf)
