@@ -13,6 +13,7 @@ import allo.dataflow as df
 import allo.backend.hls as hls
 from examples.feather.feather import (
     get_feather_top,
+    get_scheduled_feather,
     print_test_config,
     result_check,
     compare_sim_hls_result,
@@ -198,15 +199,11 @@ def test_FEATHER_GEMM():
     hls_test_passed, vs_passed = False, False
     if hls.is_available("vitis_hls"):
         print("Running Vitis Synthesis and On-Board Execution...")
-        top = get_feather_top(AW, AH, Ty)
-        s = df.customize(top)
-        nest_loop = s.get_loops("NEST_0")["nest"]["i"]
-        s.unroll(nest_loop)
-        s.partition("top:output_buffer", dim=1, factor=AW)
+        s = get_scheduled_feather(AW, AH, Ty)
         csyn_mod = s.build(
             target="vitis_hls",
             mode="hw_emu",
-            project=f"feather_gemm_{M}_{N}_{K}_{AW}_{AH}.prj",
+            project=f"feather_gemm_{M}_{N}_{K}_{AW}_{AH}_new.prj",
         )
         oActs_hls = np.zeros((N, 2 * M), dtype=np.int8)
         call_feather_kernel(iActs_no_layout, weights, oActs_hls, csyn_mod, inst)

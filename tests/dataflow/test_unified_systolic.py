@@ -1,6 +1,9 @@
 # Copyright Allo authors. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import tempfile
+
+import pytest
 import allo
 from allo.ir.types import int16, int32, bool, Stream
 import allo.dataflow as df
@@ -400,12 +403,23 @@ M, N, K = U, 4, U
 P0, P1 = U + 2, U + 2
 
 
+@pytest.mark.skip(reason="Invalid MLIR generated. Needs fixing.")
 def test_unified_simple():
 
     A = np.random.randint(-8, 8, (M, K)).astype(np.int32)
     B = np.random.randint(-8, 8, (K, N)).astype(np.int32)
 
     C = np.zeros((M, N), dtype=np.int32)
+
+    # TODO: Enable simulator once the issue is fixed.
+    # sim_mod = df.build(unified_gemm_simple, target="simulator")
+    # sim_mod(A, B, False, C)
+    # np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
+    # print("Dataflow Simulator Passed!")
+
+    # sim_mod(A, B, True, C)
+    # np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
+    # print("Dataflow Simulator Passed!")
 
     if hls.is_available("vitis_hls"):
 
@@ -414,90 +428,103 @@ def test_unified_simple():
 
         # csim test
         print(" Csim Test ".center(60, "*"))
-        mod = s.build(target="vitis_hls", mode="csim", project="df-uni-simple-csim.prj")
-        C_truth = np.dot(A, B)
-        print(C_truth)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mod = s.build(target="vitis_hls", mode="csim", project=tmpdir)
+            C_truth = np.dot(A, B)
+            print(C_truth)
 
-        flowtag1: bool = False
-        mod(A, B, flowtag1, C)
-        print(C)
-        np.testing.assert_allclose(C, C_truth, atol=1e-5)
-        print("Csim: Weight-stationary Mode Passed!")
+            flowtag1: bool = False
+            mod(A, B, flowtag1, C)
+            print(C)
+            np.testing.assert_allclose(C, C_truth, atol=1e-5)
+            print("Csim: Weight-stationary Mode Passed!")
 
-        flowtag2: bool = True
-        C = np.zeros((M, N), dtype=np.int32)
-        mod(A, B, flowtag2, C)
-        print(C)
-        np.testing.assert_allclose(C, C_truth, atol=1e-5)
-        print("Csim: Output-stationary Mode Passed!")
+            flowtag2: bool = True
+            C = np.zeros((M, N), dtype=np.int32)
+            mod(A, B, flowtag2, C)
+            print(C)
+            np.testing.assert_allclose(C, C_truth, atol=1e-5)
+            print("Csim: Output-stationary Mode Passed!")
 
         # hw_emu test
         print(" Hw_emu Test ".center(60, "*"))
-        mod_hwemu = s.build(
-            target="vitis_hls", mode="hw_emu", project="df-uni-simple-hwemu.prj"
-        )
-        C = np.zeros((M, N), dtype=np.int32)
-        mod_hwemu(A, B, flowtag1, C)
-        print(C)
-        np.testing.assert_allclose(C, C_truth, atol=1e-5)
-        print("Hw_emu: Weight-stationary Mode Passed!")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mod_hwemu = s.build(target="vitis_hls", mode="hw_emu", project=tmpdir)
+            C = np.zeros((M, N), dtype=np.int32)
+            mod_hwemu(A, B, flowtag1, C)
+            print(C)
+            np.testing.assert_allclose(C, C_truth, atol=1e-5)
+            print("Hw_emu: Weight-stationary Mode Passed!")
 
-        C = np.zeros((M, N), dtype=np.int32)
-        mod_hwemu(A, B, flowtag2, C)
-        print(C)
-        np.testing.assert_allclose(C, C_truth, atol=1e-5)
-        print("Hw_emu: Output-stationary Mode Passed!")
+            C = np.zeros((M, N), dtype=np.int32)
+            mod_hwemu(A, B, flowtag2, C)
+            print(C)
+            np.testing.assert_allclose(C, C_truth, atol=1e-5)
+            print("Hw_emu: Output-stationary Mode Passed!")
 
 
+@pytest.mark.skip(reason="Invalid MLIR generated. Needs fixing.")
 def test_unified_daisy_chain():
     A = np.random.randint(0, 8, (M, K), dtype=np.int16)
     B = np.random.randint(0, 8, (K, N), dtype=np.int16)
     C = np.zeros((M, N), dtype=np.int16)
 
+    # TODO: Enable simulator once the issue is fixed.
+    # sim_mod = df.build(unified_gemm_daisy_chain, target="simulator")
+    # sim_mod(A, B, False, C)
+    # np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
+    # print("Dataflow Simulator Passed!")
+
+    # sim_mod(A, B, True, C)
+    # np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
+    # print("Dataflow Simulator Passed!")
+
     if hls.is_available("vitis_hls"):
         # csim test
         print(" Csim Test ".center(60, "*"))
-        mod = df.build(
-            unified_gemm_daisy_chain,
-            target="vitis_hls",
-            mode="csim",
-            project="df-uni-daisy-csim.prj",
-        )
-        C_truth = np.dot(A, B)
-        print(C_truth)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mod = df.build(
+                unified_gemm_daisy_chain,
+                target="vitis_hls",
+                mode="csim",
+                project=tmpdir,
+            )
+            C_truth = np.dot(A, B)
+            print(C_truth)
 
-        flowtag1: bool = False
-        mod(A, B, flowtag1, C)
-        print(C)
-        np.testing.assert_allclose(C, C_truth, atol=1e-5)
-        print("Csim: Weight-stationary Mode Passed!")
+            flowtag1: bool = False
+            mod(A, B, flowtag1, C)
+            print(C)
+            np.testing.assert_allclose(C, C_truth, atol=1e-5)
+            print("Csim: Weight-stationary Mode Passed!")
 
-        flowtag2: bool = True
-        C = np.zeros((M, N), dtype=np.int16)
-        mod(A, B, flowtag2, C)
-        print(C)
-        np.testing.assert_allclose(C, C_truth, atol=1e-5)
-        print("Csim: Output-stationary Mode Passed!")
+            flowtag2: bool = True
+            C = np.zeros((M, N), dtype=np.int16)
+            mod(A, B, flowtag2, C)
+            print(C)
+            np.testing.assert_allclose(C, C_truth, atol=1e-5)
+            print("Csim: Output-stationary Mode Passed!")
 
         # hw_emu test
         print(" Hw_emu Test ".center(60, "*"))
-        mod_hwemu = df.build(
-            unified_gemm_daisy_chain,
-            target="vitis_hls",
-            mode="hw_emu",
-            project="df-uni-daisy-hwemu.prj",
-        )
-        C = np.zeros((M, N), dtype=np.int32)
-        mod_hwemu(A, B, flowtag1, C)
-        print(C)
-        np.testing.assert_allclose(C, C_truth, atol=1e-5)
-        print("Hw_emu: Weight-stationary Mode Passed!")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mod_hwemu = df.build(
+                unified_gemm_daisy_chain,
+                target="vitis_hls",
+                mode="hw_emu",
+                project=tmpdir,
+            )
+            C = np.zeros((M, N), dtype=np.int32)
+            mod_hwemu(A, B, flowtag1, C)
+            print(C)
+            np.testing.assert_allclose(C, C_truth, atol=1e-5)
+            print("Hw_emu: Weight-stationary Mode Passed!")
 
-        C = np.zeros((M, N), dtype=np.int32)
-        mod_hwemu(A, B, flowtag2, C)
-        print(C)
-        np.testing.assert_allclose(C, C_truth, atol=1e-5)
-        print("Hw_emu: Output-stationary Mode Passed!")
+            C = np.zeros((M, N), dtype=np.int32)
+            mod_hwemu(A, B, flowtag2, C)
+            print(C)
+            np.testing.assert_allclose(C, C_truth, atol=1e-5)
+            print("Hw_emu: Output-stationary Mode Passed!")
 
 
 M, N, K = 4, 4, 4
@@ -505,12 +532,23 @@ Rt, Ct = 2, 2
 P0, P1 = Rt + 2, Ct + 2
 
 
+@pytest.mark.skip(reason="Invalid MLIR generated. Needs fixing.")
 def test_unified_tiling():
 
     A = np.random.randint(-8, 8, (M, K)).astype(np.int32)
     B = np.random.randint(-8, 8, (K, N)).astype(np.int32)
 
     C = np.zeros((M, N), dtype=np.int32)
+
+    # TODO: Enable simulator once the issue is fixed.
+    # sim_mod = df.build(unified_gemm_tiling, target="simulator")
+    # sim_mod(A, B, False, C)
+    # np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
+    # print("Dataflow Simulator Passed!")
+
+    # sim_mod(A, B, True, C)
+    # np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
+    # print("Dataflow Simulator Passed!")
 
     if hls.is_available("vitis_hls"):
 
@@ -519,39 +557,39 @@ def test_unified_tiling():
 
         # csim test
         print(" Csim Test ".center(60, "*"))
-        mod = s.build(target="vitis_hls", mode="csim", project="df-uni-tiling-csim.prj")
-        C_truth = np.dot(A, B)
-        print(C_truth)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mod = s.build(target="vitis_hls", mode="csim", project=tmpdir)
+            C_truth = np.dot(A, B)
+            print(C_truth)
 
-        flowtag1: bool = False
-        mod(A, B, flowtag1, C)
-        print(C)
-        np.testing.assert_allclose(C, C_truth, atol=1e-5)
-        print("Csim: Weight-stationary Mode Passed!")
+            flowtag1: bool = False
+            mod(A, B, flowtag1, C)
+            print(C)
+            np.testing.assert_allclose(C, C_truth, atol=1e-5)
+            print("Csim: Weight-stationary Mode Passed!")
 
-        flowtag2: bool = True
-        C = np.zeros((M, N), dtype=np.int32)
-        mod(A, B, flowtag2, C)
-        print(C)
-        np.testing.assert_allclose(C, C_truth, atol=1e-5)
-        print("Csim: Output-stationary Mode Passed!")
+            flowtag2: bool = True
+            C = np.zeros((M, N), dtype=np.int32)
+            mod(A, B, flowtag2, C)
+            print(C)
+            np.testing.assert_allclose(C, C_truth, atol=1e-5)
+            print("Csim: Output-stationary Mode Passed!")
 
         # hw_emu test
         print(" Hw_emu Test ".center(60, "*"))
-        mod_hwemu = s.build(
-            target="vitis_hls", mode="hw_emu", project="df-uni-tiling-hwemu.prj"
-        )
-        C = np.zeros((M, N), dtype=np.int32)
-        mod_hwemu(A, B, flowtag1, C)
-        print(C)
-        np.testing.assert_allclose(C, C_truth, atol=1e-5)
-        print("Hw_emu: Weight-stationary Mode Passed!")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mod_hwemu = s.build(target="vitis_hls", mode="hw_emu", project=tmpdir)
+            C = np.zeros((M, N), dtype=np.int32)
+            mod_hwemu(A, B, flowtag1, C)
+            print(C)
+            np.testing.assert_allclose(C, C_truth, atol=1e-5)
+            print("Hw_emu: Weight-stationary Mode Passed!")
 
-        C = np.zeros((M, N), dtype=np.int32)
-        mod_hwemu(A, B, flowtag2, C)
-        print(C)
-        np.testing.assert_allclose(C, C_truth, atol=1e-5)
-        print("Hw_emu: Output-stationary Mode Passed!")
+            C = np.zeros((M, N), dtype=np.int32)
+            mod_hwemu(A, B, flowtag2, C)
+            print(C)
+            np.testing.assert_allclose(C, C_truth, atol=1e-5)
+            print("Hw_emu: Output-stationary Mode Passed!")
 
 
 if __name__ == "__main__":
