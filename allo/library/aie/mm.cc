@@ -44,7 +44,6 @@ using bfloat16 = __bf16;
 
 template <typename T_in, typename T_out, int rowA, int colA, int colB>
 static inline void matmul_scalar(T_in *a, T_in *b, T_out *c) {
-  event0();
   for (int row = 0; row < rowA; row++) {
     for (int col = 0; col < colB; col++) {
       T_out running_sum = 0;
@@ -54,7 +53,6 @@ static inline void matmul_scalar(T_in *a, T_in *b, T_out *c) {
       c[row * colB + col] += running_sum;
     }
   }
-  event1();
 }
 
 /* Blocked MatMul kernel (vectorized) utilizing the aie::mmul class.
@@ -90,7 +88,6 @@ static inline void matmul_vectorized_2x2_mmul(const T_in *__restrict pA,
 
   using MMUL = aie::mmul<r, s, t, T_in, T_in, accauto>;
 
-  event0();
 
   for (unsigned z = 0; z < rowA; z += 2)
     chess_prepare_for_pipelining chess_loop_range(4, ) {
@@ -174,7 +171,6 @@ static inline void matmul_vectorized_2x2_mmul(const T_in *__restrict pA,
         }
     }
 
-  event1();
 }
 
 /* Similar to the kernel above, but we expand matrix A (in 'm' dimension, or
@@ -190,7 +186,6 @@ static inline void matmul_vectorized_4x2_mmul(const T_in *__restrict pA,
 
   using MMUL = aie::mmul<r, s, t, T_in, T_in, accauto>;
 
-  event0();
 
   for (unsigned z = 0; z < rowA; z += 4)
     chess_prepare_for_pipelining chess_loop_range(4, ) {
@@ -307,7 +302,6 @@ static inline void matmul_vectorized_4x2_mmul(const T_in *__restrict pA,
         }
     }
 
-  event1();
 }
 
 /* Similar to the kernel aboves, we expand matrix A (in 'm' dimension, or rowA)
@@ -323,7 +317,6 @@ static inline void matmul_vectorized_4x4(const T_in *__restrict pA,
 
   using MMUL = aie::mmul<r, s, t, T_in, T_in, accauto>;
 
-  event0();
 
   for (unsigned z = 0; z < rowA; z += 4)
     chess_prepare_for_pipelining chess_loop_range(2, ) {
@@ -522,7 +515,6 @@ static inline void matmul_vectorized_4x4(const T_in *__restrict pA,
         }
     }
 
-  event1();
 }
 
 // int16 MatMul kernel definion with int16 outputs.
@@ -659,7 +651,6 @@ static inline void matmul_vectorized_4x16x8_i4_i8_packedB(
   static_assert(k % s == 0);
   static_assert(n % (2 * t) == 0);
 
-  event0();
 
   for (unsigned z = 0; z < (m / r); z += 4)
     chess_prepare_for_pipelining chess_loop_range(4, ) {
@@ -776,7 +767,6 @@ static inline void matmul_vectorized_4x16x8_i4_i8_packedB(
         pC4 += MMUL::size_C;
       }
     }
-  event1();
 }
 
 // i4xi4 -> i8, both A and B are packed
@@ -791,7 +781,6 @@ static inline void matmul_vectorized_4x16x8_i4_i8(const int8 *__restrict pA,
   static_assert(k % s == 0);
   static_assert(n % (2 * t) == 0);
 
-  event0();
 
   for (unsigned z = 0; z < (m / r); z += 4)
     chess_prepare_for_pipelining chess_loop_range(4, ) {
@@ -917,7 +906,6 @@ static inline void matmul_vectorized_4x16x8_i4_i8(const int8 *__restrict pA,
       }
     }
 
-  event1();
 }
 
 // int8 MatMul kernel definion with int16 outputs.
