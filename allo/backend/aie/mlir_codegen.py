@@ -2048,8 +2048,11 @@ class CodeGenerator:
 
                 runtime_seq = aiex_d.RuntimeSequenceOp()
                 runtime_args = []
-                for runtime_arg in self.module_runtime_args:
+                runtime_arg_idx_map = {}
+                idx_offset = 0
+                for idx, runtime_arg in enumerate(self.module_runtime_args):
                     if len(runtime_arg.global_tensors) == 0:
+                        idx_offset += 1
                         continue
                     runtime_args.append(
                         aie_ir.MemRefType.get(
@@ -2057,6 +2060,7 @@ class CodeGenerator:
                             get_aie_mlir_dtype_from_str(str(runtime_arg.dtype)),
                         )
                     )
+                    runtime_arg_idx_map[idx] = idx - idx_offset
 
                 # TODO: need more robust and smart DMA scheduling
                 dma_task_groups: dict[str, CodeGenerator.DMATaskWithSameToken] = {}
@@ -2448,9 +2452,11 @@ class CodeGenerator:
                                     metadata=self.fifo_map[fifo_name],
                                     bd_id=fifo_info.bd_id,
                                     mem=runtime_seq_entry_block.arguments[
-                                        self.arg_slots_in_runtime_args[
-                                            fifo_info.dtensor_global_id
-                                        ][0]
+                                        runtime_arg_idx_map[
+                                            self.arg_slots_in_runtime_args[
+                                                fifo_info.dtensor_global_id
+                                            ][0]
+                                        ]
                                     ],
                                     offsets=offsets,
                                     sizes=size,
