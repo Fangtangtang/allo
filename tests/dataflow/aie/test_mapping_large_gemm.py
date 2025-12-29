@@ -117,7 +117,7 @@ def _test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
         profile=True,
         warmup=200,
         num_iters=1000,
-        device_type="npu1_4col",
+        device_type="npu1",
     )
     if TyI is bfloat16:
         A = (np.random.random((M, K)) * 0.1).astype(np_bfloat16)
