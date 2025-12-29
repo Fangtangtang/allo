@@ -11,7 +11,7 @@
 # -DTARGET_NAME: Target name to be built
 
 # cmake needs this line
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.30)
 
 set(CMAKE_CXX_STANDARD 23) 
 set(CMAKE_CXX_STANDARD_REQUIRED YES)
@@ -21,11 +21,9 @@ find_program(WSL NAMES powershell.exe)
 if (NOT WSL)
     set(CMAKE_C_COMPILER gcc-13)
     set(CMAKE_CXX_COMPILER g++-13)
-    set(BOOST_ROOT /usr/include/boost CACHE STRING "Path to Boost install")
     set(XRT_INC_DIR /opt/xilinx/xrt/include CACHE STRING "Path to XRT cloned repo")
     set(XRT_LIB_DIR /opt/xilinx/xrt/lib CACHE STRING "Path to xrt_coreutil.lib")
 else()
-    set(BOOST_ROOT C:/Technical/thirdParty/boost_1_83_0 CACHE STRING "Path to Boost install")
     set(XRT_INC_DIR C:/Technical/XRT/src/runtime_src/core/include CACHE STRING "Path to XRT cloned repo")
     set(XRT_LIB_DIR C:/Technical/xrtNPUfromDLL CACHE STRING "Path to xrt_coreutil.lib")
 endif()

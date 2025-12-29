@@ -727,6 +727,20 @@ def codegen_external_kernels(
                     mm_kernel = re.sub(
                         pattern, f'#include "{lib_dir}/zero.cc"', mm_kernel
                     )
+                    pattern = r'#include\s+"((?:\.\./)+)([^"]+)"'
+
+                    def reduce_one_level(match):
+                        ups = match.group(1)
+                        rest = match.group(2)
+                        new_ups = ups[:-3]
+                        return (
+                            f'#include "{new_ups}{rest}"'
+                            if new_ups
+                            else f'#include "{rest}"'
+                        )
+
+                    mm_kernel = re.sub(pattern, reduce_one_level, mm_kernel)
+
             else:
                 with open(f"{path}/mm.cc", "r", encoding="utf-8") as f:
                     mm_kernel = f.read()
