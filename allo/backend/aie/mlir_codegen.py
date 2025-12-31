@@ -461,11 +461,11 @@ class CodeGenerator:
                                     .blocks[0]
                                     .arguments[0],
                                     cases[1:],
-                                    len(cases[1:]),
+                                    # len(cases[1:]),
                                 )
                                 cnt = 0
-                                for region in switch_op.caseRegions:
-                                    block = region.blocks.append()
+                                for region in switch_op.regions:
+                                    block = region.blocks[0]
                                     with aie_ir.InsertionPoint(block):
                                         acquired = case_val[cnt].acquire(
                                             0 if is_put else 1, 1
@@ -488,11 +488,11 @@ class CodeGenerator:
                                     .blocks[0]
                                     .arguments[0],
                                     cases[1:],
-                                    len(cases[1:]),
+                                    # len(cases[1:]),
                                 )
                                 cnt = 0
-                                for region in switch_op.caseRegions:
-                                    block = region.blocks.append()
+                                for region in switch_op.regions:
+                                    block = region.blocks[0]
                                     with aie_ir.InsertionPoint(block):
                                         case_val[cnt].release(0 if is_put else 1, 1)
                                         aie_scf_d.YieldOp([])
