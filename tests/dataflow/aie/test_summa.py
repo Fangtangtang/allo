@@ -94,5 +94,5 @@ def test_summa():
 
 
 if __name__ == "__main__":
-    # test_summa_2x2()
+    test_summa_2x2()
     test_summa()
