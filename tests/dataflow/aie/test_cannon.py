@@ -27,46 +27,48 @@ def test_cannon():
         A_pipe: Stream[Ty[m, k], 2][P, P]
         B_pipe: Stream[Ty[k, n], 2][P, P]
 
+        C_pipe: Stream[Ty[k, n], 2][P, P]
+
         @df.kernel(mapping=[P, P], args=[A, B])
         def init(local_A: Ty[M, K] @ LyA, local_B: Ty[K, N] @ LyB):
             pi, pj = df.get_pid()
-
             A_init[(pi - pj) % P, pj].put(local_A)
             B_init[pi, (pj - pi) % P].put(local_B)
 
-        @df.kernel(mapping=[P, P], args=[C])
-        def cannon(local_C: Ty[M, N] @ LyC):
+        @df.kernel(mapping=[P, P])
+        def cannon0():
             pi, pj = df.get_pid()
 
             A_out: Ty[m, k] = A_init[pi, pj].get()
             B_out: Ty[k, n] = B_init[pi, pj].get()
 
-            local_C[:, :] = allo.matmul(A_out, B_out)
+            C_pipe[pi, pj].put(allo.matmul(A_out, B_out))
 
             A_pipe[(pi - 1) % P, pj].put(A_out)
             B_pipe[pi, (pj - 1) % P].put(B_out)
 
-            for _ in range(P - 1):
-                """
-                Using an already created variable (A_out) is also valid,
-                but the compiler currently performs better optimization when using a new variable here.
-
-                    [NOTE] (Shihan): The main reason is that the 'buffer elimination pass' (`copy_on_writ`) is not very strong,
-                            Defining a new variable simplifies the use-def chain, so the pass can better identify redundant buffers.
-                            We may need to strengthen this pass to improve its optimization capability.
-                """
-                A_out_: Ty[m, k] = A_pipe[pi, pj].get()
-                B_out_: Ty[k, n] = B_pipe[pi, pj].get()
-                local_C[:, :] += allo.matmul(A_out_, B_out_)
-                A_pipe[(pi - 1) % P, pj].put(A_out_)
-                B_pipe[pi, (pj - 1) % P].put(B_out_)
+        @df.kernel(mapping=[P, P], args=[C])
+        def cannon1(local_C: Ty[M, N] @ LyC):
+            pi, pj = df.get_pid()
+            A_out: Ty[m, k] = A_pipe[pi, pj].get()
+            B_out: Ty[k, n] = B_pipe[pi, pj].get()
+            local_C[:, :] = C_pipe[pi, pj].get() + allo.matmul(A_out, B_out)
 
     A = np.random.randint(0, 64, (M, K)).astype(np.int32)
     B = np.random.randint(0, 64, (K, N)).astype(np.int32)
     C = np.zeros((M, N)).astype(np.int32)
 
     if is_available():
-        mod = df.build(top, target="aie")
+        mod = df.build(
+            top,
+            target="aie",
+            mapping_primitives=[
+                ("chain", ["cannon0_0_0", "cannon1_0_0"]),
+                ("chain", ["cannon0_0_1", "cannon1_0_1"]),
+                ("chain", ["cannon0_1_0", "cannon1_1_0"]),
+                ("chain", ["cannon0_1_1", "cannon1_1_1"]),
+            ],
+        )
         mod(A, B, C)
         np.testing.assert_allclose(C, A @ B, atol=1e-5)
         print("PASSED!")
