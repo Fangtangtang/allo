@@ -283,54 +283,24 @@ void VEC_0(
   hls::stream< ap_uint<256> >& v169
 ) {	// L243
   l_S___0__1: for (int _1 = 0; _1 < 5; _1++) {	// L249
-    uint8_t v171 = v166.read();	// L250
-    uint8_t vec_inst_1;	// L251
-    vec_inst_1 = v171;	// L252
-    int8_t v173 = vec_inst_1;	// L253
+    int8_t v173 = v166.read();	// L253
     int32_t v174 = v173;	// L254
     bool v175 = v174 == 2;	// L255
     if (v175) {	// L256
-      ap_uint<256> v176 = v167.read();	// L257
-      ap_uint<256> operand1;	// L258
-      operand1 = v176;	// L259
-      ap_uint<256> v178 = v168.read();	// L260
-      ap_uint<256> operand2;	// L261
-      operand2 = v178;	// L262
+      ap_uint<256> operand1 = v167.read();	// L258
+      ap_uint<256> operand2 = v168.read();	// L260
       ap_uint<256> add_8b;	// L263
       l_arith_8_i1: for (int i1 = 0; i1 < 32; i1++) {	// L264
-        ap_int<256> v182 = operand1;	// L265
-        int64_t v183 = i1;	// L266
-        int64_t v184 = v183 * 8;	// L267
-        ap_int<34> v185 = i1;	// L268
-        ap_int<34> v186 = v185 + 1;	// L269
-        ap_int<66> v187 = v186;	// L270
+        int64_t v184 = i1 * 8;	// L267
+        ap_int<66> v187 = i1 + 1;	// L270
         ap_int<66> v188 = v187 * 8;	// L271
         ap_int<66> v189 = v188 - 1;	// L272
-        int v190 = v184;	// L273
-        int v191 = v189;	// L274
-        int8_t v192;
-        ap_int<256> v192_tmp = v182;
-        v192 = v192_tmp(v191, v190);	// L275
-        int8_t scalar1;	// L276
-        scalar1 = v192;	// L277
-        ap_int<256> v194 = operand2;	// L278
-        int8_t v195;
-        ap_int<256> v195_tmp = v194;
-        v195 = v195_tmp(v191, v190);	// L288
-        int8_t scalar2;	// L289
-        scalar2 = v195;	// L290
-        int8_t v197 = scalar2;	// L291
-        int8_t v198 = scalar1;	// L292
-        ap_int<9> v199 = v197;	// L293
-        ap_int<9> v200 = v198;	// L294
+        int8_t scalar1 = operand1(v189, v184);
+        int8_t scalar2 = operand2(v189, v184);	// L289
+        ap_int<9> v199 = scalar2;	// L293
+        ap_int<9> v200 = scalar1;	// L294
         ap_int<9> v201 = v199 + v200;	// L295
-        uint8_t v202 = v201;	// L296
-        ap_int<256> v203 = add_8b;	// L297
-        ap_int<256> v204;
-        ap_int<256> v204_tmp = v203;
-        v204_tmp(v191, v190) = v202;
-        v204 = v204_tmp;	// L307
-        add_8b = v204;	// L308
+        add_8b(v189, v184) = v201;
       }
       ap_int<256> v205 = add_8b;	// L310
       v169.write(v205);	// L311
