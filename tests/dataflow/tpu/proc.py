@@ -80,13 +80,13 @@ ELEN = 8
 # ############################
 
 # ############################
-# instructions = [
-#     (ALLOC, 0, 4, 0),  # 100 00000000 0000
-#     (COPY_TO_MEM, 0, 0, 0),
-#     (COPY_TO_MEM, 1, 0, 2),
-#     (COPY_FROM_MEM, 0, 0, 1),
-#     (COPY_FROM_MEM, 2, 0, 0),
-# ]
+instructions = [
+    (ALLOC, 0, 4, 0),  # 100 00000000 0000
+    (COPY_TO_MEM, 0, 0, 0),
+    (COPY_TO_MEM, 1, 0, 2),
+    (COPY_FROM_MEM, 0, 0, 1),
+    (COPY_FROM_MEM, 2, 0, 0),
+]
 
 # instructions = [
 #     (ALLOC, 0, 4, 0),  # 100 00000000 0000
@@ -96,15 +96,15 @@ ELEN = 8
 #     (COPY_FROM_MEM, 2, 0, 0),
 # ]
 
-instructions = [
-    (ALLOC, 0, 4, 0),  # 100 00000000 0000
-    (COPY_TO_MEM, 0, 0, 0),
-    (COPY_TO_MEM, 1, 0, 1),
-    (VEC_ADD, 0, 1, 2),
-    (VEC_ADD, 1, 2, 3),
-    (COPY_FROM_MEM, 2, 0, 0),
-    (COPY_FROM_MEM, 3, 0, 1),
-]
+# instructions = [
+#     (ALLOC, 0, 4, 0),  # 100 00000000 0000
+#     (COPY_TO_MEM, 0, 0, 0),
+#     (COPY_TO_MEM, 1, 0, 1),
+#     (VEC_ADD, 0, 1, 2),
+#     (VEC_ADD, 1, 2, 3),
+#     (COPY_FROM_MEM, 2, 0, 0),
+#     (COPY_FROM_MEM, 3, 0, 1),
+# ]
 
 encoded_instructions = [
     encode(inst[1], inst[2], inst[3], inst[0]) for inst in instructions
@@ -249,17 +249,17 @@ mod(packed_instructions, packed_input, packed_output)
 unpacked_output = packed_output.view(np.int8).reshape(HEIGHT, VLEN // 8)
 print(unpacked_output)
 
-# if hls.is_available("vitis_hls"):
-#     s = df.customize(top)
-#     print("Starting Test...")
-#     mod = s.build(
-#         target="vitis_hls",
-#         mode="hw_emu",
-#         project=f"proc.prj",
-#         wrap_io=False,
-#     )
-#     output_ = np.zeros((HEIGHT, VLEN // 8)).astype(np.int8)
-#     packed_output = np.ascontiguousarray(output_).view(np_256).reshape((HEIGHT,))
-#     mod(packed_instructions, packed_input, packed_output)
-#     unpacked_output = packed_output.view(np.int8).reshape(HEIGHT, VLEN // 8)
-#     print(unpacked_output)
+if hls.is_available("vitis_hls"):
+    s = df.customize(top)
+    print("Starting Test...")
+    mod = s.build(
+        target="vitis_hls",
+        mode="hw_emu",
+        project=f"proc.prj",
+        wrap_io=False,
+    )
+    output_ = np.zeros((HEIGHT, VLEN // 8)).astype(np.int8)
+    packed_output = np.ascontiguousarray(output_).view(np_256).reshape((HEIGHT,))
+    mod(packed_instructions, packed_input, packed_output)
+    unpacked_output = packed_output.view(np.int8).reshape(HEIGHT, VLEN // 8)
+    print(unpacked_output)

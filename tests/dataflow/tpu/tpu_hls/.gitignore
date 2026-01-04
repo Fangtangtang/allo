@@ -1,0 +1,8 @@
+top
+_x*
+.Xil
+build_*
+package*
+*.data
+*.json
+**tmp
