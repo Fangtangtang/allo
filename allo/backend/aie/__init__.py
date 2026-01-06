@@ -708,7 +708,8 @@ class AIE_MLIRModule:
         elif "npu2" in device_type:
             self.device = "npu2"
         else:
-            raise ValueError("Unsupported device type.")
+            self.device = "npu1"
+            # raise ValueError("Unsupported device type.")
         self.profile = profile
         self.warmup = warmup
         self.num_iters = num_iters
