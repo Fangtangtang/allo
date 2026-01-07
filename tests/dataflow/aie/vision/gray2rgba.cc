@@ -71,7 +71,9 @@ void gray2rgba_aie_scalar(uint8_t *y_in, uint8_t *rgba_out,
 extern "C" {
 
 void gray2rgbaLine(uint8_t in[1920], uint8_t out[7680]) {
+  event0();
   gray2rgba_aie(in, out, 1, 1920);
+  event1();
 }
 
 void gray2rgbaTile(uint8_t *in, uint8_t *out, int32_t tileHeight,

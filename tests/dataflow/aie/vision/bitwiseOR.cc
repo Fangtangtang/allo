@@ -51,7 +51,9 @@ void bitwiseOR_aie(const T *src1, const T *src2, T *dst, const int32_t width,
 extern "C" {
 
 void bitwiseORLine(uint8_t in1[1920], uint8_t in2[1920], uint8_t out[1920]) {
+   
   bitwiseOR_aie<uint8_t, 64>(in1, in2, out, 1920, 1);
+   event1();
 }
 
 void bitwiseORTile(uint8_t *in1, uint8_t *in2, uint8_t *out, int32_t tileHeight,

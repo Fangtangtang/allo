@@ -19,7 +19,7 @@
 
 // clang-format off
 #include <aie_api/aie.hpp>
-#include "lut_inv_8b.h"
+#include "aie2/lut_inv_8b.h"
 // clang-format on
 
 const int32_t SRS_SHIFT = 12;
@@ -169,7 +169,9 @@ void rgba2hue_aie_scalar(uint8_t *rgba_in, uint8_t *hue_out,
 extern "C" {
 
 void rgba2hueLine(uint8_t in[7680], uint8_t out[1920]) {
+  event0();
   rgba2hue_aie(in, out, 1, 1920);
+  event1();
 }
 
 void rgba2hueTile(uint8_t *in, uint8_t *out, int32_t tileHeight,

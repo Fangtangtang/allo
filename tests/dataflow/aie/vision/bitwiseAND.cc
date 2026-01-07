@@ -51,7 +51,9 @@ void bitwiseAND_aie(const T *src1, const T *src2, T *dst, const int32_t width,
 extern "C" {
 
 void bitwiseANDLine(uint8_t in1[7680], uint8_t in2[7680], uint8_t out[7680]) {
+  event0();
   bitwiseAND_aie<uint8_t, 64>(in1, in2, out, 7680, 1);
+  event1();
 }
 
 void bitwiseANDTile(uint8_t *in1, uint8_t *in2, uint8_t *out,

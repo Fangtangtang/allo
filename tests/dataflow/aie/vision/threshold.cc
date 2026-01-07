@@ -230,18 +230,26 @@ __attribute__((noinline)) void threshold4Ch_aie(
 extern "C" {
 
 void thresholdLine40(uint8_t in[1920], uint8_t out[1920]) {
+  event0();
   threshold_aie<uint8_t, 64>(in, out, 1920, 1, 40, 255, 4);
+  event1();
 }
 
 void thresholdLine30(uint8_t in[1920], uint8_t out[1920]) {
+  event0();
   threshold_aie<uint8_t, 64>(in, out, 1920, 1, 30, 255, 0);
+  event1();
 }
 
 void thresholdLine160(uint8_t in[1920], uint8_t out[1920]) {
+  event0();
   threshold_aie<uint8_t, 64>(in, out, 1920, 1, 160, 255, 4);
+  event1();
 }
 
 void thresholdLine90(uint8_t in[1920], uint8_t out[1920]) {
+  event0();
   threshold_aie<uint8_t, 64>(in, out, 1920, 1, 90, 255, 0);
+  event1();
 }
 } // extern "C"
