@@ -56,11 +56,15 @@ void row_rescale(T_in *__restrict tensor_in, T_in *__restrict scale_factors,
 extern "C" {
 void scale_attn_output(bfloat16 tensor_in[32][64], bfloat16 sum_exp[32],
                        bfloat16 tensor_out[32][64]) {
+  event0();
   row_scale<bfloat16, bfloat16, 32, 64>(&tensor_in[0][0], sum_exp, &tensor_out[0][0]);
+  event1();
 }
 
 void rescale_attn_output(bfloat16 tensor_in[32][64], bfloat16 scale_exp[32],
                        bfloat16 tensor_out[32][64]) {
+  event0();
   row_rescale<bfloat16, bfloat16, 32, 64>(&tensor_in[0][0], scale_exp, &tensor_out[0][0]);
+  event1();
 }
 }

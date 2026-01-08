@@ -5,9 +5,10 @@ import json
 import subprocess
 import allo
 import allo.dataflow as df
-from allo.ir.types import int8, int32, Stream
+from allo.ir.types import int8, int32,bfloat16, Stream
 from allo.memory import Layout
 import numpy as np
+from ml_dtypes import bfloat16 as np_bfloat16
 from allo.backend.aie.external_kernel import ExternalModule
 
 # RRxRS->RS
@@ -38,22 +39,33 @@ bitwiseANDLine = ExternalModule(
     output_idx=[2],
 )
 
+scale_attn_output = ExternalModule(
+    top="scale_attn_output",
+    impl_path= "/home/sf668/workspace/allo/allo/library/aie/kernels/attn_out.cc",
+    input_idx=[0, 1],
+    output_idx=[2],
+)
 
 def profiling():
 
     @df.region()
-    def top(Input1: int8[7680], Input2: int8[7680], Output: int8[7680]):
-        @df.kernel(mapping=[1], args=[Input1, Input2, Output])
-        def gemm(inp1: int8[7680], inp2: int8[7680], outp: int8[7680]):
-            bitwiseANDLine(inp1, inp2, outp)
+    def top(Input1: bfloat16[32],Output: bfloat16[32]):
+        @df.kernel(mapping=[1], args=[Input1, Output])
+        def gemm(inp1: bfloat16[ 32],  outp: bfloat16[32]):
+            attn_weight: bfloat16[32, 64] = 1
+            outp = 1
+            scale_attn_output(attn_weight, inp1, attn_weight)
 
     mod = df.build(
         top, target="aie", profile=True, trace=[("gemm", (0,))], trace_size=65536
     )
-    A = np.random.randint(64, 128, (7680,)).astype(np.int8)
-    B = np.random.randint(0, 64, (7680,)).astype(np.int8)
-    C = np.zeros((7680,)).astype(np.int8)
-    mod(A, B, C)
+    A = (np.random.random((32)) * 0.1).astype(np_bfloat16)
+    B = (np.random.random((32, 64)) * 0.1).astype(np_bfloat16)
+    C = np.zeros((32, 64)).astype(np_bfloat16)
+    # A = np.random.randint(64, 128, (7680,)).astype(np.int8)
+    # B = np.random.randint(0, 64, (7680,)).astype(np.int8)
+    # C = np.zeros((7680,)).astype(np.int8)
+    mod(A, A)
     # np.testing.assert_allclose(C, A @ B, atol=1e-5)
     print("PASSED!")
 
@@ -105,6 +117,7 @@ def parse_trace(project="top.prj"):
             if begin > 0:
                 latency.append(event["ts"] - begin)
             begin = -1
+    print(latency)
     print(sum(latency) / len(latency))
     import numpy as np
 

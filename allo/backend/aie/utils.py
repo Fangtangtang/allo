@@ -68,7 +68,7 @@ class Config:
 
 # reference: https://github.com/Xilinx/mlir-aie/blob/v1.0/docs/Devices.md
 device_config_map = {
-    "virtual": {"mesh": (16, 16), "mem_tile_num": 5, "shim_tile_num": 4},
+    "virtual": {"mesh": (64, 64), "mem_tile_num": 5, "shim_tile_num": 4},
     "npu1": {"mesh": (4, 5), "mem_tile_num": 5, "shim_tile_num": 4},
     "npu1_4col": {"mesh": (4, 4), "mem_tile_num": 4, "shim_tile_num": 4},
     "npu1_3col": {"mesh": (4, 3), "mem_tile_num": 3, "shim_tile_num": 3},

@@ -616,13 +616,16 @@ void init_softmax(bfloat16 *__restrict max_logit,
 extern "C" {
 
 void init_softmax(bfloat16 max_logit[32], bfloat16 sum_exp[32]) {
+  event0();
   init_softmax<32>(max_logit, sum_exp);
+  event1();
 }
 
 void online_softmax(bfloat16 attention_score[32][32],
                     bfloat16 prev_max_logit[32], bfloat16 prev_sum_exp[32],
                     bfloat16 attention_weight[32][32], bfloat16 scale_exp[32],
                     bfloat16 new_max_logit[32], bfloat16 new_sum_exp[32]) {
+  event0();
   const int ROW = 32;
   const int CHUNK_SIZE = 32;
   constexpr int vec_factor = 256 / (sizeof(bfloat16) * 8);
@@ -664,6 +667,7 @@ void online_softmax(bfloat16 attention_score[32][32],
     float accum_exp_val = fa_exp_bf16<16>(CHUNK_SIZE, pIn, pExp);
     new_sum_exp[r] = prev_sum_exp[r] * scale_exp[r] + accum_exp_val;
   }
+  event1();
 }
 
 void softmax_bf16(const bfloat16 in[4][1024], bfloat16 out[4][1024]) {
