@@ -455,7 +455,7 @@ def inject_external_kernels(
                         input_idx.extend([0, 1])
                         output_idx.append(2)
                         path = os.environ.get("ALLO_EXTERNAL_KERNEL_DIR")
-                        if path is None or lib_dir != "aie2":
+                        if path is None:
                             kernel_header += f"#define DIM_M {M}\n"
                             kernel_header += f"#define DIM_N {N}\n"
                             kernel_header += f"#define DIM_K {K}\n"
@@ -465,6 +465,9 @@ def inject_external_kernels(
                             kernel_name = (
                                 f"matmul_scalar_{dtype_a}_{out_dtype}_{M}x{K}x{N}"
                             )
+                            if dtype_a == "i4":
+                                # FIXME: peano complication would fail on aie2p without these guard
+                                kernel_header += f"#define ENABLE_I4 {M}\n"
                             ctype = matmul_external_kernel_config_map[
                                 (dtype_a, out_dtype)
                             ]["ctype"]
@@ -718,7 +721,7 @@ def codegen_external_kernels(
                 kernel_file_code += mm_kernel
         elif "mm.cc" in src:  # this file is too large to be included
             path = os.environ.get("ALLO_EXTERNAL_KERNEL_DIR")
-            if path is None or lib_dir != "aie2":
+            if path is None:
                 path = os.path.expandvars(
                     f"$MLIR_AIE_EXTERNAL_KERNEL_DIR/{lib_dir}/mm.cc"
                 )
