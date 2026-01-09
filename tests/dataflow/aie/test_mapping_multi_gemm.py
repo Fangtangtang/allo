@@ -57,10 +57,6 @@ def gen_gemm_mapping_primitive(prefix, Pm, Pn, Pk, col_num=4, row_num=4):
     return mapping_primitives
 
 
-@pytest.mark.skipif(
-    os.environ.get("NPU2") == "1",
-    reason="Skipped because this test is not supported on XDNA2",
-)
 @pytest.mark.parametrize(
     "M, N, K, Pm, Pn, Pk, TyI, TyO",
     [
@@ -135,7 +131,7 @@ def test_batched_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
             profile=True,
             warmup=200,
             num_iters=1000,
-            device_type="npu1_2col",
+            device_type="npu2_2col" if os.environ.get("NPU2") == "1" else "npu1_2col",
         )
         if TyI is bfloat16:
             A = np.random.random((M, K)).astype(np_bfloat16)
