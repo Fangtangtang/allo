@@ -7,6 +7,7 @@ import gc
 import ast
 import sys
 import copy
+import inspect
 import itertools
 import traceback
 import numpy as np
@@ -60,7 +61,9 @@ from .utils import (
     get_kwarg_value,
     get_func_id_from_param_types,
     resolve_generic_types,
+    parse_ast,
 )
+from .infer import TypeInferer
 from .types import (
     AlloType,
     Int,
@@ -577,21 +580,25 @@ class ASTTransformer(ASTBuilder):
             op = arith_d.FPToUIOp(
                 IntegerType.get_signless(32), op_result, ip=ctx.get_ip()
             )
+            op_result = op.result
             opcls = arith_d.IndexCastOp  # proceed to build cast to index
         elif isinstance(src_type, Index) and isinstance(res_type, Float):
             op = arith_d.IndexCastOp(
                 IntegerType.get_signless(32), op_result, ip=ctx.get_ip()
             )
+            op_result = op.result
             opcls = arith_d.SIToFPOp  # proceed to build cast to float
         elif isinstance(src_type, Index) and isinstance(res_type, (Fixed, UFixed)):
             op = arith_d.IndexCastOp(
                 IntegerType.get_signless(32), op_result, ip=ctx.get_ip()
             )
+            op_result = op.result
             opcls = allo_d.IntToFixedOp  # proceed to build cast to float
         elif isinstance(src_type, (Fixed, UFixed)) and isinstance(res_type, Index):
             op = allo_d.FixedToIntOp(
                 IntegerType.get_signless(32), op_result, ip=ctx.get_ip()
             )
+            op_result = op.result
             opcls = arith_d.IndexCastOp
         elif isinstance(src_type, (Int, UInt)) and isinstance(res_type, (Int, UInt)):
             if src_type.bits > res_type.bits:
@@ -741,15 +748,13 @@ class ASTTransformer(ASTBuilder):
             else:
                 cast_op = opcls(
                     mlir_type,
-                    ASTTransformer.get_mlir_op_result(ctx, op),
+                    op_result,
                     ip=ctx.get_ip(),
                 )
             if isinstance(res_type, UInt):
                 cast_op.attributes["unsigned"] = UnitAttr.get()
         else:
-            cast_op = opcls(
-                mlir_type, ASTTransformer.get_mlir_op_result(ctx, op), ip=ctx.get_ip()
-            )
+            cast_op = opcls(mlir_type, op_result, ip=ctx.get_ip())
         return cast_op
 
     @staticmethod
@@ -1290,6 +1295,11 @@ class ASTTransformer(ASTBuilder):
                 and isinstance(val.dtype, Index)
             ):
                 return ASTTransformer.build_affine_expr(ctx, val.value)
+            # If the symbol is found in the local scope but not handled above
+            # (e.g., non-affine loop variable), we should return None immediately
+            # to avoid masking it with global variables (e.g., from get_pid).
+            if val is not None:
+                return None
             if node.id in ctx.global_vars and isinstance(ctx.global_vars[node.id], int):
                 return ASTTransformer.build_affine_expr(
                     ctx, ast.Constant(ctx.global_vars[node.id])
@@ -1823,6 +1833,26 @@ class ASTTransformer(ASTBuilder):
     @staticmethod
     def build_AnnAssign(ctx: ASTContext, node: ast.AnnAssign):
         shape, dtype = node.target.shape, node.target.dtype
+        if hasattr(dtype, "constexpr") and dtype.constexpr:
+            if node.value is None:
+                raise RuntimeError(
+                    f"ConstExpr variable '{node.target.id}' must be initialized"
+                )
+            try:
+                # We need to evaluate the expression in the context of global_vars
+                # Construct an expression from node.value
+                expr = ast.Expression(node.value)
+                code = compile(expr, filename="<string>", mode="eval")
+                val = eval(code, ctx.global_vars)
+                ctx.global_vars[node.target.id] = val
+                # Also put in current scope to avoid lookup failure if shadowed?
+                # But builder prefers get_symbol.
+                # Types/Values in global_vars are handled by build_Name.
+                return None
+            except Exception as e:
+                raise RuntimeError(
+                    f"Failed to evaluate ConstExpr '{node.target.id}': {e}"
+                ) from e
         if hasattr(dtype, "stateful") and dtype.stateful:
             # Generate unique global name
             if not hasattr(ctx, "stateful_counter"):
@@ -1968,6 +1998,9 @@ class ASTTransformer(ASTBuilder):
                             orig_name = node.name
                             if orig_name not in ctx.func_tag2instance:
                                 ctx.func_tag2instance[orig_name] = {}
+                            # Initialize dict to store kernel instance names for call insertion
+                            if not hasattr(ctx, "_kernel_instance_names"):
+                                ctx._kernel_instance_names = {}
                             for dim in np.ndindex(*mapping):
                                 if not ctx.unroll:
                                     # If not unrolled, assign tag to each instance.
@@ -1981,6 +2014,7 @@ class ASTTransformer(ASTBuilder):
                                     ):
                                         continue
                                 new_ctx = old_ctx.copy()
+                                new_ctx.top_func = old_ctx.top_func
                                 new_ctx.set_ip(old_ctx.top_func)
                                 new_ctx.top_func_tree = node
                                 new_ctx.buffers = old_ctx.buffers.copy()
@@ -1991,10 +2025,44 @@ class ASTTransformer(ASTBuilder):
                                         {"df.p" + str(axis): val}
                                     )
                                 node.name = construct_kernel_name(orig_name, dim)
+                                # Append suffix from parent context to ensure uniqueness
+                                if hasattr(ctx, "func_suffix"):
+                                    node.name = f"{node.name}_{ctx.func_suffix}"
+                                # Store the kernel name for later call insertion
+                                # Use ctx since AST is reparsed for each region call
+                                ctx._kernel_instance_names[(orig_name, dim)] = node.name
+
+                                # Update func_suffix for children
+                                instance_suffix = "_".join([str(x) for x in dim])
+                                if hasattr(ctx, "func_suffix"):
+                                    new_ctx.func_suffix = (
+                                        f"{instance_suffix}_{ctx.func_suffix}"
+                                    )
+                                else:
+                                    new_ctx.func_suffix = instance_suffix
+
+                                # Create a copy of the node to avoid modifying the original AST
+                                # and remove the kernel decorator to prevent infinite recursion
+                                new_node = copy.copy(node)
+                                new_node.decorator_list = [
+                                    d
+                                    for d in node.decorator_list
+                                    if not (
+                                        isinstance(d, ast.Call)
+                                        and isinstance(d.func, ast.Attribute)
+                                        and d.func.attr == "kernel"
+                                    )
+                                ]
+
                                 func_op = ASTTransformer.build_FunctionDef(
-                                    new_ctx, node
+                                    new_ctx, new_node
                                 )
                                 func_op.attributes["df.kernel"] = UnitAttr.get()
+                                # Mark kernels inside sub-regions so they aren't called from top
+                                if hasattr(ctx, "func_suffix"):
+                                    func_op.attributes["df.nested_kernel"] = (
+                                        UnitAttr.get()
+                                    )
                                 if not ctx.unroll:
                                     func_op.attributes["tag"] = StringAttr.get(
                                         f"{orig_name}_{str(predicate_tag)}"
@@ -2002,7 +2070,13 @@ class ASTTransformer(ASTBuilder):
                                     ctx.func_tag2instance[orig_name][
                                         predicate_tag
                                     ] = func_op
+                                # Restore original name for next iteration
+                                node.name = orig_name
                             return
+
+                        if decorator.func.attr == "region":
+                            # If it is a region, we should insert the calls to the kernels
+                            pass
         else:
             old_ctx = None
 
@@ -2094,6 +2168,67 @@ class ASTTransformer(ASTBuilder):
             ctx.func_args[func_name] = dtensors
             ctx.set_ip(func_op.entry_block)
             stmts = build_stmts(ctx, node.body)
+
+            # Insert calls to the kernels in the region (must be inside scope where args are visible)
+            if getattr(node, "is_region", False):
+                for stmt in node.body:
+                    if isinstance(stmt, ast.FunctionDef):
+                        # Check if it is a kernel
+                        for decorator in stmt.decorator_list:
+                            if (
+                                isinstance(decorator, ast.Call)
+                                and isinstance(decorator.func, ast.Attribute)
+                                and decorator.func.attr == "kernel"
+                            ):
+                                # It is a kernel, insert calls
+                                assert (
+                                    len(decorator.keywords) > 0
+                                ), "Missing kernel mapping"
+                                mapping = eval(
+                                    ast.unparse(decorator.keywords[0].value),
+                                    ctx.global_vars,
+                                )
+                                # Get arguments
+                                args_kw = get_kwarg_value(decorator.keywords, "args")
+                                if args_kw is not None:
+                                    args = build_stmts(ctx, args_kw)
+                                    arg_values = [
+                                        ASTTransformer.get_mlir_op_result(ctx, arg)
+                                        for arg in args
+                                    ]
+                                else:
+                                    arg_values = []
+                                # Insert calls
+                                for dim in np.ndindex(*mapping):
+                                    # Use stored kernel name from ctx (set during kernel definition)
+                                    # This ensures call uses the exact same name as definition
+                                    key = (stmt.name, dim)
+                                    if (
+                                        hasattr(ctx, "_kernel_instance_names")
+                                        and key in ctx._kernel_instance_names
+                                    ):
+                                        kernel_name = ctx._kernel_instance_names[key]
+                                    else:
+                                        kernel_name = construct_kernel_name(
+                                            stmt.name, dim
+                                        )
+                                        # Append suffix from parent context to match kernel definition
+                                        if hasattr(ctx, "func_suffix"):
+                                            kernel_name = (
+                                                f"{kernel_name}_{ctx.func_suffix}"
+                                            )
+                                    # We need to resolve the tag for the kernel
+                                    # FIXME: checking the tag mapping is tricky here,
+                                    # we assume there is no tag mismatch for now
+                                    # if stmt.name in ctx.func_tag2instance:
+                                    #     ...
+                                    func_d.CallOp(
+                                        [],
+                                        FlatSymbolRefAttr.get(kernel_name),
+                                        arg_values,
+                                        ip=ctx.get_ip(),
+                                    )
+
             # node.returns is the function definition, not the actual return operation
             if len(stmts) > 0 and not ctx.has_return:
                 if (
@@ -2507,6 +2642,88 @@ class ASTTransformer(ASTBuilder):
                     ip=ctx.get_ip(),
                 )
             raise RuntimeError(f"Cannot resolve function `{node.func.id}`")
+
+        # Check if it is a Allo dataflow region/kernel (has mappings attribute from @df.region decorator)
+        if hasattr(obj, "mappings"):
+
+            # It is a dataflow region/kernel
+            # We need to build it first
+            src = inspect.getsource(obj)
+            tree = parse_ast(src)
+            # Find the function definition
+            # The structure should be Module -> FunctionDef
+            assert isinstance(tree, ast.Module)
+            assert isinstance(tree.body[0], ast.FunctionDef)
+            func_def = tree.body[0]
+            original_name = func_def.name
+
+            # Run type inference on the tree before building
+            # We need a fresh type inference context
+            type_inf_ctx = ASTContext(
+                tree=tree,
+                global_vars=ctx.global_vars.copy(),
+                mlir_ctx=ctx.mlir_ctx,
+            )
+            # Propagate type parameters from subscript call (e.g., inner[2, 2])
+            if ctx.inst is not None:
+                type_inf_ctx.inst = ctx.inst
+            tree = TypeInferer()(type_inf_ctx, tree)
+            func_def = tree.body[0]
+
+            if not isinstance(node.func, ast.Attribute) or node.func.attr != "kernel":
+                # Mark as region so we can insert calls later
+                func_def.is_region = True
+                # Resolve naming collision by appending suffix
+                # Use type parameters as part of the suffix for uniqueness
+                if ctx.inst is not None:
+                    # Create suffix from type parameters (e.g., "2_2" for inner[2, 2])
+                    inst_suffix = "_".join(str(x) for x in ctx.inst)
+                    if hasattr(ctx, "func_suffix"):
+                        func_def.name = (
+                            f"{original_name}_{inst_suffix}_{ctx.func_suffix}"
+                        )
+                    else:
+                        func_def.name = f"{original_name}_{inst_suffix}"
+                elif hasattr(ctx, "func_suffix"):
+                    func_def.name = f"{original_name}_{ctx.func_suffix}"
+
+            # Create a new context
+            new_ctx = ctx.copy()
+            # Clear top_func to avoid nested definition behavior which assumes context sharing
+            # recursive build should start fresh but share globals/module
+            new_ctx.top_func = None
+            # Clear func_id since we already handle uniqueness via func_suffix and type parameters
+            # Otherwise func_id would append another suffix in build_FunctionDef
+            new_ctx.func_id = None
+            # We need to set the insertion point to the module body
+            # because the function op should be at the top level
+            # The first IP in the stack should be the module body
+            new_ctx.ip_stack = [ctx.ip_stack[0]]
+            # Propagate type parameters from subscript call (e.g., inner[2, 2])
+            if ctx.inst is not None:
+                new_ctx.inst = ctx.inst
+                # Set func_suffix for kernels inside the region based on type parameters
+                inst_suffix = "_".join(str(x) for x in ctx.inst)
+                if hasattr(ctx, "func_suffix"):
+                    new_ctx.func_suffix = f"{inst_suffix}_{ctx.func_suffix}"
+                else:
+                    new_ctx.func_suffix = inst_suffix
+
+            func_op = ASTTransformer.build_FunctionDef(new_ctx, func_def)
+
+            # Now insert the call
+            # Parse arguments
+            new_args = build_stmts(ctx, node.args)
+            arg_values = [
+                ASTTransformer.get_mlir_op_result(ctx, arg) for arg in new_args
+            ]
+            call_op = func_d.CallOp(
+                [],
+                FlatSymbolRefAttr.get(func_def.name),
+                arg_values,
+                ip=ctx.get_ip(),
+            )
+            return call_op
 
         try:
             from ..backend.aie.vliw import VLIWKernelFunction
