@@ -1736,31 +1736,40 @@ class CodeGenerator:
         linked_external_cc: dict[str, int],
         trace: list[tuple[str, tuple[int, ...]]],
         trace_size: int,
+        physical_placement: dict[str, tuple[int, int]] = None,
     ) -> aie_ir.Module:
-        # mapping to physical/logical
-        # TODO: co-designed mapping to different types of tiles
-        arg_to_fifo = self.map_data_transfer()
-        core_func_connected_mem_tile: dict[str, dict[str, int]] = {}
-        for func_name in arg_to_fifo.keys():
-            core_func_connected_mem_tile[func_name] = {
-                mem_tile.name: 0 for mem_tile in self.used_mem_tiles
-            }
-        for func_name, fifo_dict in arg_to_fifo.items():
-            for fifo in fifo_dict.values():
-                if fifo.src == func_name:
-                    core_func_connected_mem_tile[func_name][fifo.dst[0]] += 1
-                else:
-                    core_func_connected_mem_tile[func_name][fifo.src] += 1
-        layout_col_id_hint: dict[str, str] = {}
-        for func_name, connections in core_func_connected_mem_tile.items():
-            heaviest: int = -1
-            heaviest_workload = -1
-            for mem_tile_name, workload in connections.items():
-                if heaviest_workload < workload:
-                    heaviest_workload = workload
-                    heaviest = int(mem_tile_name[0])  # fixme
-            layout_col_id_hint[func_name] = heaviest
-        core_function_mapping = self.map_core_func_to_physical_tiles(layout_col_id_hint)
+        if physical_placement is None:
+            # mapping to physical/logical
+            # TODO: co-designed mapping to different types of tiles
+            arg_to_fifo = self.map_data_transfer()
+            print(arg_to_fifo)
+            core_func_connected_mem_tile: dict[str, dict[str, int]] = {}
+            for func_name in arg_to_fifo.keys():
+                core_func_connected_mem_tile[func_name] = {
+                    mem_tile.name: 0 for mem_tile in self.used_mem_tiles
+                }
+            for func_name, fifo_dict in arg_to_fifo.items():
+                for fifo in fifo_dict.values():
+                    if fifo.src == func_name:
+                        core_func_connected_mem_tile[func_name][fifo.dst[0]] += 1
+                    else:
+                        core_func_connected_mem_tile[func_name][fifo.src] += 1
+            layout_col_id_hint: dict[str, int] = {}
+            for func_name, connections in core_func_connected_mem_tile.items():
+                heaviest: int = -1
+                heaviest_workload = -1
+                for mem_tile_name, workload in connections.items():
+                    if heaviest_workload < workload:
+                        heaviest_workload = workload
+                        heaviest = int(mem_tile_name[0])  # fixme
+                layout_col_id_hint[func_name] = heaviest
+            core_function_mapping = self.map_core_func_to_physical_tiles(
+                layout_col_id_hint
+            )
+        else:
+            # TODO: parse from a file?
+            arg_to_fifo = None
+            core_function_mapping = physical_placement
 
         # traced tile index
         traced_logical_tile = set()

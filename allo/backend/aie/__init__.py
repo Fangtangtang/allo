@@ -690,6 +690,7 @@ class AIE_MLIRModule:
         self,
         device_type="npu1_4col",
         mapping_primitives: list[tuple[str, list]] = None,
+        physical_placement: dict[str, tuple[int, int]] = None,
         profile: bool = False,
         warmup: int = 20,
         num_iters: int = 100,
@@ -835,6 +836,7 @@ class AIE_MLIRModule:
             linked_external_cc,
             trace,
             trace_size,
+            physical_placement,
         )
 
         # TODO: opt passes on aie-mlir

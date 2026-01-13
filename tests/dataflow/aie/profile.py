@@ -5,7 +5,7 @@ import json
 import subprocess
 import allo
 import allo.dataflow as df
-from allo.ir.types import int8, int32,bfloat16, Stream
+from allo.ir.types import int8, int32, bfloat16, Stream
 from allo.memory import Layout
 import numpy as np
 from ml_dtypes import bfloat16 as np_bfloat16
@@ -41,17 +41,18 @@ bitwiseANDLine = ExternalModule(
 
 scale_attn_output = ExternalModule(
     top="scale_attn_output",
-    impl_path= "/home/sf668/workspace/allo/allo/library/aie/kernels/attn_out.cc",
+    impl_path="/home/sf668/workspace/allo/allo/library/aie/kernels/attn_out.cc",
     input_idx=[0, 1],
     output_idx=[2],
 )
 
+
 def profiling():
 
     @df.region()
-    def top(Input1: bfloat16[32],Output: bfloat16[32]):
+    def top(Input1: bfloat16[32], Output: bfloat16[32]):
         @df.kernel(mapping=[1], args=[Input1, Output])
-        def gemm(inp1: bfloat16[ 32],  outp: bfloat16[32]):
+        def gemm(inp1: bfloat16[32], outp: bfloat16[32]):
             attn_weight: bfloat16[32, 64] = 1
             outp = 1
             scale_attn_output(attn_weight, inp1, attn_weight)
