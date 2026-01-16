@@ -634,7 +634,7 @@ def build(
             if os.getenv("NPU2") == "1":
                 device_type = "npu2"
             else:
-                device_type = "npu1_4col"
+                device_type = "npu1"
         aie_mod.build(
             device_type=device_type,
             mapping_primitives=mapping_primitives,
