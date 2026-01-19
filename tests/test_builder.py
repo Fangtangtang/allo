@@ -1373,5 +1373,14 @@ def test_constexpr_error_uninitialized():
         allo.customize(kernel)
 
 
+def test_constexpr_error_reassignment():
+    def kernel():
+        a: ConstExpr[int32] = 8
+        a = 16
+
+    with pytest.raises(SystemExit):
+        allo.customize(kernel)
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

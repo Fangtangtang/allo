@@ -574,17 +574,17 @@ def df_primitive_default(s):
 def customize(func, enable_tensor=False, opt_default=False):
     global_vars = get_global_vars(func)
     s = _customize(func, global_vars=global_vars, enable_tensor=enable_tensor)
-    stream_info = move_stream_to_interface(s)
-    s = _build_top(s, stream_info)
-
-    if opt_default:
-        df_primitive_default(s)
     # ###########################
     print(s.module)
     import sys
 
     sys.exit(0)
     # ###########################
+    stream_info = move_stream_to_interface(s)
+    s = _build_top(s, stream_info)
+
+    if opt_default:
+        df_primitive_default(s)
 
     return s
 

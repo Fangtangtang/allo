@@ -1158,7 +1158,11 @@ class ASTTransformer(ASTBuilder):
             ):
                 for i, target in enumerate(targets):
                     # TODO: add target symbol for pid?? # pid = MockConstant(ctx.global_vars[f"df.p{i}"], ctx, dtype=Index())
-                    ctx.global_vars[ast.unparse(target)] = ctx.global_vars[f"df.p{i}"]
+                    rhs = allo_d.mesh_coord(
+                        f"{ctx.top_func_tree.name}_mesh", f"axis_{i}", ip=ctx.get_ip()
+                    )
+                    rhs.owner.attributes["symbolic"] = StringAttr.get(f"p{i}")
+                    ctx.put_symbol(name=target.id, val=rhs)
                     ctx.symbolic[ast.unparse(target)] = f"p{i}"
                 return None
             rhs = build_stmt(ctx, node.value)
@@ -2013,77 +2017,86 @@ class ASTTransformer(ASTBuilder):
                             # Initialize dict to store kernel instance names for call insertion
                             if not hasattr(ctx, "_kernel_instance_names"):
                                 ctx._kernel_instance_names = {}
-                            for dim in np.ndindex(*mapping):
-                                if not ctx.unroll:
-                                    # If not unrolled, assign tag to each instance.
-                                    # Different tags indeicate different execution (control flow only)
-                                    predicate_tag = freeze_list(
-                                        ctx.func_predicate_tags[orig_name][dim]
-                                    )
-                                    if (
-                                        predicate_tag
-                                        in ctx.func_tag2instance[orig_name]
-                                    ):
-                                        continue
-                                new_ctx = old_ctx.copy()
-                                new_ctx.top_func = old_ctx.top_func
-                                new_ctx.set_ip(old_ctx.top_func)
-                                new_ctx.top_func_tree = node
-                                new_ctx.buffers = old_ctx.buffers.copy()
-                                new_ctx.scopes = old_ctx.scopes
-                                new_ctx.global_vars = old_ctx.global_vars.copy()
-                                for axis, val in enumerate(dim):
-                                    new_ctx.global_vars.update(
-                                        {"df.p" + str(axis): val}
-                                    )
-                                node.name = construct_kernel_name(orig_name, dim)
-                                # Append suffix from parent context to ensure uniqueness
-                                if hasattr(ctx, "func_suffix"):
-                                    node.name = f"{node.name}_{ctx.func_suffix}"
-                                # Store the kernel name for later call insertion
-                                # Use ctx since AST is reparsed for each region call
-                                ctx._kernel_instance_names[(orig_name, dim)] = node.name
+                            new_ctx = old_ctx.copy()
+                            new_ctx.set_ip(old_ctx.top_func)
+                            new_ctx.top_func_tree = node
+                            new_ctx.buffers = old_ctx.buffers.copy()
+                            new_ctx.scopes = old_ctx.scopes
+                            new_ctx.global_vars = old_ctx.global_vars.copy()
+                            func_op = ASTTransformer.build_FunctionDef(new_ctx, node)
+                            func_op.attributes["df.kernel"] = UnitAttr.get()
 
-                                # Update func_suffix for children
-                                instance_suffix = "_".join([str(x) for x in dim])
-                                if hasattr(ctx, "func_suffix"):
-                                    new_ctx.func_suffix = (
-                                        f"{instance_suffix}_{ctx.func_suffix}"
-                                    )
-                                else:
-                                    new_ctx.func_suffix = instance_suffix
+                            # for dim in np.ndindex(*mapping):
+                            #     if not ctx.unroll:
+                            #         # If not unrolled, assign tag to each instance.
+                            #         # Different tags indeicate different execution (control flow only)
+                            #         predicate_tag = freeze_list(
+                            #             ctx.func_predicate_tags[orig_name][dim]
+                            #         )
+                            #         if (
+                            #             predicate_tag
+                            #             in ctx.func_tag2instance[orig_name]
+                            #         ):
+                            #             continue
+                            #     new_ctx = old_ctx.copy()
+                            #     new_ctx.top_func = old_ctx.top_func
+                            #     new_ctx.set_ip(old_ctx.top_func)
+                            #     new_ctx.top_func_tree = node
+                            #     new_ctx.buffers = old_ctx.buffers.copy()
+                            #     new_ctx.scopes = old_ctx.scopes
+                            #     new_ctx.global_vars = old_ctx.global_vars.copy()
+                            #     for axis, val in enumerate(dim):
+                            #         new_ctx.global_vars.update(
+                            #             {"df.p" + str(axis): val}
+                            #         )
+                            #     node.name = construct_kernel_name(orig_name, dim)
+                            #     # Append suffix from parent context to ensure uniqueness
+                            #     if hasattr(ctx, "func_suffix"):
+                            #         node.name = f"{node.name}_{ctx.func_suffix}"
+                            #     # Store the kernel name for later call insertion
+                            #     # Use ctx since AST is reparsed for each region call
+                            #     ctx._kernel_instance_names[(orig_name, dim)] = node.name
 
-                                # Create a copy of the node to avoid modifying the original AST
-                                # and remove the kernel decorator to prevent infinite recursion
-                                new_node = copy.copy(node)
-                                new_node.decorator_list = [
-                                    d
-                                    for d in node.decorator_list
-                                    if not (
-                                        isinstance(d, ast.Call)
-                                        and isinstance(d.func, ast.Attribute)
-                                        and d.func.attr == "kernel"
-                                    )
-                                ]
+                            #     # Update func_suffix for children
+                            #     instance_suffix = "_".join([str(x) for x in dim])
+                            #     if hasattr(ctx, "func_suffix"):
+                            #         new_ctx.func_suffix = (
+                            #             f"{instance_suffix}_{ctx.func_suffix}"
+                            #         )
+                            #     else:
+                            #         new_ctx.func_suffix = instance_suffix
 
-                                func_op = ASTTransformer.build_FunctionDef(
-                                    new_ctx, new_node
-                                )
-                                func_op.attributes["df.kernel"] = UnitAttr.get()
-                                # Mark kernels inside sub-regions so they aren't called from top
-                                if hasattr(ctx, "func_suffix"):
-                                    func_op.attributes["df.nested_kernel"] = (
-                                        UnitAttr.get()
-                                    )
-                                if not ctx.unroll:
-                                    func_op.attributes["tag"] = StringAttr.get(
-                                        f"{orig_name}_{str(predicate_tag)}"
-                                    )
-                                    ctx.func_tag2instance[orig_name][
-                                        predicate_tag
-                                    ] = func_op
-                                # Restore original name for next iteration
-                                node.name = orig_name
+                            #     # Create a copy of the node to avoid modifying the original AST
+                            #     # and remove the kernel decorator to prevent infinite recursion
+                            #     new_node = copy.copy(node)
+                            #     new_node.decorator_list = [
+                            #         d
+                            #         for d in node.decorator_list
+                            #         if not (
+                            #             isinstance(d, ast.Call)
+                            #             and isinstance(d.func, ast.Attribute)
+                            #             and d.func.attr == "kernel"
+                            #         )
+                            #     ]
+
+                            #     func_op = ASTTransformer.build_FunctionDef(
+                            #         new_ctx, new_node
+                            #     )
+                            #     func_op.attributes["df.kernel"] = UnitAttr.get()
+                            #     # Mark kernels inside sub-regions so they aren't called from top
+                            #     if hasattr(ctx, "func_suffix"):
+                            #         func_op.attributes["df.nested_kernel"] = (
+                            #             UnitAttr.get()
+                            #         )
+                            #     if not ctx.unroll:
+                            #         func_op.attributes["tag"] = StringAttr.get(
+                            #             f"{orig_name}_{str(predicate_tag)}"
+                            #         )
+                            #         ctx.func_tag2instance[orig_name][
+                            #             predicate_tag
+                            #         ] = func_op
+                            #     # Restore original name for next iteration
+                            #     node.name = orig_name
 
                             return
 
@@ -3090,16 +3103,6 @@ class ASTTransformer(ASTBuilder):
                         if ctx.enable_tensor
                         else alloc_op
                     )
-            if fn_name == "get_pid":
-                res = []
-                for i in range(3):
-                    if f"df.p{i}" in ctx.global_vars:
-                        res.append(
-                            MockConstant(
-                                ctx.global_vars[f"df.p{i}"], ctx, dtype=Index()
-                            )
-                        )
-                return tuple(res)
             arg_types = []
             if isinstance(new_args[0].result, OpResultList):
                 for arg in new_args:
@@ -3649,36 +3652,30 @@ class ASTTransformer(ASTBuilder):
 
     @staticmethod
     def build_With(ctx: ASTContext, node: ast.With):
-        # Compile-time comparison
-        if node.items[0].context_expr.func.attr in {"meta_if", "meta_elif"}:
-            cond = ASTResolver.resolve_constant(node.items[0].context_expr.args[0], ctx)
+        if node.items[0].context_expr.func.attr in {
+            "meta_if",
+            "meta_elif",
+            "meta_else",
+        }:
             if node.items[0].context_expr.func.attr == "meta_if":
-                final_cond = cond
-                if len(ctx.meta_if_stack) > ctx.with_scope_level:
-                    ctx.meta_if_stack[ctx.with_scope_level].append(final_cond)
-                else:
-                    ctx.meta_if_stack.append([final_cond])
-            else:  # meta_elif
-                assert (
-                    len(ctx.meta_if_stack[ctx.with_scope_level]) > 0
-                ), "Unmatched allo.meta_elif()"
-                if ctx.meta_if_stack[ctx.with_scope_level][
-                    -1
-                ]:  # previous `if` has already satisfied
-                    ctx.meta_if_stack[ctx.with_scope_level].pop()
-                    ctx.meta_if_stack[ctx.with_scope_level].append(True)
-                    final_cond = False
-                else:
-                    ctx.meta_if_stack[ctx.with_scope_level].pop()
-                    ctx.meta_if_stack[ctx.with_scope_level].append(cond)
-                    final_cond = cond
-        elif node.items[0].context_expr.func.attr == "meta_else":
-            assert (
-                len(ctx.meta_if_stack[ctx.with_scope_level]) > 0
-            ), "Unmatched allo.meta_else()"
-            final_cond = not ctx.meta_if_stack[ctx.with_scope_level][-1]
-            ctx.meta_if_stack[ctx.with_scope_level].pop()
-        elif node.items[0].context_expr.func.attr == "meta_for":
+                meta_if_region = allo_d.meta_if(ip=ctx.get_ip())
+                block = meta_if_region.body.blocks.append()
+                yield_op = allo_d.yield_([], ip=InsertionPoint(block))
+                ctx.set_meta_if_ip(yield_op, tag=node.meta_if_region)
+            meta_case = allo_d.meta_case(
+                node.condition, ip=ctx.get_meta_if_ip(tag=node.meta_if_region)
+            )
+            block = meta_case.body.blocks.append()
+            ctx.set_ip(block)
+            ctx.with_scope_level += 1
+            with ctx.block_scope_guard():
+                build_stmts(ctx, node.body)
+                allo_d.yield_([], ip=ctx.get_ip())
+            ctx.with_scope_level -= 1
+            ctx.pop_ip()
+            return meta_case
+
+        if node.items[0].context_expr.func.attr == "meta_for":
             assert (
                 len(node.items[0].context_expr.args) <= 3
             ), "Only support three arguments (lower, upper bound, and step) for `allo.meta_for()`"
@@ -3726,16 +3723,6 @@ class ASTTransformer(ASTBuilder):
                     ctx.pop_ip()
                     ctx.global_vars.pop(var)
             return
-        else:
-            raise RuntimeError("Unsupported meta function")
-        if final_cond:
-            ctx.with_scope_level += 1
-            with ctx.block_scope_guard():
-                stmts = build_stmts(ctx, node.body)
-            # clear inner context
-            ctx.meta_if_stack = ctx.meta_if_stack[: ctx.with_scope_level]
-            ctx.with_scope_level -= 1
-            return stmts[-1]
         return "WithStatementSkipped"
 
     @staticmethod

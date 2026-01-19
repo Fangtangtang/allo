@@ -61,6 +61,7 @@ class ASTContext:
         verbose=False,
     ):
         self.ip_stack = []
+        self.meta_if_ip_map = {}
         self.buffers = {}
         self.scopes = []  # variable scope
         # ast tree
@@ -96,8 +97,7 @@ class ASTContext:
         self.ext_libs = []
         # metaprogramming
         self.with_scope_level = 0
-        self.meta_if_stack = []
-        self.raw_meta_if_stack = []
+        self.meta_if_stack: list[tuple[list, int]] = []
         # df.kernel name -> {dim ids -> predicate tag},
         #   predicate tag indicates the control flow in the kernel instance
         self.func_predicate_tags = (
@@ -108,7 +108,6 @@ class ASTContext:
         # a nested structure of (predicate, []),
         #  the predicate will be used to eval with specific pid to decide the control flow
         self.predicate_list = tuple(("True", []))
-        self.predicate_stack = [self.predicate_list[1]]
         # for pid, if only one sample is constructed for df.kernel instances, pid are only symbols
         self.symbolic = {}
         # a set of `meta_for` loops that must be unrolled
@@ -151,8 +150,16 @@ class ASTContext:
             ip = InsertionPoint(ip)
         self.ip_stack.append(ip)
 
+    def set_meta_if_ip(self, ip, tag):
+        if not isinstance(ip, InsertionPoint):
+            ip = InsertionPoint(ip)
+        self.meta_if_ip_map[tag] = ip
+
     def get_ip(self):
         return self.ip_stack[-1]
+
+    def get_meta_if_ip(self, tag):
+        return self.meta_if_ip_map[tag]
 
     def pop_ip(self):
         return self.ip_stack.pop()

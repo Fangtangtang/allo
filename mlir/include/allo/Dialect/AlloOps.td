@@ -935,7 +935,7 @@ def OrOp : Allo_Op<"or"> {
 //===----------------------------------------------------------------------===//
 
 def YieldOp : Allo_Op<"yield", [NoMemoryEffect, Terminator,
-                               ParentOneOf<["AndOp", "OrOp", "MetaIfOp", "MetaCaseOp", "MetaDefaultOp"]>]> {
+                               ParentOneOf<["AndOp", "OrOp", "MetaIfOp", "MetaCaseOp"]>]> {
   let summary = "yield and termination operation";
   let description = [{
     "allo.yield" yields an SSA value from the Allo dialect op region and
@@ -1100,7 +1100,7 @@ def TransformLayoutOp : Allo_Op<"transform_layout"> {
 // Meta-programming operations
 //===----------------------------------------------------------------------===//
 
-def Allo_MetaIfOp : Allo_Op<"meta_if", [
+def MetaIfOp : Allo_Op<"meta_if", [
     SingleBlock,
     SingleBlockImplicitTerminator<"YieldOp">
   ]> {
@@ -1120,7 +1120,7 @@ def Allo_MetaIfOp : Allo_Op<"meta_if", [
   let assemblyFormat = "$body attr-dict";
 }
 
-def Allo_MetaCaseOp : Allo_Op<"meta_case", [
+def MetaCaseOp : Allo_Op<"meta_case", [
     HasParent<"MetaIfOp">,
     SingleBlockImplicitTerminator<"YieldOp">
   ]> {
@@ -1130,16 +1130,7 @@ def Allo_MetaCaseOp : Allo_Op<"meta_case", [
   let assemblyFormat = "$condition $body attr-dict";
 }
 
-def Allo_MetaDefaultOp : Allo_Op<"meta_default", [
-    HasParent<"MetaIfOp">,
-    SingleBlockImplicitTerminator<"YieldOp">
-  ]> {
-  let summary = "default branch for meta_if";
-  let regions = (region SizedRegion<1>:$body);
-  let assemblyFormat = "$body attr-dict";
-}
-
-def Allo_MeshCoordOp : Allo_Op<"mesh_coord", [NoMemoryEffect]> {
+def MeshCoordOp : Allo_Op<"mesh_coord", [NoMemoryEffect]> {
   let summary = "get program id on queried axies";
   let arguments = (ins FlatSymbolRefAttr:$mesh, StrAttr:$axis);
   let results = (outs Builtin_Index:$result);
