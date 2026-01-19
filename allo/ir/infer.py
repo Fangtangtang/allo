@@ -1354,7 +1354,6 @@ class TypeInferer(ASTVisitor):
             ctx.meta_fors_to_unroll.update(loops_to_unroll)
             if node.items[0].context_expr.func.attr == "meta_if":
                 if len(ctx.meta_if_stack) > ctx.with_scope_level:
-                    assert len(ctx.meta_if_stack[ctx.with_scope_level]) == 0
                     ctx.meta_if_stack[ctx.with_scope_level] = (
                         [symbolic_cond],
                         ctx.meta_if_stack[ctx.with_scope_level][1] + 1,

@@ -1110,9 +1110,7 @@ def MetaIfOp : Allo_Op<"meta_if", [
       allo.meta_case "condition" {
         ...
       }
-      allo.meta_default {
         ...
-      }
     }
   }];
   

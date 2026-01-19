@@ -3659,6 +3659,7 @@ class ASTTransformer(ASTBuilder):
         }:
             if node.items[0].context_expr.func.attr == "meta_if":
                 meta_if_region = allo_d.meta_if(ip=ctx.get_ip())
+                meta_if_region.attributes["tag"] = StringAttr.get(node.meta_if_region)
                 block = meta_if_region.body.blocks.append()
                 yield_op = allo_d.yield_([], ip=InsertionPoint(block))
                 ctx.set_meta_if_ip(yield_op, tag=node.meta_if_region)
