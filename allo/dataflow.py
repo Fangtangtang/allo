@@ -579,6 +579,12 @@ def customize(func, enable_tensor=False, opt_default=False):
 
     if opt_default:
         df_primitive_default(s)
+    # ###########################
+    print(s.module)
+    import sys
+
+    sys.exit(0)
+    # ###########################
 
     return s
 
@@ -615,6 +621,12 @@ def build(
             unroll=False,
             typing_rule_set="cpp-style",
         )
+        # ###########################
+        print(s.module)
+        import sys
+
+        sys.exit(0)
+        # ###########################
         stream_info, stream_types_dict, extra_stream_info = move_stream_to_interface(
             s, with_stream_type=True, with_extra_info=True, unroll=False
         )

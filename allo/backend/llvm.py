@@ -42,12 +42,13 @@ from ..utils import (
     create_output_struct,
     extract_out_np_arrays_from_out_struct,
     ranked_memref_to_numpy,
+    register_dialect,
 )
 
 
 def invoke_mlir_parser(mod: str):
     with Context() as ctx, Location.unknown():
-        allo_d.register_dialect(ctx)
+        register_dialect(ctx)
         module = Module.parse(str(mod), ctx)
     return module
 
@@ -56,7 +57,7 @@ class LLVMModule:
     def __init__(self, mod, top_func_name, ext_libs=None):
         # Copy the module to avoid modifying the original one
         with Context() as ctx:
-            allo_d.register_dialect(ctx)
+            register_dialect(ctx)
             self.module = Module.parse(str(mod), ctx)
             self.top_func_name = top_func_name
             func = find_func_in_module(self.module, top_func_name)

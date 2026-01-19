@@ -31,7 +31,7 @@ from ..._mlir.ir import (
 from ..._mlir.passmanager import PassManager as mlir_pass_manager
 from ...passes import analyze_read_write_patterns
 from ...memory import DTensor
-from ...utils import construct_kernel_name
+from ...utils import construct_kernel_name, register_dialect
 from .external_kernel import ExternalModule, ExternalModuleBase
 from .mlir_codegen import CodeGenerator
 from .vliw import vliw
@@ -782,7 +782,7 @@ class AIE_MLIRModule:
             mlir_pass_manager.parse(pipeline).run(self.allo_module.operation)
         # ------------------------- mlir-aie code generation -------------------------
         with allo_ir.ir.Context() as ctx, allo_ir.ir.Location.unknown():
-            allo_d.register_dialect(ctx)
+            register_dialect(ctx, dataflow=True)
             pattern = re.compile(r"memref<([\dx]+)xi4>")
             module_str = str(self.allo_module)
 

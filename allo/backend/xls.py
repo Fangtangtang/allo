@@ -11,6 +11,7 @@ from .._mlir.ir import Context, Location, Module, UnitAttr
 from .._mlir.passmanager import PassManager
 from ..ir.transform import find_func_in_module
 from ..passes import decompose_library_function, _mlir_lower_pipeline
+from ..utils import register_dialect
 
 # Regex patterns for floats, dynamic shapes, and fixed-point types
 FLOAT_RE = re.compile(r"\b(f16|f32|f64|bf16)\b")
@@ -354,7 +355,7 @@ class XLSCCModule:
 
         # Parse MLIR + run minimal lowering
         with Context() as ctx, Location.unknown():
-            allo_d.register_dialect(ctx)
+            register_dialect(ctx)
             self.module = Module.parse(str(mlir_text_or_module), ctx)
 
             self.module = decompose_library_function(self.module)

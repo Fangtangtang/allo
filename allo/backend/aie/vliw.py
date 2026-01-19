@@ -18,6 +18,7 @@ from ...passes import (
     decompose_library_function,
     analyze_read_write_patterns,
 )
+from ...utils import register_dialect
 from ...ir.transform import find_func_in_module
 from .external_kernel import ExternalModule
 
@@ -156,7 +157,7 @@ class VLIWModule:
 
         # Process MLIR module through standard pipeline
         with Context() as ctx, Location.unknown():
-            allo_d.register_dialect(ctx)
+            register_dialect(ctx, dataflow=True)
             self.module = Module.parse(str(mod), ctx)
             self.func = find_func_in_module(self.module, top_func_name)
 

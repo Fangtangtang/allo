@@ -48,7 +48,7 @@ from .._mlir.passmanager import PassManager
 from .._mlir.execution_engine import ExecutionEngine
 from ..ir.transform import find_func_in_module
 from ..passes import decompose_library_function
-from ..utils import get_func_inputs_outputs
+from ..utils import get_func_inputs_outputs, register_dialect
 
 
 # The `walk` function
@@ -880,7 +880,7 @@ def convert_critical_write_to_atomic_write(module: Module):
 class LLVMOMPModule(LLVMModule):
     def __init__(self, mod: Module, top_func_name: str, ext_libs=None):
         with Context() as ctx:
-            allo_d.register_dialect(ctx)
+            register_dialect(ctx)
             self.module = Module.parse(str(mod), ctx)
             self.top_func_name = top_func_name
             func = find_func_in_module(self.module, top_func_name)

@@ -51,6 +51,7 @@ from .._mlir.dialects import (
     arith as arith_d,
     math as math_d,
     linalg as linalg_d,
+    sdy as sdy_d,
 )
 from .._mlir.exceptions import DTypeError
 from .utils import (
@@ -1997,6 +1998,16 @@ class ASTTransformer(ASTBuilder):
                                 ctx.global_vars,
                             )
                             orig_name = node.name
+                            axis = []
+                            with ctx.get_ip():
+                                for i, dim in enumerate(mapping):
+                                    axis.append(
+                                        sdy_d.MeshAxisAttr.get(f"axis_{i}", dim)
+                                    )
+                                sdy_d.mesh(
+                                    sym_name=f"{orig_name}_mesh",
+                                    mesh=sdy_d.MeshAttr.get(axis),
+                                )
                             if orig_name not in ctx.func_tag2instance:
                                 ctx.func_tag2instance[orig_name] = {}
                             # Initialize dict to store kernel instance names for call insertion

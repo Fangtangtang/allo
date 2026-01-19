@@ -48,6 +48,7 @@ from ..utils import (
     c2allo_type,
     get_bitwidth_from_type,
     np_supported_types,
+    register_dialect,
 )
 
 
@@ -199,7 +200,7 @@ class HLSModule:
         if self.mode is not None:
             configs["mode"] = self.mode
         with Context() as ctx, Location.unknown():
-            allo_d.register_dialect(ctx)
+            register_dialect(ctx)
             self.module = Module.parse(str(mod), ctx)
             func = find_func_in_module(self.module, top_func_name)
             func.attributes["top"] = UnitAttr.get()

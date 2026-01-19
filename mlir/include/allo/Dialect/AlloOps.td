@@ -1139,4 +1139,11 @@ def Allo_MetaDefaultOp : Allo_Op<"meta_default", [
   let assemblyFormat = "$body attr-dict";
 }
 
+def Allo_MeshCoordOp : Allo_Op<"mesh_coord", [NoMemoryEffect]> {
+  let summary = "get program id on queried axies";
+  let arguments = (ins FlatSymbolRefAttr:$mesh, StrAttr:$axis);
+  let results = (outs Builtin_Index:$result);
+  let assemblyFormat = "$mesh `[` $axis `]` attr-dict `:` type($result)";
+}
+
 #endif // ALLO_OPS

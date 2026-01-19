@@ -10,6 +10,7 @@ from .._mlir.ir import (
 from .._mlir.dialects import (
     allo as allo_d,
 )
+from ..utils import register_dialect
 from ..customize import customize
 
 
@@ -33,7 +34,7 @@ def unify(func1: Callable, func2: Callable, loop_num: int):
         The unified MLIRModule, can be used to create LLVMModule and HLSModule in allo
     """
     mlir_ctx = Context()
-    allo_d.register_dialect(mlir_ctx)
+    register_dialect(mlir_ctx)
     s1 = customize(func1, context=mlir_ctx)
     s2 = customize(func2, context=mlir_ctx)
     unified_module = allo_d.unify_kernels(s1.module, s2.module, loop_num)
