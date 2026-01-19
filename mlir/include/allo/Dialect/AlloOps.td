@@ -935,7 +935,7 @@ def OrOp : Allo_Op<"or"> {
 //===----------------------------------------------------------------------===//
 
 def YieldOp : Allo_Op<"yield", [NoMemoryEffect, Terminator,
-                               ParentOneOf<["AndOp, OrOp"]>]> {
+                               ParentOneOf<["AndOp", "OrOp", "MetaIfOp", "MetaCaseOp", "MetaDefaultOp"]>]> {
   let summary = "yield and termination operation";
   let description = [{
     "allo.yield" yields an SSA value from the Allo dialect op region and
@@ -1094,6 +1094,49 @@ def TransformLayoutOp : Allo_Op<"transform_layout"> {
             `strides` `=` $strides
             attr-dict `:` type($source) `->` type($result)
   }];
+}
+
+//===----------------------------------------------------------------------===//
+// Meta-programming operations
+//===----------------------------------------------------------------------===//
+
+def Allo_MetaIfOp : Allo_Op<"meta_if", [
+    SingleBlock,
+    SingleBlockImplicitTerminator<"YieldOp">
+  ]> {
+  let summary = "meta-programming if-else-if construct";
+  let description = [{
+    allo.meta_if {
+      allo.meta_case "condition" {
+        ...
+      }
+      allo.meta_default {
+        ...
+      }
+    }
+  }];
+  
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = "$body attr-dict";
+}
+
+def Allo_MetaCaseOp : Allo_Op<"meta_case", [
+    HasParent<"MetaIfOp">,
+    SingleBlockImplicitTerminator<"YieldOp">
+  ]> {
+  let summary = "case branch for meta_if";
+  let arguments = (ins StrAttr:$condition);
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = "$condition $body attr-dict";
+}
+
+def Allo_MetaDefaultOp : Allo_Op<"meta_default", [
+    HasParent<"MetaIfOp">,
+    SingleBlockImplicitTerminator<"YieldOp">
+  ]> {
+  let summary = "default branch for meta_if";
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = "$body attr-dict";
 }
 
 #endif // ALLO_OPS
