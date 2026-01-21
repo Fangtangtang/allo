@@ -1160,6 +1160,7 @@ class ASTTransformer(ASTBuilder):
                 and node.value.func.attr == "get_pid"
             ):
                 for i, target in enumerate(targets):
+                    # TODO: add target symbol for pid?? # pid = MockConstant(ctx.global_vars[f"df.p{i}"], ctx, dtype=Index())
                     ctx.global_vars[ast.unparse(target)] = ctx.global_vars[f"df.p{i}"]
                     ctx.symbolic[ast.unparse(target)] = f"p{i}"
                 return None
@@ -2076,7 +2077,6 @@ class ASTTransformer(ASTBuilder):
                                     ] = func_op
                                 # Restore original name for next iteration
                                 node.name = orig_name
-
                             return
 
                         if decorator.func.attr == "region":
@@ -3082,6 +3082,16 @@ class ASTTransformer(ASTBuilder):
                         if ctx.enable_tensor
                         else alloc_op
                     )
+            if fn_name == "get_pid":
+                res = []
+                for i in range(3):
+                    if f"df.p{i}" in ctx.global_vars:
+                        res.append(
+                            MockConstant(
+                                ctx.global_vars[f"df.p{i}"], ctx, dtype=Index()
+                            )
+                        )
+                return tuple(res)
             arg_types = []
             if isinstance(new_args[0].result, OpResultList):
                 for arg in new_args:

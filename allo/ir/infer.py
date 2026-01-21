@@ -400,9 +400,6 @@ class TypeInferer(ASTVisitor):
                 target_ = ctx.get_symbol(target.id, allow_missing=True)
                 target_shape, target_dtype = None, None
                 if target_ is not None:
-                    assert not getattr(
-                        target_.dtype, "constexpr", False
-                    ), "Cannot reassign constants."
                     target_shape, target_dtype = target_.shape, target_.dtype
                 if not rhs_visited:
                     rhs = TypeInferer.visit_assignment_val(
@@ -475,9 +472,7 @@ class TypeInferer(ASTVisitor):
             lhs = visit_stmt(ctx, node.target)
         elif isinstance(node.target, ast.Name):  # scalar
             lhs = ctx.get_symbol(node.target.id)
-            assert lhs is not None and not getattr(
-                lhs.dtype, "constexpr", False
-            ), "Cannot reassign constants."
+            assert lhs is not None
             node.target.dtype, node.target.shape = lhs.dtype, lhs.shape
         else:
             raise RuntimeError("Unsupported AugAssign")
@@ -1232,8 +1227,13 @@ class TypeInferer(ASTVisitor):
                 return node
             new_args = visit_stmts(ctx, node.args)
             if len(new_args) == 0:
-                node.shape = None
-                node.dtype = None
+                # No argument
+                if fn_name == "get_pid":
+                    node.shape = (tuple(), tuple(), tuple())
+                    node.dtype = (Index(), Index(), Index())
+                else:
+                    node.shape = None
+                    node.dtype = None
                 return node
             if all(len(arg.shape) == 0 for arg in new_args):
                 # element-wise operation
