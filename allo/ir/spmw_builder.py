@@ -1117,12 +1117,7 @@ class ASTTransformer(ASTBuilder):
                     assert idx is None, "Not Supported"
                     ctx.buffers[target.id] = rhs
                     # FIXME (Shihan): GetGlobalOp has a "name" attribute, which may have assignment conflict
-                    # For GetGlobalOp (constant tensors), the name is the global symbol reference,
-                    # not the target variable name. Skip the assertion check for GetGlobalOp.
-                    if isinstance(rhs, memref_d.GetGlobalOp):
-                        # GetGlobalOp's name is a symbol reference - don't try to set/check attributes
-                        pass
-                    elif "name" in rhs.attributes:
+                    if "name" in rhs.attributes:
                         assert rhs.attributes["name"].value == target.id
                     else:
                         rhs.attributes["name"] = StringAttr.get(target.id)
@@ -2067,13 +2062,6 @@ class ASTTransformer(ASTBuilder):
                                     func_op.attributes["df.nested_kernel"] = (
                                         UnitAttr.get()
                                     )
-                                if not ctx.unroll:
-                                    func_op.attributes["tag"] = StringAttr.get(
-                                        f"{orig_name}_{str(predicate_tag)}"
-                                    )
-                                    ctx.func_tag2instance[orig_name][
-                                        predicate_tag
-                                    ] = func_op
                                 # Restore original name for next iteration
                                 node.name = orig_name
 
