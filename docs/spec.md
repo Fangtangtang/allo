@@ -50,6 +50,9 @@ def kernel(A: int32[32, 32], B: int32[32, 32]) -> int32[32, 32]:
     C: int32[32, 32] = 0
     # ... logic ...
     return C
+
+def scalar_op(a: int32, b: int32) -> int32:
+    return a + b
 ```
 
 #### Polymorphism
@@ -70,6 +73,7 @@ def kernel[T, M, N](A: "T[M, N]") -> "T[M, N]":
 *   **`allo.grid(dim1, dim2, ...)`**: Imperfectly nested loops, often used for iteration over multi-dimensional arrays.
     *   Example: `for i, j in allo.grid(32, 32):`
 *   **`allo.reduction(dim1, dim2, ...)`**: Reduction loops, hinting usually for accumulation.
+*   **Unsupported**: `break` and `continue` statements are currently not supported.
 
 #### Conditionals
 *   **`if` / `elif` / `else`**: Standard Python conditionals.
@@ -148,8 +152,10 @@ For defining parametric connectivity and composed logic.
 
 *   **`allo.meta_if(cond)` / `meta_else()` / `meta_elif(cond)`**:
     *   Generates static structure based on elaboration-time constants (like PID).
+    *   **Constraint**: The condition must be a compile-time constant.
 *   **`allo.meta_for`**:
     *   Unrolls logic at compile time.
+    *   **Constraint**: Loop bounds and steps must be compile-time constants.
 *   **`df.get_pid()`**:
     *   Returns the coordinate of the current kernel instance in the spatial map.
 
