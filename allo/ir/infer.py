@@ -31,7 +31,7 @@ from .types import (
     float64,
     Struct,
     Stream,
-    stateful,
+    Stateful,
     ConstExpr,
 )
 from .typing_rule import get_typing_rule
@@ -84,9 +84,7 @@ class TypeInferer(ASTVisitor):
             base_type, base_shape, _ = TypeInferer.visit_type_hint(ctx, node.value)
             assert isinstance(base_type, Stream) and len(base_shape) == 0
             elts = (
-                node.slice.elts
-                if isinstance(node.slice, ast.Tuple)
-                else [node.slice]
+                node.slice.elts if isinstance(node.slice, ast.Tuple) else [node.slice]
             )
             shape = tuple(ASTResolver.resolve(x, ctx.global_vars) for x in elts)
             assert all(
@@ -156,7 +154,7 @@ class TypeInferer(ASTVisitor):
         spec = ASTResolver.resolve(node.right, ctx.global_vars)
         if isinstance(spec, list):
             spec = Layout(spec)
-        if spec is stateful:
+        if spec is Stateful:
             # Create a copy with stateful=True
             stateful_dtype = copy.deepcopy(dtype)
             stateful_dtype.stateful = True
@@ -424,6 +422,9 @@ class TypeInferer(ASTVisitor):
                 target_ = ctx.get_symbol(target.id, allow_missing=True)
                 target_shape, target_dtype = None, None
                 if target_ is not None:
+                    assert not getattr(
+                        target_.dtype, "constexpr", False
+                    ), "Cannot reassign constants."
                     target_shape, target_dtype = target_.shape, target_.dtype
                 if not rhs_visited:
                     rhs = TypeInferer.visit_assignment_val(
@@ -468,7 +469,7 @@ class TypeInferer(ASTVisitor):
 
     @staticmethod
     def visit_constant_tensor(
-        ctx: ASTContext, node: ast.expr, np_values: np.array, dtype: AlloType
+        ctx: ASTContext, node: ast.expr, np_values: np.ndarray, dtype: AlloType
     ):
         dtype = str(dtype)
         if is_anywidth_int_type_and_not_np(dtype):
@@ -496,7 +497,9 @@ class TypeInferer(ASTVisitor):
             lhs = visit_stmt(ctx, node.target)
         elif isinstance(node.target, ast.Name):  # scalar
             lhs = ctx.get_symbol(node.target.id)
-            assert lhs is not None
+            assert lhs is not None and not getattr(
+                lhs.dtype, "constexpr", False
+            ), "Cannot reassign constants."
             node.target.dtype, node.target.shape = lhs.dtype, lhs.shape
         else:
             raise RuntimeError("Unsupported AugAssign")
@@ -578,9 +581,7 @@ class TypeInferer(ASTVisitor):
                         if index[1] is not None
                         else ctx.get_symbol(node.value.id).shape[dim]
                     )
-                    step = (
-                        index[2] if (len(index) > 2 and index[2] is not None) else 1
-                    )
+                    step = index[2] if (len(index) > 2 and index[2] is not None) else 1
                     size = (upper - lower) // step
                     if size > 0:
                         shape.append(size)
@@ -733,6 +734,9 @@ class TypeInferer(ASTVisitor):
             assert (
                 target_.dtype == target_dtype and target_.shape == target_shape
             ), f"Invalid assignment to {node.target.id}, type mismatch."
+            assert not getattr(
+                target_dtype, "constexpr", False
+            ), "Cannot reassign constants."
 
         # If the variable is a compile-time constant (ConstExpr), we should evaluate
         # the RHS at Python level using ASTResolver.resolve() BEFORE calling
@@ -750,8 +754,7 @@ class TypeInferer(ASTVisitor):
                 ctx, node.value, target_shape, target_dtype
             )
 
-        if target_ is None and not getattr(target_dtype, "constexpr", False):
-            # new def - but NOT for ConstExpr, which should only be in global_vars
+        if target_ is None:
             ctx.put_symbol(name=node.target.id, val=node.target)
         node.target.dtype = node.dtype = target_dtype
         node.target.shape = node.shape = target_shape
@@ -770,11 +773,14 @@ class TypeInferer(ASTVisitor):
         return node
 
     @staticmethod
-    def _process_kernel_decorator(ctx, node, decorator):
+    def _process_kernel_decorator(
+        ctx: ASTContext, node: ast.FunctionDef, decorator: ast.Call
+    ):
         if not (
-            isinstance(decorator.func, ast.Attribute) and decorator.func.attr == "kernel"
+            isinstance(decorator.func, ast.Attribute)
+            and decorator.func.attr == "kernel"
         ):
-            return None, None
+            return None, []
 
         mapping, kernel_args = None, []
         for kw in decorator.keywords:
@@ -796,7 +802,9 @@ class TypeInferer(ASTVisitor):
         return mapping, kernel_args
 
     @staticmethod
-    def _get_predicate_list(predicate_raw, pid_map):
+    def _get_predicate_list(
+        predicate_raw: tuple[str, list[tuple[str, list]]], pid_map: dict[str, int]
+    ):
         """
         Recursively expand `predicate` based on conditions and pid_map.
         Returns a list of results, converted from cond_list:
@@ -807,18 +815,20 @@ class TypeInferer(ASTVisitor):
         results = []
         for cond, val in cond_list:
             if eval(cond, pid_map):
-                assert all(
-                    isinstance(v, tuple) and len(v) == 2 for v in val
-                )
-                results.append(
-                    TypeInferer._get_predicate_list(("True", val), pid_map)
-                )
+                assert all(isinstance(v, tuple) and len(v) == 2 for v in val)
+                results.append(TypeInferer._get_predicate_list(("True", val), pid_map))
             else:
                 results.append(None)
         return results
 
     @staticmethod
-    def _instantiate_kernel(ctx, node, old_ctx, mapping, kernel_args):
+    def _instantiate_kernel(
+        ctx: ASTContext,
+        node: ast.FunctionDef,
+        old_ctx: ASTContext,
+        mapping: tuple[int],
+        kernel_args: list[str],
+    ):
         # Validate args
         for top_arg_name, arg in zip(kernel_args, node.args.args):
             top_arg = ctx.get_symbol(name=top_arg_name.id)
@@ -1361,7 +1371,7 @@ class TypeInferer(ASTVisitor):
                 )
             elif op_name == "matmul":
                 # FIXME (Shihan): for aie backend
-                if not ctx.unroll and node.dtype == int4:
+                if not ctx.typing_rule_set != "default" and node.dtype == int4:
                     node.dtype = int8
                 assert (
                     argAshape[-1] == argBshape[-2]

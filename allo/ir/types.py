@@ -91,27 +91,16 @@ class AlloType:
         return hash((self.name, self.stateful))
 
 
-def stateful(dtype: AlloType):
+class Stateful:
     """
-    Marks a type as stateful, making it persistent across kernel invocations.
+    Refinement type, marks a type as stateful, making it persistent across kernel invocations.
 
     Usage:
-        state: stateful(int32)           # Stateful scalar
-        counter: stateful(int32[10])     # Stateful array
-
-    Parameters
-    ----------
-    dtype : AlloType
-        The underlying type to mark as stateful
-
-    Returns
-    -------
-    tuple
-        A marker tuple that will be processed during type inference
+        acc: Int(4) @ stateful = 0          # Stateful scalar
+        window: float32[4] @ stateful       # Stateful array
     """
-    # TODO: Return type should be AlloType with stateful attribute set,
-    #       but currently returns tuple for AST
-    return ("stateful", dtype)
+
+    pass
 
 
 class Index(AlloType):
