@@ -35,7 +35,7 @@ class TypeAnnotation:
         self.shape = shape
 
     def __matmul__(self, other):
-        """Support the @ operator for memory/layout annotations."""
+        """Support the @ operator for memory/layout/stateful annotations."""
         # Return self to allow chaining, the actual spec is extracted from AST
         return self
 
@@ -96,8 +96,8 @@ class Stateful:
     Refinement type, marks a type as stateful, making it persistent across kernel invocations.
 
     Usage:
-        acc: Int(4) @ stateful = 0          # Stateful scalar
-        window: float32[4] @ stateful       # Stateful array
+        acc: Int(4) @ Stateful = 0          # Stateful scalar
+        window: float32[4] @ Stateful       # Stateful array
     """
 
     pass

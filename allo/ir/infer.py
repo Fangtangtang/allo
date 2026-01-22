@@ -405,10 +405,17 @@ class TypeInferer(ASTVisitor):
                 isinstance(node.value.func, ast.Attribute)
                 and node.value.func.attr == "get_pid"
             ):
+                pid_dtype = Index()
+                pid_dtype.constexpr = True
                 for i, target in enumerate(targets):
-                    # TODO: add target symbol for pid??
-                    ctx.global_vars[ast.unparse(target)] = ctx.global_vars[f"df.p{i}"]
-                    ctx.symbolic[ast.unparse(target)] = f"p{i}"
+                    if isinstance(target, ast.Name):
+                        # TODO: add target symbol for pid??
+                        ctx.global_vars[ast.unparse(target)] = ctx.global_vars[
+                            f"df.p{i}"
+                        ]
+                        ctx.symbolic[ast.unparse(target)] = f"p{i}"
+                        target.shape, target.dtype = (), pid_dtype
+                        ctx.put_symbol(name=target.id, val=target)
                 return node
             rhs = visit_stmt(ctx, node.value)
             rhs_visited = True
@@ -1487,24 +1494,11 @@ class TypeInferer(ASTVisitor):
         # Compile-time comparison
         if node.items[0].context_expr.func.attr in {"meta_if", "meta_elif"}:
             cond = ASTResolver.resolve_constant(node.items[0].context_expr.args[0], ctx)
-            alive_var_names = ctx.get_alive_var_names()
-            # Filter out ConstExpr variables from alive_var_names
-            filtered_var_names = set()
-            for name in alive_var_names:
-                sym = ctx.get_symbol(name)
-                # If the symbol is a ConstExpr, we should treat it as a constant
-                # and allow it to be resolved by the ASTResolver / ReplaceNames.
-                # Therefore, we remove it from the "variables" list which represents
-                # dynamic variables that cannot be resolved at compile time.
-                if not (
-                    hasattr(sym, "dtype") and getattr(sym.dtype, "constexpr", False)
-                ):
-                    filtered_var_names.add(name)
             symbolic_cond, loops_to_unroll = get_symbolic_expr(
                 copy.deepcopy(node.items[0].context_expr.args[0]),
                 ctx.symbolic,
                 ctx.global_vars,
-                filtered_var_names,
+                ctx.get_alive_var_names(),
             )
             ctx.meta_fors_to_unroll.update(loops_to_unroll)
             if node.items[0].context_expr.func.attr == "meta_if":
@@ -1567,14 +1561,18 @@ class TypeInferer(ASTVisitor):
                         node.items[0].context_expr.args[2], ctx
                     )
                 )
-            var = node.items[0].optional_vars.id
+            var = node.items[0].optional_vars
+            iter_dtype = Index()
+            iter_dtype.constexpr = True
+            var.shape, var.dtype = (), iter_dtype
             for i in range(*rargs):
-                ctx.global_vars[var] = i
-                ctx.symbolic[var] = (i, node)
+                ctx.global_vars[var.id] = i
+                ctx.symbolic[var.id] = (i, node)
                 with ctx.block_scope_guard():
+                    ctx.put_symbol(name=var.id, val=var)
                     visit_stmts(ctx, node.body)
-                ctx.global_vars.pop(var)
-                ctx.symbolic.pop(var)
+                ctx.global_vars.pop(var.id)
+                ctx.symbolic.pop(var.id)
                 if not ctx.unroll and node not in ctx.meta_fors_to_unroll:
                     break
             node.dtype = None

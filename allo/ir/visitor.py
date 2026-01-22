@@ -409,8 +409,6 @@ class ReplaceNames(ast.NodeTransformer):
         self.special_symbol = set()
 
     def visit_Name(self, node):
-        if node.id in self.variables:
-            raise ValueError("Fail to resolve the expression as symbolic expression.")
         if node.id in self.symbolic_mapping:
             symbol_var = self.symbolic_mapping[node.id]
             if isinstance(symbol_var, str):
@@ -424,6 +422,8 @@ class ReplaceNames(ast.NodeTransformer):
             return new_node
         if node.id in self.var_map:
             return ast.Constant(self.var_map[node.id])
+        if node.id in self.variables:
+            raise ValueError("Fail to resolve the expression as symbolic expression.")
         return node
 
 
