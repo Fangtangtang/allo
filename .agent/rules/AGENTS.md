@@ -2,11 +2,13 @@
 trigger: always_on
 ---
 
-# Building
-- Run `pip install -v -e .` to build the full project (includes MLIR/C++ backend)
-- Always `conda activate allo` before building or running tests
+# Developing
 - Read `docs/source/dive/frontend_syntax.rst` for comprehensive Allo frontend syntax reference
 - Read `docs/source/dive/dataflow.rst` for the dataflow programming model (regions, kernels, streams)
+
+# Building
+- Run `pip install -v -e .` to build the full project (includes MLIR/C++ backend)
+- Always `conda activate allo` using miniconda under the user's home directory before building or running tests
 
 # Testing
 - Run `bash scripts/lint/task_lint.sh` for formatting checks
@@ -18,6 +20,7 @@ trigger: always_on
 # Code style
 - Large refactors are allowed with user confirmation, give detailed plan and reason to user for confirmation
 - Prefer general solutions instead of one-off `if/else` patches
+- Use `TODO (agent)` or `FIXME (agent)` in comments if you have doubt in the implementation
 - Place Python frontend code in `allo/`
 - Place MLIR dialects and passes code in `mlir/`
 - Add tests for new features in `tests/`

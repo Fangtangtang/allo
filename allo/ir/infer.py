@@ -75,84 +75,108 @@ class TypeInferer(ASTVisitor):
         return dtype
 
     @staticmethod
+    def _visit_type_hint_subscript(ctx: ASTContext, node: ast.Subscript):
+        if isinstance(node.value, ast.Call):
+            # e.g., a: UInt(16)[4]
+            dtype = TypeInferer.visit_call_type(ctx, node.value)
+        elif isinstance(node.value, ast.Subscript):
+            # e.g., pipe: Stream[Ty, 4][4]
+            base_type, base_shape, _ = TypeInferer.visit_type_hint(ctx, node.value)
+            assert isinstance(base_type, Stream) and len(base_shape) == 0
+            elts = (
+                node.slice.elts
+                if isinstance(node.slice, ast.Tuple)
+                else [node.slice]
+            )
+            shape = tuple(ASTResolver.resolve(x, ctx.global_vars) for x in elts)
+            assert all(
+                isinstance(x, (int)) for x in shape
+            ), "stream array shape should be a compile time constant"
+            return base_type, shape, None
+        else:
+            dtype = ASTResolver.resolve(node.value, ctx.global_vars)
+        if dtype is Stream:
+            # e.g., pipe: Stream[Ty, 4]
+            assert (
+                isinstance(node.slice, ast.Tuple) and len(node.slice.elts) == 2
+            ), "Only support `ele_type` and `depth` for now"
+            base_type, base_shape, _ = TypeInferer.visit_type_hint(
+                ctx, node.slice.elts[0]
+            )
+            depth = ASTResolver.resolve(node.slice.elts[1], ctx.global_vars)
+            stream_dtype = Stream(dtype=base_type, shape=base_shape, depth=depth)
+            shape = tuple()
+            return stream_dtype, shape, None
+        if dtype is ConstExpr:
+            # e.g., a: ConstExpr[int32]
+            base_type, base_shape, _ = TypeInferer.visit_type_hint(ctx, node.slice)
+            assert len(base_shape) == 0, "ConstExpr only supports scalar types"
+            const_dtype = copy.deepcopy(base_type)
+            const_dtype.constexpr = True
+            return const_dtype, tuple(), None
+        assert dtype is not None, f"Unsupported type `{node.value.id}`"
+        size = node.slice.value if isinstance(node.slice, ast.Index) else node.slice
+        elts = size.elts if isinstance(size, ast.Tuple) else [size]
+        shape = tuple(ASTResolver.resolve_constant(x, ctx) for x in elts)
+        return (
+            dtype,
+            shape,
+            Layout([Layout.Replicate] * len(shape)),
+        )  # default layout
+
+    @staticmethod
+    def _visit_type_hint_name(ctx: ASTContext, node: ast.Name):
+        dtype = ASTResolver.resolve(node, ctx.global_vars)
+        assert dtype is not None, f"Unsupported type `{node.id}`"
+        return dtype, tuple(), None
+
+    @staticmethod
+    def _visit_type_hint_call(ctx: ASTContext, node: ast.Call):
+        dtype = TypeInferer.visit_call_type(ctx, node)
+        return dtype, tuple(), None
+
+    @staticmethod
+    def _visit_type_hint_const(ctx: ASTContext, node: ast.Constant):
+        assert isinstance(node.value, str), "Only support string type annotation"
+        tree = ast.parse(node.value)
+        return TypeInferer.visit_type_hint(ctx, tree.body[0].value)
+
+    @staticmethod
+    def _visit_type_hint_attr(ctx: ASTContext, node: ast.Attribute):
+        # e.g., allo.ir.types.float32
+        dtype = ASTResolver.resolve(node, ctx.global_vars)
+        return dtype, tuple(), None
+
+    @staticmethod
+    def _visit_type_hint_binop(ctx: ASTContext, node: ast.BinOp):
+        # memory refinement
+        # or, stateful variable
+        # e.g., A: Ty[M] @ stateful
+        dtype, shape, node_left_layout = TypeInferer.visit_type_hint(ctx, node.left)
+        spec = ASTResolver.resolve(node.right, ctx.global_vars)
+        if isinstance(spec, list):
+            spec = Layout(spec)
+        if spec is stateful:
+            # Create a copy with stateful=True
+            stateful_dtype = copy.deepcopy(dtype)
+            stateful_dtype.stateful = True
+            return stateful_dtype, shape, node_left_layout
+        return dtype, shape, spec
+
+    @staticmethod
     def visit_type_hint(ctx: ASTContext, node: ast.AST):
         if isinstance(node, ast.Subscript):
-            if isinstance(node.value, ast.Call):
-                # e.g., a: UInt(16)[4]
-                dtype = TypeInferer.visit_call_type(ctx, node.value)
-            elif isinstance(node.value, ast.Subscript):
-                # e.g., pipe: Stream[Ty, 4][4]
-                base_type, base_shape, _ = TypeInferer.visit_type_hint(ctx, node.value)
-                assert isinstance(base_type, Stream) and len(base_shape) == 0
-                elts = (
-                    node.slice.elts
-                    if isinstance(node.slice, ast.Tuple)
-                    else [node.slice]
-                )
-                shape = tuple(ASTResolver.resolve(x, ctx.global_vars) for x in elts)
-                assert all(
-                    isinstance(x, (int)) for x in shape
-                ), "stream array shape should be a compile time constant"
-                return base_type, shape, None
-            else:
-                dtype = ASTResolver.resolve(node.value, ctx.global_vars)
-            if dtype is Stream:
-                # e.g., pipe: Stream[Ty, 4]
-                assert (
-                    isinstance(node.slice, ast.Tuple) and len(node.slice.elts) == 2
-                ), "Only support `ele_type` and `depth` for now"
-                base_type, base_shape, _ = TypeInferer.visit_type_hint(
-                    ctx, node.slice.elts[0]
-                )
-                depth = ASTResolver.resolve(node.slice.elts[1], ctx.global_vars)
-                stream_dtype = Stream(dtype=base_type, shape=base_shape, depth=depth)
-                shape = tuple()
-                return stream_dtype, shape, None
-            if dtype is ConstExpr:
-                # e.g., a: ConstExpr[int32]
-                base_type, base_shape, _ = TypeInferer.visit_type_hint(ctx, node.slice)
-                assert len(base_shape) == 0, "ConstExpr only supports scalar types"
-                const_dtype = copy.deepcopy(base_type)
-                const_dtype.constexpr = True
-                return const_dtype, tuple(), None
-            assert dtype is not None, f"Unsupported type `{node.value.id}`"
-            size = node.slice.value if isinstance(node.slice, ast.Index) else node.slice
-            elts = size.elts if isinstance(size, ast.Tuple) else [size]
-            shape = tuple(ASTResolver.resolve_constant(x, ctx) for x in elts)
-            return (
-                dtype,
-                shape,
-                Layout([Layout.Replicate] * len(shape)),
-            )  # default layout
+            return TypeInferer._visit_type_hint_subscript(ctx, node)
         if isinstance(node, ast.Name):
-            dtype = ASTResolver.resolve(node, ctx.global_vars)
-            assert dtype is not None, f"Unsupported type `{node.id}`"
-            return dtype, tuple(), None
+            return TypeInferer._visit_type_hint_name(ctx, node)
         if isinstance(node, ast.Call):
-            dtype = TypeInferer.visit_call_type(ctx, node)
-            return dtype, tuple(), None
+            return TypeInferer._visit_type_hint_call(ctx, node)
         if isinstance(node, ast.Constant):
-            assert isinstance(node.value, str), "Only support string type annotation"
-            tree = ast.parse(node.value)
-            return TypeInferer.visit_type_hint(ctx, tree.body[0].value)
+            return TypeInferer._visit_type_hint_const(ctx, node)
         if isinstance(node, ast.Attribute):
-            # e.g., allo.ir.types.float32
-            dtype = ASTResolver.resolve(node, ctx.global_vars)
-            return dtype, tuple(), None
+            return TypeInferer._visit_type_hint_attr(ctx, node)
         if isinstance(node, ast.BinOp):
-            # memory refinement
-            # or, stateful variable
-            # e.g., A: Ty[M] @ stateful
-            dtype, shape, node_left_layout = TypeInferer.visit_type_hint(ctx, node.left)
-            spec = ASTResolver.resolve(node.right, ctx.global_vars)
-            if isinstance(spec, list):
-                spec = Layout(spec)
-            if spec is stateful:
-                # Create a copy with stateful=True
-                stateful_dtype = copy.deepcopy(dtype)
-                stateful_dtype.stateful = True
-                return stateful_dtype, shape, node_left_layout
-            return dtype, shape, spec
+            return TypeInferer._visit_type_hint_binop(ctx, node)
         raise RuntimeError("Unsupported function argument type")
 
     @staticmethod
@@ -514,88 +538,103 @@ class TypeInferer(ASTVisitor):
         raise None
 
     @staticmethod
+    def _visit_subscript_struct(ctx: ASTContext, node: ast.Subscript, value: ast.AST):
+        if not isinstance(node.slice, ast.Constant) or not isinstance(
+            node.slice.value, str
+        ):
+            raise RuntimeError("Struct field access must use string literal")
+        field = node.slice.value
+        if field not in value.dtype.dtype_dict:
+            raise RuntimeError(f"Field {field} not found in struct type")
+        node.dtype = value.dtype.dtype_dict[field]
+        node.shape = tuple()
+        return node
+
+    @staticmethod
+    def _visit_subscript_tensor(ctx: ASTContext, node: ast.Subscript, value: ast.AST):
+        visit_stmt(ctx, node.slice)
+        # calculate tensor slicing
+        shape = []
+        # e.g., A[:5, 0, 1:3] -> [(0,5,1),0,(1,3,1)]
+        indices = ASTResolver.resolve_slice(node.slice, ctx)
+        size = node.slice.value if isinstance(node.slice, ast.Index) else node.slice
+        elts = (
+            size.elts
+            if isinstance(size, ast.Tuple)
+            else size.dims if isinstance(size, ast.ExtSlice) else [size]
+        )
+        access_dim = len(elts)
+        total_dim = len(value.shape)
+        if access_dim < total_dim:  # only access a part of the tensor
+            shape = value.shape[access_dim:]
+        if isinstance(indices, tuple):  # Slice
+            indices = [indices]
+        if isinstance(indices, list):  # ExtSlice
+            for dim, index in enumerate(indices):
+                if isinstance(index, (list, tuple)):
+                    lower = index[0] if index[0] is not None else 0
+                    upper = (
+                        index[1]
+                        if index[1] is not None
+                        else ctx.get_symbol(node.value.id).shape[dim]
+                    )
+                    step = (
+                        index[2] if (len(index) > 2 and index[2] is not None) else 1
+                    )
+                    size = (upper - lower) // step
+                    if size > 0:
+                        shape.append(size)
+        node.shape = tuple(shape)
+        node.dtype = ctx.get_symbol(node.value.id).dtype
+        return node
+
+    @staticmethod
+    def _visit_subscript_bit(ctx: ASTContext, node: ast.Subscript, value: ast.AST):
+        if isinstance(node.slice, (ast.Index, ast.Constant, ast.Name, ast.BinOp)):
+            visit_stmt(ctx, node.slice)
+            node.shape = tuple()
+            node.dtype = uint1
+        elif isinstance(node.slice, ast.Slice):
+            lower_sym = TypeInferer.visit_symbol(ctx, node.slice.lower)
+            upper_sym = TypeInferer.visit_symbol(ctx, node.slice.upper)
+            if (
+                lower_sym is not None
+                and upper_sym is not None
+                and isinstance(upper_sym - lower_sym, sympy.core.numbers.Integer)
+            ):
+                stride = int(upper_sym - lower_sym)
+                assert stride > 0, "upper bound must be greater than lower bound"
+                node.dtype = UInt(stride)
+            else:
+                warnings.warn(
+                    "Cannot infer the bitwidth of the slice, use UInt(32) as default"
+                )
+                node.dtype = UInt(32)
+            lower = visit_stmt(ctx, node.slice.lower)
+            upper = visit_stmt(ctx, node.slice.upper)
+            node.shape = tuple()
+        else:
+            raise RuntimeError(f"Unsupported bit operation {node.slice}")
+        return node
+
+    @staticmethod
     def visit_Subscript(ctx: ASTContext, node: ast.Subscript):
         value = visit_stmt(ctx, node.value)
         # Handle struct field access
         if len(value.shape) == 0 and isinstance(value.dtype, Struct):
-            if not isinstance(node.slice, ast.Constant) or not isinstance(
-                node.slice.value, str
-            ):
-                raise RuntimeError("Struct field access must use string literal")
-            field = node.slice.value
-            if field not in value.dtype.dtype_dict:
-                raise RuntimeError(f"Field {field} not found in struct type")
-            node.dtype = value.dtype.dtype_dict[field]
-            node.shape = tuple()
-            return node
+            return TypeInferer._visit_subscript_struct(ctx, node, value)
 
         # Handle tensor subscript
         if len(value.shape) > 0:
-            visit_stmt(ctx, node.slice)
-            # calculate tensor slicing
-            shape = []
-            # e.g., A[:5, 0, 1:3] -> [(0,5,1),0,(1,3,1)]
-            indices = ASTResolver.resolve_slice(node.slice, ctx)
-            size = node.slice.value if isinstance(node.slice, ast.Index) else node.slice
-            elts = (
-                size.elts
-                if isinstance(size, ast.Tuple)
-                else size.dims if isinstance(size, ast.ExtSlice) else [size]
-            )
-            access_dim = len(elts)
-            total_dim = len(value.shape)
-            if access_dim < total_dim:  # only access a part of the tensor
-                shape = value.shape[access_dim:]
-            if isinstance(indices, tuple):  # Slice
-                indices = [indices]
-            if isinstance(indices, list):  # ExtSlice
-                for dim, index in enumerate(indices):
-                    if isinstance(index, (list, tuple)):
-                        lower = index[0] if index[0] is not None else 0
-                        upper = (
-                            index[1]
-                            if index[1] is not None
-                            else ctx.get_symbol(node.value.id).shape[dim]
-                        )
-                        step = (
-                            index[2] if (len(index) > 2 and index[2] is not None) else 1
-                        )
-                        size = (upper - lower) // step
-                        if size > 0:
-                            shape.append(size)
-            node.shape = tuple(shape)
-            node.dtype = ctx.get_symbol(node.value.id).dtype
-        elif len(value.shape) == 0 and isinstance(
+            return TypeInferer._visit_subscript_tensor(ctx, node, value)
+
+        # Handle bit operation
+        if len(value.shape) == 0 and isinstance(
             value.dtype, (Int, UInt)
         ):  # bit operation
-            if isinstance(node.slice, (ast.Index, ast.Constant, ast.Name, ast.BinOp)):
-                visit_stmt(ctx, node.slice)
-                node.shape = tuple()
-                node.dtype = uint1
-            elif isinstance(node.slice, ast.Slice):
-                lower_sym = TypeInferer.visit_symbol(ctx, node.slice.lower)
-                upper_sym = TypeInferer.visit_symbol(ctx, node.slice.upper)
-                if (
-                    lower_sym is not None
-                    and upper_sym is not None
-                    and isinstance(upper_sym - lower_sym, sympy.core.numbers.Integer)
-                ):
-                    stride = int(upper_sym - lower_sym)
-                    assert stride > 0, "upper bound must be greater than lower bound"
-                    node.dtype = UInt(stride)
-                else:
-                    warnings.warn(
-                        "Cannot infer the bitwidth of the slice, use UInt(32) as default"
-                    )
-                    node.dtype = UInt(32)
-                lower = visit_stmt(ctx, node.slice.lower)
-                upper = visit_stmt(ctx, node.slice.upper)
-                node.shape = tuple()
-            else:
-                raise RuntimeError(f"Unsupported bit operation {node.slice}")
-        else:
-            raise RuntimeError("Can only access bit (slice) for integers")
-        return node
+            return TypeInferer._visit_subscript_bit(ctx, node, value)
+
+        raise RuntimeError("Can only access bit (slice) for integers")
 
     @staticmethod
     def visit_ExtSlice(ctx: ASTContext, node: ast.ExtSlice):
@@ -731,6 +770,98 @@ class TypeInferer(ASTVisitor):
         return node
 
     @staticmethod
+    def _process_kernel_decorator(ctx, node, decorator):
+        if not (
+            isinstance(decorator.func, ast.Attribute) and decorator.func.attr == "kernel"
+        ):
+            return None, None
+
+        mapping, kernel_args = None, []
+        for kw in decorator.keywords:
+            if kw.arg == "mapping":
+                mapping = eval(
+                    ast.unparse(kw.value),
+                    ctx.global_vars,
+                )
+            elif kw.arg == "args":
+                assert isinstance(kw.value, ast.List)
+                kernel_args = kw.value.elts
+
+        assert (
+            mapping is not None
+        ), f"Invalid @df.kernel decorator on function '{node.name}': missing required 'mapping' parameter."
+        assert len(kernel_args) == len(
+            node.args.args
+        ), f"Invalid @df.kernel decorator on function '{node.name}': 'args' length mismatch (expected {len(node.args.args)}, got {len(kernel_args)})."
+        return mapping, kernel_args
+
+    @staticmethod
+    def _get_predicate_list(predicate_raw, pid_map):
+        """
+        Recursively expand `predicate` based on conditions and pid_map.
+        Returns a list of results, converted from cond_list:
+        - If condition evaluates True, recurse into its values.
+        - If False, put None.
+        """
+        _, cond_list = predicate_raw
+        results = []
+        for cond, val in cond_list:
+            if eval(cond, pid_map):
+                assert all(
+                    isinstance(v, tuple) and len(v) == 2 for v in val
+                )
+                results.append(
+                    TypeInferer._get_predicate_list(("True", val), pid_map)
+                )
+            else:
+                results.append(None)
+        return results
+
+    @staticmethod
+    def _instantiate_kernel(ctx, node, old_ctx, mapping, kernel_args):
+        # Validate args
+        for top_arg_name, arg in zip(kernel_args, node.args.args):
+            top_arg = ctx.get_symbol(name=top_arg_name.id)
+            dtype, shape, _ = TypeInferer.visit_type_hint(ctx, arg.annotation)
+            assert (
+                top_arg.dtype == dtype and top_arg.shape == shape
+            ), f"df.kernel argument {arg.arg} do not match {top_arg_name.id}."
+            arg.top_arg = top_arg_name.id
+
+        orig_name = node.name
+        old_ctx.func_predicate_tags[orig_name] = {}
+
+        if ctx.unroll:
+            for dim in np.ndindex(*mapping):
+                new_ctx = old_ctx.copy()
+                new_ctx.rank = dim
+                new_ctx.scopes = old_ctx.scopes
+                new_ctx.global_vars = old_ctx.global_vars.copy()
+                for axis, val in enumerate(dim):
+                    new_ctx.global_vars.update({"df.p" + str(axis): val})
+                node.name = construct_kernel_name(orig_name, dim)
+                TypeInferer.visit_FunctionDef(new_ctx, node)
+                node.name = orig_name
+        else:
+            sample_dim = (0,) * len(mapping)
+            new_ctx = old_ctx.copy()
+            new_ctx.rank = sample_dim
+            new_ctx.scopes = old_ctx.scopes
+            new_ctx.global_vars = old_ctx.global_vars.copy()
+            for axis, val in enumerate(sample_dim):
+                new_ctx.global_vars.update({"df.p" + str(axis): val})
+            node.name = construct_kernel_name(orig_name, sample_dim)
+            TypeInferer.visit_FunctionDef(new_ctx, node)
+            node.name = orig_name
+
+            for dim in np.ndindex(*mapping):
+                pid_map = {f"p{idx}": value for idx, value in enumerate(dim)}
+                old_ctx.func_predicate_tags[orig_name][dim] = (
+                    TypeInferer._get_predicate_list(new_ctx.predicate_list, pid_map)
+                )
+        return node
+
+    @staticmethod
     def visit_FunctionDef(ctx: ASTContext, node: ast.FunctionDef):
         # pylint: disable=too-many-nested-blocks
         if ctx.top_func is not None:
@@ -741,101 +872,14 @@ class TypeInferer(ASTVisitor):
             ctx.scopes = old_ctx.scopes
             for decorator in node.decorator_list:
                 if isinstance(decorator, ast.Call):
-                    if isinstance(decorator.func, ast.Attribute):
-                        if decorator.func.attr == "kernel":
-                            mapping, kernel_args = None, []
-                            for kw in decorator.keywords:
-                                if kw.arg == "mapping":
-                                    mapping = eval(
-                                        ast.unparse(kw.value),
-                                        ctx.global_vars,
-                                    )
-                                elif kw.arg == "args":
-                                    assert isinstance(kw.value, ast.List)
-                                    kernel_args = kw.value.elts
-                            assert (
-                                mapping is not None
-                            ), f"Invalid @df.kernel decorator on function '{node.name}': missing required 'mapping' parameter."
-                            old_ctx.mapping = mapping
-                            assert len(kernel_args) == len(
-                                node.args.args
-                            ), f"Invalid @df.kernel decorator on function '{node.name}': 'args' length mismatch (expected {len(node.args.args)}, got {len(kernel_args)})."
-                            for top_arg_name, arg in zip(kernel_args, node.args.args):
-                                top_arg = ctx.get_symbol(name=top_arg_name.id)
-                                dtype, shape, _ = TypeInferer.visit_type_hint(
-                                    ctx, arg.annotation
-                                )
-                                assert (
-                                    top_arg.dtype == dtype and top_arg.shape == shape
-                                ), f"df.kernel argument {arg.arg} do not match {top_arg_name.id}."
-                                arg.top_arg = top_arg_name.id
-                            orig_name = node.name
-                            old_ctx.func_predicate_tags[orig_name] = {}
-                            if ctx.unroll:
-                                for dim in np.ndindex(*mapping):
-                                    new_ctx = old_ctx.copy()
-                                    new_ctx.rank = dim
-                                    new_ctx.scopes = old_ctx.scopes
-                                    new_ctx.global_vars = old_ctx.global_vars.copy()
-                                    for axis, val in enumerate(dim):
-                                        new_ctx.global_vars.update(
-                                            {"df.p" + str(axis): val}
-                                        )
-                                    node.name = construct_kernel_name(orig_name, dim)
-                                    # check on a specific df.kernel instance
-                                    TypeInferer.visit_FunctionDef(new_ctx, node)
-                                    node.name = orig_name
-                            else:
-                                # If not unroll, only visit one 'sample' to get the execution predicates
-
-                                def get_predicate_list(predicate_raw, pid_map):
-                                    """
-                                    Recursively expand `predicate` based on conditions and pid_map.
-                                    Returns a list of results, converted from cond_list:
-                                    - If condition evaluates True, recurse into its values.
-                                    - If False, put None.
-                                    """
-                                    _, cond_list = predicate_raw
-                                    results = []
-                                    for cond, val in cond_list:
-                                        if eval(cond, pid_map):
-                                            assert all(
-                                                isinstance(v, tuple) and len(v) == 2
-                                                for v in val
-                                            )
-                                            results.append(
-                                                get_predicate_list(
-                                                    ("True", val), pid_map
-                                                )
-                                            )
-                                        else:
-                                            results.append(None)
-                                    return results
-
-                                sample_dim = (0,) * len(mapping)
-                                new_ctx = old_ctx.copy()
-                                new_ctx.rank = sample_dim
-                                new_ctx.scopes = old_ctx.scopes
-                                new_ctx.global_vars = old_ctx.global_vars.copy()
-                                for axis, val in enumerate(sample_dim):
-                                    new_ctx.global_vars.update(
-                                        {"df.p" + str(axis): val}
-                                    )
-                                node.name = construct_kernel_name(orig_name, sample_dim)
-                                # check on a specific df.kernel instance
-                                TypeInferer.visit_FunctionDef(new_ctx, node)
-                                node.name = orig_name
-                                for dim in np.ndindex(*mapping):
-                                    pid_map = {
-                                        f"p{idx}": value
-                                        for idx, value in enumerate(dim)
-                                    }
-                                    old_ctx.func_predicate_tags[orig_name][dim] = (
-                                        get_predicate_list(
-                                            new_ctx.predicate_list, pid_map
-                                        )
-                                    )
-                            return node
+                    mapping, kernel_args = TypeInferer._process_kernel_decorator(
+                        ctx, node, decorator
+                    )
+                    if mapping is not None:
+                        old_ctx.mapping = mapping
+                        return TypeInferer._instantiate_kernel(
+                            ctx, node, old_ctx, mapping, kernel_args
+                        )
         else:
             old_ctx = None
 
@@ -1228,12 +1272,8 @@ class TypeInferer(ASTVisitor):
             new_args = visit_stmts(ctx, node.args)
             if len(new_args) == 0:
                 # No argument
-                if fn_name == "get_pid":
-                    node.shape = (tuple(), tuple(), tuple())
-                    node.dtype = (Index(), Index(), Index())
-                else:
-                    node.shape = None
-                    node.dtype = None
+                node.shape = None
+                node.dtype = None
                 return node
             if all(len(arg.shape) == 0 for arg in new_args):
                 # element-wise operation
