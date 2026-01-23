@@ -2249,6 +2249,7 @@ class ASTTransformer(ASTBuilder):
             ctx = old_ctx
         # Add the built function to global variable for later reference
         ctx.global_vars[func_name] = func_op
+        ctx.function_table[func_name] = func_op
 
         return func_op
 
@@ -2514,6 +2515,49 @@ class ASTTransformer(ASTBuilder):
     # pylint: disable=too-many-return-statements, too-many-function-args, too-many-nested-blocks
     @staticmethod
     def build_Call(ctx: ASTContext, node: ast.Call, out_buffer: OpView = None):
+        if isinstance(node.func, ast.Subscript):
+            obj = ASTResolver.resolve(node.func.value, ctx.global_vars)
+            obj_name = (
+                node.func.value.id if isinstance(obj, func_d.FuncOp) else obj.__name__
+            )
+            ctx.global_vars[obj_name] = obj
+            func_name = node.function.name
+            new_args = [
+                ASTTransformer.get_mlir_op_result(ctx, stmt)
+                for stmt in build_stmts(ctx, node.args)
+            ]
+            if func_name not in ctx.function_table:
+                ctx.inst = ASTResolver.resolve_param_types(
+                    node.func.slice, ctx.global_vars
+                )
+                func_id = get_func_id_from_param_types(ctx.inst)
+                if func_id is not None:
+                    ctx.inst.remove(func_id)
+
+                func_ctx = ctx.copy()
+                func_ctx.call_args = new_args
+                func_ctx.set_ip(ctx.top_func)
+                callee = build_stmt(func_ctx, node.function)
+                func_ctx.pop_ip()
+                func_ctx.call_args = []
+                for key, value in func_ctx.global_vars.items():
+                    if isinstance(value, func_d.FuncOp):
+                        ctx.global_vars[key] = value
+                # Attach buffers to function
+                # FIXME: Should create subschedule
+                for name, buffer in func_ctx.buffers.items():
+                    if isinstance(buffer, (memref_d.AllocOp, MockArg)):
+                        # Intermediate buffers and function arguments
+                        setattr(node.function, name, MockBuffer(func_name, name))
+            else:
+                callee = ctx.function_table[func_name]
+            call_op = func_d.CallOp(
+                callee.type.results,
+                FlatSymbolRefAttr.get(func_name),
+                new_args,
+                ip=ctx.get_ip(),
+            )
+            return call_op
         original_func_id = ctx.func_id
         if isinstance(node.func, ast.Name):
             obj = ASTResolver.resolve(node.func, ctx.global_vars)
@@ -2521,29 +2565,6 @@ class ASTTransformer(ASTBuilder):
         elif isinstance(node.func, ast.Attribute):
             obj = ASTResolver.resolve(node.func, ctx.global_vars)
             obj_name = node.func.attr
-        elif isinstance(node.func, ast.Subscript):
-            obj = ASTResolver.resolve(node.func.value, ctx.global_vars)
-            obj_name = (
-                node.func.value.id if isinstance(obj, func_d.FuncOp) else obj.__name__
-            )
-            ctx.global_vars[obj_name] = obj
-            ctx.inst = ASTResolver.resolve_param_types(node.func.slice, ctx.global_vars)
-            if ctx.func_id is None:
-                func_id = get_func_id_from_param_types(ctx.inst)
-                if func_id is None:
-                    func_dict = ctx.func_name2id.setdefault(obj_name, {})
-                    for key, value in func_dict.items():
-                        if value == tuple(ctx.inst):
-                            func_id = key
-                            break
-                    else:
-                        func_id = len(func_dict) if len(func_dict) > 0 else None
-                        func_dict[func_id] = tuple(ctx.inst)
-                else:
-                    ctx.inst.remove(func_id)
-                    func_dict = ctx.func_name2id.setdefault(obj_name, {})
-                    func_dict[func_id] = tuple(ctx.inst)
-                ctx.func_id = func_id
         else:
             raise RuntimeError("Unsupported function call")
 
@@ -3186,15 +3207,16 @@ class ASTTransformer(ASTBuilder):
             ASTTransformer.get_mlir_op_result(ctx, stmt)
             for stmt in build_stmts(ctx, node.args)
         ]
-        func_name = obj_name if ctx.func_id is None else f"{obj_name}_{ctx.func_id}"
-        if func_name not in ctx.global_vars or not isinstance(
-            ctx.global_vars[func_name], func_d.FuncOp
-        ):  # function not built yet
+        func_name = node.function.name if hasattr(node, "function") else obj_name
+        if func_name not in ctx.function_table or not isinstance(
+            ctx.function_table[func_name], func_d.FuncOp
+        ):
             # Create a new context to avoid name collision
             func_ctx = ctx.copy()
             func_ctx.call_args = new_args
             func_ctx.set_ip(ctx.top_func)
-            stmts = build_stmts(func_ctx, node.tree.body)
+            function_ = getattr(node, "function", node)
+            stmts = [build_stmt(func_ctx, function_)]
             func_ctx.pop_ip()
             func_ctx.call_args = []
             for key, value in func_ctx.global_vars.items():
@@ -3206,11 +3228,8 @@ class ASTTransformer(ASTBuilder):
                 if isinstance(buffer, (memref_d.AllocOp, MockArg)):
                     # Intermediate buffers and function arguments
                     setattr(func, name, MockBuffer(func_name, name))
-        elif isinstance(func, func_d.FuncOp):
-            # Has already been defined in the top-level scope
-            stmts = [func]
         else:
-            stmts = [ctx.global_vars[func_name]]
+            stmts = [ctx.function_table[func_name]]
 
         # Build call function in the top-level
         call_op = func_d.CallOp(

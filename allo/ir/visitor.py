@@ -50,7 +50,7 @@ class ASTContext:
         tree,
         global_vars,
         mlir_ctx,
-        symbol_table={},
+        function_table=None,
         inst=None,
         func_args=None,
         func_predicate_tags=None,
@@ -70,7 +70,7 @@ class ASTContext:
         self.top_func_tree = None
         self.global_vars = global_vars
         # functions defined in current module
-        self.symbol_table = symbol_table
+        self.function_table = function_table if function_table is not None else {}
         self.mlir_ctx = mlir_ctx
         self.file_name = None
         register_dialect(mlir_ctx, dataflow=True)
@@ -128,7 +128,7 @@ class ASTContext:
             self.tree,
             self.global_vars.copy(),
             self.mlir_ctx,
-            symbol_table=self.symbol_table,
+            function_table=self.function_table,
             inst=self.inst,
             func_args=self.func_args,
             func_predicate_tags=self.func_predicate_tags,

@@ -4,7 +4,6 @@
 
 import re
 import inspect
-import textwrap
 import copy
 from dataclasses import dataclass
 from functools import wraps
@@ -1352,7 +1351,6 @@ def customize(
         tree=tree,
         global_vars=global_vars,
         mlir_ctx=Context() if context is None else context,
-        symbol_table=ctx_type_inf.symbol_table,
         inst=instantiate,
         func_predicate_tags=ctx_type_inf.func_predicate_tags,
         unroll=unroll,
