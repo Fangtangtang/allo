@@ -27,19 +27,31 @@ from .types import AlloType, Int, UInt, Fixed, UFixed, Index, Float
 from .symbol_resolver import ASTResolver
 
 
-def _get_global_vars(_func):
+def _get_global_vars(
+    _func, skip={"get_global_vars", "customize", "build"}, stop={"<module>"}
+):
     if isinstance(_func, Callable):
         # Discussions: https://github.com/taichi-dev/taichi/issues/282
         global_vars = _func.__globals__.copy()
     else:
         global_vars = {}
 
-    # Get back to the outer-most scope (user-defined function)
+    # Get back to outer scopes
     # Mainly used to get the annotation definitions (shape and type),
     # which are probably not defined in __globals__
-    for name, var in inspect.stack()[3][0].f_locals.items():
-        if isinstance(var, (int, float, AlloType)) or inspect.isfunction(var):
-            global_vars[name] = var
+    frame = inspect.currentframe().f_back
+    while frame:
+        if frame.f_code.co_name in skip:
+            frame = frame.f_back
+            continue
+        # collect allowed types
+        for name, var in frame.f_locals.items():
+            if isinstance(var, (int, float, AlloType)) or inspect.isfunction(var):
+                global_vars[name] = var
+        # boundary
+        if frame.f_code.co_name in stop:
+            break
+        frame = frame.f_back
 
     if isinstance(_func, Callable):
         freevar_names = _func.__code__.co_freevars
@@ -52,13 +64,25 @@ def _get_global_vars(_func):
 
 
 def get_global_vars(func):
-    global_vars = _get_global_vars(func)
-    new_global_vars = global_vars.copy()
-    for var in global_vars.values():
-        # import functions from other files
-        if isinstance(var, PyFunctionType):
-            new_global_vars.update(_get_global_vars(var))
-    return new_global_vars
+    all_globals = {}
+    worklist = [func]
+    visited_funcs = set()
+
+    while worklist:
+        f = worklist.pop()
+        if f in visited_funcs:
+            continue
+        visited_funcs.add(f)
+
+        gv = _get_global_vars(f)
+        for name, val in gv.items():
+            if name not in all_globals:
+                all_globals[name] = val
+                # import functions from other files
+                if isinstance(val, PyFunctionType):
+                    worklist.append(val)
+
+    return all_globals
 
 
 def get_extra_type_hints(dtype: AlloType):

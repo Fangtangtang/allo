@@ -9,6 +9,7 @@ import sys
 import copy
 import inspect
 import itertools
+import textwrap
 import traceback
 import numpy as np
 from .._mlir.ir import (
@@ -1838,7 +1839,7 @@ class ASTTransformer(ASTBuilder):
     @staticmethod
     def build_AnnAssign(ctx: ASTContext, node: ast.AnnAssign):
         shape, dtype = node.target.shape, node.target.dtype
-        if hasattr(dtype, "constexpr") and dtype.constexpr:
+        if getattr(dtype, "constexpr", False):
             if node.value is None:
                 raise RuntimeError(
                     f"ConstExpr variable '{node.target.id}' must be initialized"
@@ -2653,8 +2654,10 @@ class ASTTransformer(ASTBuilder):
 
             # It is a dataflow region/kernel
             # We need to build it first
-            src = inspect.getsource(obj)
-            tree = parse_ast(src)
+            src, starting_line_no = inspect.getsourcelines(obj)
+            src = [textwrap.fill(line, tabsize=4, width=9999) for line in src]
+            src = textwrap.dedent("\n".join(src))
+            tree = parse_ast(src, starting_line_no=starting_line_no)
             # Find the function definition
             # The structure should be Module -> FunctionDef
             assert isinstance(tree, ast.Module)
@@ -3082,16 +3085,6 @@ class ASTTransformer(ASTBuilder):
                         if ctx.enable_tensor
                         else alloc_op
                     )
-            if fn_name == "get_pid":
-                res = []
-                for i in range(3):
-                    if f"df.p{i}" in ctx.global_vars:
-                        res.append(
-                            MockConstant(
-                                ctx.global_vars[f"df.p{i}"], ctx, dtype=Index()
-                            )
-                        )
-                return tuple(res)
             arg_types = []
             if isinstance(new_args[0].result, OpResultList):
                 for arg in new_args:
@@ -3341,14 +3334,7 @@ class ASTTransformer(ASTBuilder):
                     ip=ctx.get_ip(),
                 )
                 return buf_op
-            if attr in {
-                "matmul",
-                "bmm",
-                "conv2d",
-                "maxpool",
-                "sumpool",
-                "relu",
-            }:
+            if attr in {"matmul", "bmm", "conv2d", "maxpool", "sumpool", "relu"}:
                 # init zero
                 zero = MockConstant(0, ctx, dtype=node.dtype)
                 linalg_fill = linalg_d.fill(
@@ -3628,11 +3614,7 @@ class ASTTransformer(ASTBuilder):
             ):
                 # memref.subview is involved, we need to copy the values from the original buffer
                 alloc_op = ASTTransformer.build_array(ctx, node.dtype, node.shape)
-                memref_d.CopyOp(
-                    res,
-                    alloc_op.result,
-                    ip=ctx.get_ip(),
-                )
+                memref_d.CopyOp(res, alloc_op.result, ip=ctx.get_ip())
                 ret = alloc_op
                 res = ret.result
         else:

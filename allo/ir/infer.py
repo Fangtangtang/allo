@@ -788,7 +788,6 @@ class TypeInferer(ASTVisitor):
             and decorator.func.attr == "kernel"
         ):
             return None, []
-
         mapping, kernel_args = None, []
         for kw in decorator.keywords:
             if kw.arg == "mapping":
