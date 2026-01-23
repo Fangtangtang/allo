@@ -616,8 +616,8 @@ class TypeInferer(ASTVisitor):
                     "Cannot infer the bitwidth of the slice, use UInt(32) as default"
                 )
                 node.dtype = UInt(32)
-            lower = visit_stmt(ctx, node.slice.lower)
-            upper = visit_stmt(ctx, node.slice.upper)
+            visit_stmt(ctx, node.slice.lower)
+            visit_stmt(ctx, node.slice.upper)
             node.shape = tuple()
         else:
             raise RuntimeError(f"Unsupported bit operation {node.slice}")
