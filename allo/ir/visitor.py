@@ -50,6 +50,7 @@ class ASTContext:
         tree,
         global_vars,
         mlir_ctx,
+        symbol_table={},
         inst=None,
         func_args=None,
         func_predicate_tags=None,
@@ -68,6 +69,8 @@ class ASTContext:
         self.top_func = None
         self.top_func_tree = None
         self.global_vars = global_vars
+        # functions defined in current module
+        self.symbol_table = symbol_table
         self.mlir_ctx = mlir_ctx
         self.file_name = None
         register_dialect(mlir_ctx, dataflow=True)
@@ -125,10 +128,11 @@ class ASTContext:
             self.tree,
             self.global_vars.copy(),
             self.mlir_ctx,
-            self.inst,
-            self.func_args,
-            self.func_predicate_tags,
-            self.func_tag2instance,
+            symbol_table=self.symbol_table,
+            inst=self.inst,
+            func_args=self.func_args,
+            func_predicate_tags=self.func_predicate_tags,
+            func_tag2instance=self.func_tag2instance,
             unroll=self.unroll,
             enable_tensor=self.enable_tensor,
             typing_rule_set=self.typing_rule_set,

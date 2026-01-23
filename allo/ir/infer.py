@@ -1309,12 +1309,7 @@ class TypeInferer(ASTVisitor):
         else:
             # Visit arguments in the top-level
             visit_stmts(ctx, node.args)
-            src, starting_line_no = inspect.getsourcelines(func)
-            src = [textwrap.fill(line, tabsize=4, width=9999) for line in src]
-            src = textwrap.dedent("\n".join(src))
-            tree = parse_ast(
-                src, starting_line_no=starting_line_no, verbose=ctx.verbose
-            )
+            tree = parse_ast(func, verbose=ctx.verbose)
             # Create a new context to avoid name collision
             func_ctx = ctx.copy()
             stmts = visit_stmts(func_ctx, tree.body)
@@ -1334,27 +1329,17 @@ class TypeInferer(ASTVisitor):
     def visit_library_op(
         ctx: ASTContext, node: ast.Call, op_name: str, new_args: list[ast.AST]
     ):
-        if op_name in {
-            "exp",
-            "softmax",
-            "abs",
-            "log",
-            "add",
-            "sub",
-            "mul",
-            "div",
-            "relu",
-            "copy",
-        }:
-            # Element-wise operation
-            if op_name in {"add", "sub", "mul", "div"}:
-                final_shape, lhs_dims, rhs_dims = TypeInferer.visit_broadcast(
-                    ctx, new_args[0].shape, new_args[1].shape
-                )
-                node.dims = (lhs_dims, rhs_dims)
-                node.shape = final_shape
-            else:
-                node.shape = new_args[0].shape
+        # Element-wise operation
+        if op_name in {"add", "sub", "mul", "div"}:
+            final_shape, lhs_dims, rhs_dims = TypeInferer.visit_broadcast(
+                ctx, new_args[0].shape, new_args[1].shape
+            )
+            node.dims = (lhs_dims, rhs_dims)
+            node.shape = final_shape
+            node.dtype = new_args[0].dtype
+            return node
+        if op_name in {"exp", "softmax", "abs", "log", "relu", "copy"}:
+            node.shape = new_args[0].shape
             node.dtype = new_args[0].dtype
             return node
         if op_name in {"matmul", "bmm", "linear", "conv2d", "sumpool", "maxpool"}:

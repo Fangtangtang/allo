@@ -4,6 +4,7 @@
 
 import ast
 import inspect
+import textwrap
 from collections.abc import Callable
 from types import FunctionType as PyFunctionType
 from .._mlir.ir import (
@@ -128,7 +129,13 @@ def _adjust_line_numbers(node, offset):
             child.end_lineno += offset
 
 
-def parse_ast(src, starting_line_no=1, verbose=False):
+def parse_ast(src, verbose=False):
+    if isinstance(src, str):
+        starting_line_no = 1
+    else:
+        src, starting_line_no = inspect.getsourcelines(src)
+        src = [textwrap.fill(line, tabsize=4, width=9999) for line in src]
+        src = textwrap.dedent("\n".join(src))
     tree = ast.parse(src)
     _adjust_line_numbers(tree, starting_line_no - 1)
     if verbose:

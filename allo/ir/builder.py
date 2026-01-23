@@ -2523,7 +2523,6 @@ class ASTTransformer(ASTBuilder):
             obj_name = node.func.attr
         elif isinstance(node.func, ast.Subscript):
             obj = ASTResolver.resolve(node.func.value, ctx.global_vars)
-            assert obj is not None, "Unsupported function call"
             obj_name = (
                 node.func.value.id if isinstance(obj, func_d.FuncOp) else obj.__name__
             )
@@ -2654,10 +2653,7 @@ class ASTTransformer(ASTBuilder):
 
             # It is a dataflow region/kernel
             # We need to build it first
-            src, starting_line_no = inspect.getsourcelines(obj)
-            src = [textwrap.fill(line, tabsize=4, width=9999) for line in src]
-            src = textwrap.dedent("\n".join(src))
-            tree = parse_ast(src, starting_line_no=starting_line_no)
+            tree = parse_ast(obj, verbose=ctx.verbose)
             # Find the function definition
             # The structure should be Module -> FunctionDef
             assert isinstance(tree, ast.Module)
