@@ -7,8 +7,6 @@ import copy
 import sys
 import os
 import traceback
-import inspect
-import textwrap
 import warnings
 import sympy
 import numpy as np
@@ -908,6 +906,7 @@ class TypeInferer(ASTVisitor):
                 name, call_val = resolve_generic_types(
                     ctx.global_vars, type_var, call_val
                 )
+                print(name, call_val)
                 ctx.global_vars[name] = call_val
 
         with ctx.block_scope_guard():
