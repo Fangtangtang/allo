@@ -60,7 +60,6 @@ from .utils import (
     MockBuffer,
     get_extra_type_hints,
     get_kwarg_value,
-    get_func_id_from_param_types,
     resolve_generic_types,
     parse_ast,
 )
@@ -2527,14 +2526,8 @@ class ASTTransformer(ASTBuilder):
                 for stmt in build_stmts(ctx, node.args)
             ]
             if func_name not in ctx.function_table:
-                ctx.inst = ASTResolver.resolve_param_types(
-                    node.func.slice, ctx.global_vars
-                )
-                func_id = get_func_id_from_param_types(ctx.inst)
-                if func_id is not None:
-                    ctx.inst.remove(func_id)
-
                 func_ctx = ctx.copy()
+                func_ctx.inst = node.instantiate
                 func_ctx.call_args = new_args
                 func_ctx.set_ip(ctx.top_func)
                 callee = build_stmt(func_ctx, node.function)

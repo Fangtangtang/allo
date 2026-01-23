@@ -43,7 +43,7 @@ from ..utils import (
 )
 from ..memory import DTensor, Layout
 from ..logging import print_error_message
-from .utils import parse_ast, get_func_id_from_param_types, resolve_generic_types
+from .utils import parse_ast, resolve_generic_types
 
 
 # pylint: disable=too-many-public-methods
@@ -1063,21 +1063,18 @@ class TypeInferer(ASTVisitor):
             # Create a new context to avoid name collision
             func_ctx = ctx.copy()
             if func_ctx.func_id is None:
-                func_id = get_func_id_from_param_types(ctx.inst)
-                if func_id is None:
-                    func_dict = ctx.func_name2id.setdefault(obj_name, {})
-                    for key, value in func_dict.items():
-                        if value == tuple(ctx.inst):
-                            func_id = key
-                            break
-                    else:
-                        func_id = len(func_dict) if len(func_dict) > 0 else None
-                        func_dict[func_id] = tuple(ctx.inst)
+                func_dict = func_ctx.func_name2id.setdefault(obj_name, {})
+                # only the last 'str' can be customized id
+                if isinstance(func_ctx.inst[-1], str):
+                    func_id = func_ctx.inst[-1]
+                    func_ctx.inst.remove(func_id)
                 else:
-                    ctx.inst.remove(func_id)
-                    func_dict = ctx.func_name2id.setdefault(obj_name, {})
-                    func_dict[func_id] = tuple(ctx.inst)
+                    key = tuple(func_ctx.inst)
+                    if not key in func_dict:
+                        func_dict[key] = len(func_dict) if len(func_dict) > 0 else None
+                    func_id = func_dict[key]
                 func_ctx.func_id = func_id
+            node.instantiate = func_ctx.inst
             func_name = (
                 obj_name
                 if func_ctx.func_id is None
