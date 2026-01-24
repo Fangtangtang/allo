@@ -44,13 +44,43 @@ class AffineScopeGuard:
         self.ctx.affine_vars = []
 
 
+class SymbolTable:
+    """
+    Symbol table for function, global variable, and external library management.
+    """
+
+    function_to_nodes = {}
+    function_to_ops = {}
+    global_vars = {} # TODO: collect useful global symbols here
+    ext_libs = []  # external kernel / ip libraries
+    symbol_mangler = {}
+
+    @staticmethod
+    def clear():
+        SymbolTable.function_to_nodes.clear()
+        SymbolTable.function_to_ops.clear()
+        SymbolTable.global_vars.clear()
+        SymbolTable.ext_libs.clear()
+        SymbolTable.symbol_mangler.clear()
+
+    @staticmethod
+    def instantiate_function_name(name: str, args: list):
+        """
+        Get the function suffix for a function instantiated from template.
+        """
+        func_dict = SymbolTable.symbol_mangler.setdefault(name, {})
+        key = tuple(args)
+        if key not in func_dict:
+            func_dict[key] = len(func_dict)
+        return None if func_dict[key] == 0 else func_dict[key]
+
+
 class ASTContext:
     def __init__(
         self,
         tree,
         global_vars,
         mlir_ctx,
-        function_table=None,
         inst=None,
         func_args=None,
         func_predicate_tags=None,
@@ -70,7 +100,6 @@ class ASTContext:
         self.top_func_tree = None
         self.global_vars = global_vars
         # functions defined in current module
-        self.function_table = function_table if function_table is not None else {}
         self.mlir_ctx = mlir_ctx
         self.file_name = None
         register_dialect(mlir_ctx, dataflow=True)
@@ -79,7 +108,6 @@ class ASTContext:
         self.func_id = None
         # instantiation of a template function
         self.inst = inst
-        self.func_name2id = {}
         # used for subfunction call
         self.call_args = []
         # used to count nested loops in a band
@@ -95,8 +123,6 @@ class ASTContext:
         self.enable_tensor = enable_tensor
         self.typing_rule_set = typing_rule_set
         self.verbose = verbose
-        # libraries for external IPs
-        self.ext_libs = []
         # metaprogramming
         self.with_scope_level = 0
         self.meta_if_stack = []
@@ -128,7 +154,6 @@ class ASTContext:
             self.tree,
             self.global_vars.copy(),
             self.mlir_ctx,
-            function_table=self.function_table,
             inst=self.inst,
             func_args=self.func_args,
             func_predicate_tags=self.func_predicate_tags,
@@ -139,10 +164,8 @@ class ASTContext:
             verbose=self.verbose,
         )
         ctx.func_id = self.func_id
-        ctx.func_name2id = self.func_name2id
         ctx.enable_tensor = self.enable_tensor
         ctx.verbose = self.verbose
-        ctx.ext_libs = self.ext_libs
         ctx.rank = self.rank
         ctx.mapping = self.mapping
         ctx.meta_fors_to_unroll = self.meta_fors_to_unroll

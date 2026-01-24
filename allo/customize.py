@@ -46,7 +46,7 @@ from ._mlir.exceptions import (
 )
 
 from . import primitives as prim
-from .ir.visitor import ASTContext
+from .ir.visitor import ASTContext, SymbolTable
 from .ir.utils import MockArg, MockBuffer, parse_ast, get_global_vars
 from .ir.builder import ASTTransformer
 from .ir.infer import TypeInferer
@@ -1345,6 +1345,7 @@ def customize(
         typing_rule_set=typing_rule_set,
         verbose=verbose,
     )
+    SymbolTable.clear()
     tree = TypeInferer()(ctx_type_inf, tree)
     # Start building IR
     ctx = ASTContext(
@@ -1374,7 +1375,7 @@ def customize(
         ctx.top_func,
         ctx.func_args,
         InsertionPoint.at_block_terminator(ctx.top_func.entry_block),
-        ext_libs=ctx.ext_libs,
+        ext_libs=SymbolTable.ext_libs,
         inst_list=instantiate,
         func_instances=func_instances,
     )

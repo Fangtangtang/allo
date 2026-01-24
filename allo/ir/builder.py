@@ -78,7 +78,7 @@ from .types import (
     allo_type_from_mlir_type,
 )
 from ..memory import Memory
-from .visitor import ASTVisitor, ASTContext, get_symbolic_expr
+from .visitor import ASTVisitor, ASTContext, SymbolTable, get_symbolic_expr
 from .symbol_resolver import ASTResolver
 from ..utils import (
     get_mlir_dtype_from_str,
@@ -2248,8 +2248,7 @@ class ASTTransformer(ASTBuilder):
             ctx = old_ctx
         # Add the built function to global variable for later reference
         ctx.global_vars[func_name] = func_op
-        ctx.function_table[func_name] = func_op
-
+        SymbolTable.function_to_ops[func_name] = func_op
         return func_op
 
     @staticmethod
@@ -2525,7 +2524,7 @@ class ASTTransformer(ASTBuilder):
                 ASTTransformer.get_mlir_op_result(ctx, stmt)
                 for stmt in build_stmts(ctx, node.args)
             ]
-            if func_name not in ctx.function_table:
+            if func_name not in SymbolTable.function_to_ops:
                 func_ctx = ctx.copy()
                 func_ctx.inst = node.instantiate
                 func_ctx.call_args = new_args
@@ -2543,7 +2542,7 @@ class ASTTransformer(ASTBuilder):
                         # Intermediate buffers and function arguments
                         setattr(node.function, name, MockBuffer(func_name, name))
             else:
-                callee = ctx.function_table[func_name]
+                callee = SymbolTable.function_to_ops[func_name]
             call_op = func_d.CallOp(
                 callee.type.results,
                 FlatSymbolRefAttr.get(func_name),
@@ -2754,8 +2753,8 @@ class ASTTransformer(ASTBuilder):
             # Get the external module from the VLIW function
             external_module = obj.get_external_module()
             # Add the external module to ext_libs for processing
-            if external_module not in ctx.ext_libs:
-                ctx.ext_libs.append(external_module)
+            if external_module not in SymbolTable.ext_libs:
+                SymbolTable.ext_libs.append(external_module)
                 # Create function declaration similar to other external modules
                 input_types = []
                 for arg_type, shape in external_module.args:
@@ -3053,8 +3052,8 @@ class ASTTransformer(ASTBuilder):
                             ASTTransformer.get_mlir_op_result(ctx, operand)
                         )
                 # Add HLS IP as external library
-                if obj not in ctx.ext_libs:
-                    ctx.ext_libs.append(obj)
+                if obj not in SymbolTable.ext_libs:
+                    SymbolTable.ext_libs.append(obj)
                     # Suppose it does not have any return values
                     func_type = FunctionType.get(input_types, [])
                     func_op = func_d.FuncOp(
@@ -3201,8 +3200,8 @@ class ASTTransformer(ASTBuilder):
             for stmt in build_stmts(ctx, node.args)
         ]
         func_name = node.function.name if hasattr(node, "function") else obj_name
-        if func_name not in ctx.function_table or not isinstance(
-            ctx.function_table[func_name], func_d.FuncOp
+        if func_name not in SymbolTable.function_to_ops or not isinstance(
+            SymbolTable.function_to_ops[func_name], func_d.FuncOp
         ):
             # Create a new context to avoid name collision
             func_ctx = ctx.copy()
@@ -3222,7 +3221,7 @@ class ASTTransformer(ASTBuilder):
                     # Intermediate buffers and function arguments
                     setattr(func, name, MockBuffer(func_name, name))
         else:
-            stmts = [ctx.function_table[func_name]]
+            stmts = [SymbolTable.function_to_ops[func_name]]
 
         # Build call function in the top-level
         call_op = func_d.CallOp(

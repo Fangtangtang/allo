@@ -11,7 +11,7 @@ import warnings
 import sympy
 import numpy as np
 
-from .visitor import ASTVisitor, ASTContext, get_symbolic_expr
+from .visitor import ASTVisitor, ASTContext, SymbolTable, get_symbolic_expr
 from .symbol_resolver import ASTResolver
 from .types import (
     AlloType,
@@ -985,7 +985,7 @@ class TypeInferer(ASTVisitor):
             ctx = old_ctx
         # Add the visited function to global variable for later reference
         ctx.global_vars[func_name] = node
-        ctx.function_table[func_name] = node
+        SymbolTable.function_to_nodes[func_name] = node
         return node
 
     @staticmethod
@@ -1063,16 +1063,14 @@ class TypeInferer(ASTVisitor):
             # Create a new context to avoid name collision
             func_ctx = ctx.copy()
             if func_ctx.func_id is None:
-                func_dict = func_ctx.func_name2id.setdefault(obj_name, {})
                 # only the last 'str' can be customized id
                 if isinstance(func_ctx.inst[-1], str):
                     func_id = func_ctx.inst[-1]
                     func_ctx.inst.remove(func_id)
                 else:
-                    key = tuple(func_ctx.inst)
-                    if not key in func_dict:
-                        func_dict[key] = len(func_dict) if len(func_dict) > 0 else None
-                    func_id = func_dict[key]
+                    func_id = SymbolTable.instantiate_function_name(
+                        obj_name, func_ctx.inst
+                    )
                 func_ctx.func_id = func_id
             node.instantiate = func_ctx.inst
             func_name = (
@@ -1086,8 +1084,8 @@ class TypeInferer(ASTVisitor):
             # Attach type-inferenced tree to the top-level AST
             node.function = func
             visit_stmts(ctx, node.args)
-            if func_name not in ctx.function_table:
-                ctx.function_table[func_name] = func
+            if func_name not in SymbolTable.function_to_nodes:
+                SymbolTable.function_to_nodes[func_name] = func
             node.dtype, node.shape = stmt.dtype, stmt.shape
             return node
         if isinstance(node.func, ast.Name):
@@ -1317,10 +1315,10 @@ class TypeInferer(ASTVisitor):
         # User-defined subfunction
         func = ctx.global_vars[obj_name]
         func_name = obj_name if ctx.func_id is None else f"{obj_name}_{ctx.func_id}"
-        if func_name in ctx.function_table:
+        if func_name in SymbolTable.function_to_nodes:
             # Has already been defined in the top-level scope
-            stmts = [ctx.function_table[func_name]]
-            node.function = ctx.function_table[func_name]
+            stmts = [SymbolTable.function_to_nodes[func_name]]
+            node.function = SymbolTable.function_to_nodes[func_name]
         else:
             # Visit arguments in the top-level
             tree = parse_ast(func, verbose=ctx.verbose)
@@ -1329,7 +1327,7 @@ class TypeInferer(ASTVisitor):
             stmts = visit_stmts(func_ctx, tree.body)
             node.function = tree.body[0]
             node.function.name = func_name
-            ctx.function_table[func_name] = tree.body[0]
+            SymbolTable.function_to_nodes[func_name] = tree.body[0]
         visit_stmts(ctx, node.args)
         if not isinstance(stmts[-1], ast.FunctionDef):
             node.dtype = None
