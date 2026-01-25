@@ -2170,7 +2170,7 @@ class ASTTransformer(ASTBuilder):
                 mock_arg = MockArg(arg, idx=i)
                 ctx.buffers[name] = mock_arg
                 ctx.put_symbol(name=name, val=mock_arg)
-            ctx.func_args[func_name] = dtensors
+            SymbolTable.function_args[func_name] = dtensors
             ctx.set_ip(func_op.entry_block)
             stmts = build_stmts(ctx, node.body)
 
@@ -2519,7 +2519,7 @@ class ASTTransformer(ASTBuilder):
                 node.func.value.id if isinstance(obj, func_d.FuncOp) else obj.__name__
             )
             ctx.global_vars[obj_name] = obj
-            func_name = node.function.name
+            func_name = node.callee
             new_args = [
                 ASTTransformer.get_mlir_op_result(ctx, stmt)
                 for stmt in build_stmts(ctx, node.args)
@@ -2529,7 +2529,8 @@ class ASTTransformer(ASTBuilder):
                 func_ctx.inst = node.instantiate
                 func_ctx.call_args = new_args
                 func_ctx.set_ip(ctx.top_func)
-                callee = build_stmt(func_ctx, node.function)
+                callee_node = SymbolTable.function_to_nodes[func_name]
+                callee = build_stmt(func_ctx, callee_node)
                 func_ctx.pop_ip()
                 func_ctx.call_args = []
                 for key, value in func_ctx.global_vars.items():
@@ -2540,7 +2541,7 @@ class ASTTransformer(ASTBuilder):
                 for name, buffer in func_ctx.buffers.items():
                     if isinstance(buffer, (memref_d.AllocOp, MockArg)):
                         # Intermediate buffers and function arguments
-                        setattr(node.function, name, MockBuffer(func_name, name))
+                        setattr(callee_node, name, MockBuffer(func_name, name))
             else:
                 callee = SymbolTable.function_to_ops[func_name]
             call_op = func_d.CallOp(
@@ -2677,7 +2678,6 @@ class ASTTransformer(ASTBuilder):
             # Run type inference on the tree before building
             # We need a fresh type inference context
             type_inf_ctx = ASTContext(
-                tree=tree,
                 global_vars=ctx.global_vars.copy(),
                 mlir_ctx=ctx.mlir_ctx,
             )
@@ -3199,21 +3199,20 @@ class ASTTransformer(ASTBuilder):
             ASTTransformer.get_mlir_op_result(ctx, stmt)
             for stmt in build_stmts(ctx, node.args)
         ]
-        func_name = node.function.name if hasattr(node, "function") else obj_name
-        if func_name not in SymbolTable.function_to_ops or not isinstance(
-            SymbolTable.function_to_ops[func_name], func_d.FuncOp
-        ):
+        func_name = node.callee if hasattr(node, "callee") else obj_name
+        if func_name not in SymbolTable.function_to_ops:
             # Create a new context to avoid name collision
             func_ctx = ctx.copy()
             func_ctx.call_args = new_args
             func_ctx.set_ip(ctx.top_func)
-            function_ = getattr(node, "function", node)
+            function_ = (
+                SymbolTable.function_to_nodes[func_name]
+                if hasattr(node, "callee")
+                else node
+            )
             stmts = [build_stmt(func_ctx, function_)]
             func_ctx.pop_ip()
             func_ctx.call_args = []
-            for key, value in func_ctx.global_vars.items():
-                if isinstance(value, func_d.FuncOp):
-                    ctx.global_vars[key] = value
             # Attach buffers to function
             # FIXME: Should create subschedule
             for name, buffer in func_ctx.buffers.items():

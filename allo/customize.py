@@ -1336,7 +1336,6 @@ def customize(
         global_vars = get_global_vars(fn)
     # Type construction
     ctx_type_inf = ASTContext(
-        tree=tree,
         global_vars=global_vars.copy(),
         mlir_ctx=Context() if context is None else context,
         inst=instantiate,
@@ -1349,7 +1348,6 @@ def customize(
     tree = TypeInferer()(ctx_type_inf, tree)
     # Start building IR
     ctx = ASTContext(
-        tree=tree,
         global_vars=global_vars,
         mlir_ctx=Context() if context is None else context,
         inst=instantiate,
@@ -1373,7 +1371,7 @@ def customize(
     sch = Schedule(
         module,
         ctx.top_func,
-        ctx.func_args,
+        SymbolTable.function_args,
         InsertionPoint.at_block_terminator(ctx.top_func.entry_block),
         ext_libs=SymbolTable.ext_libs,
         inst_list=instantiate,

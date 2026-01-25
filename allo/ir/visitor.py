@@ -49,9 +49,10 @@ class SymbolTable:
     Symbol table for function, global variable, and external library management.
     """
 
-    function_to_nodes = {}
-    function_to_ops = {}
-    global_vars = {} # TODO: collect useful global symbols here
+    function_to_nodes = {}  # function name to function ast node
+    function_to_ops = {}  # function name to mlir func op
+    function_args = {}  # function name to function arguments
+    global_vars = {}  # TODO: collect useful global symbols here
     ext_libs = []  # external kernel / ip libraries
     symbol_mangler = {}
 
@@ -59,6 +60,7 @@ class SymbolTable:
     def clear():
         SymbolTable.function_to_nodes.clear()
         SymbolTable.function_to_ops.clear()
+        SymbolTable.function_args.clear()
         SymbolTable.global_vars.clear()
         SymbolTable.ext_libs.clear()
         SymbolTable.symbol_mangler.clear()
@@ -78,11 +80,9 @@ class SymbolTable:
 class ASTContext:
     def __init__(
         self,
-        tree,
         global_vars,
         mlir_ctx,
         inst=None,
-        func_args=None,
         func_predicate_tags=None,
         func_tag2instance=None,
         unroll=True,
@@ -94,17 +94,13 @@ class ASTContext:
         self.ip_stack = []
         self.buffers = {}
         self.scopes = []  # variable scope
-        # ast tree
-        self.tree = tree
-        self.top_func = None
-        self.top_func_tree = None
+        self.top_func = None  # mlir module
+        self.top_func_tree = None  # ast tree
         self.global_vars = global_vars
         # functions defined in current module
         self.mlir_ctx = mlir_ctx
         self.file_name = None
         register_dialect(mlir_ctx, dataflow=True)
-        # map from function name to function arguments
-        self.func_args = {} if func_args is None else func_args
         self.func_id = None
         # instantiation of a template function
         self.inst = inst
@@ -151,11 +147,9 @@ class ASTContext:
 
     def copy(self):
         ctx = ASTContext(
-            self.tree,
             self.global_vars.copy(),
             self.mlir_ctx,
             inst=self.inst,
-            func_args=self.func_args,
             func_predicate_tags=self.func_predicate_tags,
             func_tag2instance=self.func_tag2instance,
             unroll=self.unroll,

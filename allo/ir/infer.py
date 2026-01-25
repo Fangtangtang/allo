@@ -1082,7 +1082,7 @@ class TypeInferer(ASTVisitor):
             func.name = func_name
             stmt = visit_stmt(func_ctx, func)
             # Attach type-inferenced tree to the top-level AST
-            node.function = func
+            node.callee = func_name
             visit_stmts(ctx, node.args)
             if func_name not in SymbolTable.function_to_nodes:
                 SymbolTable.function_to_nodes[func_name] = func
@@ -1318,16 +1318,15 @@ class TypeInferer(ASTVisitor):
         if func_name in SymbolTable.function_to_nodes:
             # Has already been defined in the top-level scope
             stmts = [SymbolTable.function_to_nodes[func_name]]
-            node.function = SymbolTable.function_to_nodes[func_name]
         else:
             # Visit arguments in the top-level
             tree = parse_ast(func, verbose=ctx.verbose)
             # Create a new context to avoid name collision
             func_ctx = ctx.copy()
             stmts = visit_stmts(func_ctx, tree.body)
-            node.function = tree.body[0]
-            node.function.name = func_name
+            tree.body[0].name = func_name
             SymbolTable.function_to_nodes[func_name] = tree.body[0]
+        node.callee = func_name
         visit_stmts(ctx, node.args)
         if not isinstance(stmts[-1], ast.FunctionDef):
             node.dtype = None
