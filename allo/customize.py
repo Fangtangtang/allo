@@ -1371,7 +1371,7 @@ def customize(
     sch = Schedule(
         module,
         ctx.top_func,
-        SymbolTable.function_args,
+        SymbolTable.function_args.copy(),
         InsertionPoint.at_block_terminator(ctx.top_func.entry_block),
         ext_libs=SymbolTable.ext_libs,
         inst_list=instantiate,

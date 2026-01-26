@@ -57,11 +57,7 @@ class ASTResolver:
                     if resolved is None:
                         return None
                     kwargs[kw.arg] = resolved
-            try:
-                return func_obj(*args, **kwargs)
-            # pylint: disable=broad-exception-caught
-            except Exception:
-                return None
+            return func_obj(*args, **kwargs)
 
         if isinstance(node, ast.List):
             values = [ASTResolver.resolve(v, scope) for v in node.elts]
