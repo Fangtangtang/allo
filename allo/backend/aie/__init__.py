@@ -688,7 +688,7 @@ class AIE_MLIRModule:
 
     def build(
         self,
-        device_type="npu1_4col",
+        device_type="npu1",
         mapping_primitives: list[tuple[str, list]] = None,
         profile: bool = False,
         warmup: int = 20,
