@@ -174,7 +174,7 @@ class Float(AlloType):
     A floating point decimal number.
     """
 
-    def __init__(self, bits, fracs, name="float"):
+    def __init__(self, bits, fracs, name):
         """
         Constructs a floating point decimal number.
 
@@ -343,13 +343,13 @@ def allo_type_from_mlir_type(mlir_type):
         return Int(bits=mlir_type.width)
     # float
     if isinstance(mlir_type, BF16Type):
-        return Float(16, 7)
+        return Float(16, 7 , "bf16")
     if isinstance(mlir_type, F16Type):
-        return Float(16, 10)
+        return Float(16, 10, "f16")
     if isinstance(mlir_type, F32Type):
-        return Float(32, 23)
+        return Float(32, 23, "f32")
     if isinstance(mlir_type, F64Type):
-        return Float(64, 52)
+        return Float(64, 52, "f64")
     # fixme (Shihan): avoid using string matching and parsing
     pattern = re.compile(r"!allo\.(U)?Fixed<\s*(\d+)\s*,\s*(\d+)\s*>")
     m = pattern.fullmatch(str(mlir_type))
