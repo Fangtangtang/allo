@@ -2252,7 +2252,7 @@ class ASTTransformer(ASTBuilder):
         return func_op
 
     @staticmethod
-    def build_Compare(ctx: ASTContext, node: ast.Compare, is_affine: bool = False):
+    def build_Compare(ctx: ASTContext, node: ast.Compare):
         ATTR_MAP = {
             "int": {
                 ast.Eq: 0,
@@ -2312,50 +2312,33 @@ class ASTTransformer(ASTBuilder):
             },
         }
         # pylint: disable=no-else-return
-        if is_affine:
-            eq_flags = []
-            cond_op = node.ops[0]
-            if not isinstance(cond_op, ast.Eq):
-                raise NotImplementedError("Only support '==' for now")
-            exprs = []
-            exprs.append(
-                AffineExpr.get_dim(0)
-                - AffineConstantExpr.get(node.comparators[0].value)
-            )
-            eq_flags.append(True)
-            if_cond_set = IntegerSet.get(1, 0, exprs, eq_flags)
-            attr = IntegerSetAttr.get(if_cond_set)
-            return attr, ctx.get_symbol(node.left.id)
-        else:
-            lhs = build_stmt(ctx, node.left)
-            rhs = build_stmt(ctx, node.comparators[0])
-            # Cast lhs and rhs to the same type
-            lhs = ASTTransformer.build_cast_op(ctx, lhs, node.left.dtype, node.dtype)
-            rhs = ASTTransformer.build_cast_op(
-                ctx, rhs, node.comparators[0].dtype, node.dtype
-            )
-            # avoid rebuilding the same op
-            rhs_res, lhs_res = ASTTransformer.get_mlir_op_result(
-                ctx, rhs
-            ), ASTTransformer.get_mlir_op_result(ctx, lhs)
-            dtype = str(rhs_res.type)
-            if dtype.startswith("i") or dtype.startswith("ui"):
-                op = ATTR_MAP["int" if dtype.startswith("i") else "uint"][
-                    type(node.ops[0])
-                ]
-                predicate = IntegerAttr.get(IntegerType.get_signless(64), op)
-                return arith_d.CmpIOp(predicate, lhs_res, rhs_res, ip=ctx.get_ip())
-            if dtype.startswith("!allo.Fixed") or dtype.startswith("!allo.UFixed"):
-                op = ATTR_MAP["fixed" if dtype.startswith("f") else "ufixed"][
-                    type(node.ops[0])
-                ]
-                predicate = IntegerAttr.get(IntegerType.get_signless(64), op)
-                return allo_d.CmpFixedOp(predicate, lhs_res, rhs_res, ip=ctx.get_ip())
-            if dtype.startswith("f"):
-                op = ATTR_MAP["float"][type(node.ops[0])]
-                predicate = IntegerAttr.get(IntegerType.get_signless(64), op)
-                return arith_d.CmpFOp(predicate, lhs_res, rhs_res, ip=ctx.get_ip())
-            raise RuntimeError(f"Unsupported types for binary op: {dtype}")
+        lhs = build_stmt(ctx, node.left)
+        rhs = build_stmt(ctx, node.comparators[0])
+        # Cast lhs and rhs to the same type
+        lhs = ASTTransformer.build_cast_op(ctx, lhs, node.left.dtype, node.dtype)
+        rhs = ASTTransformer.build_cast_op(
+            ctx, rhs, node.comparators[0].dtype, node.dtype
+        )
+        # avoid rebuilding the same op
+        rhs_res, lhs_res = ASTTransformer.get_mlir_op_result(
+            ctx, rhs
+        ), ASTTransformer.get_mlir_op_result(ctx, lhs)
+        dtype = str(rhs_res.type)
+        if dtype.startswith("i") or dtype.startswith("ui"):
+            op = ATTR_MAP["int" if dtype.startswith("i") else "uint"][type(node.ops[0])]
+            predicate = IntegerAttr.get(IntegerType.get_signless(64), op)
+            return arith_d.CmpIOp(predicate, lhs_res, rhs_res, ip=ctx.get_ip())
+        if dtype.startswith("!allo.Fixed") or dtype.startswith("!allo.UFixed"):
+            op = ATTR_MAP["fixed" if dtype.startswith("f") else "ufixed"][
+                type(node.ops[0])
+            ]
+            predicate = IntegerAttr.get(IntegerType.get_signless(64), op)
+            return allo_d.CmpFixedOp(predicate, lhs_res, rhs_res, ip=ctx.get_ip())
+        if dtype.startswith("f"):
+            op = ATTR_MAP["float"][type(node.ops[0])]
+            predicate = IntegerAttr.get(IntegerType.get_signless(64), op)
+            return arith_d.CmpFOp(predicate, lhs_res, rhs_res, ip=ctx.get_ip())
+        raise RuntimeError(f"Unsupported types for binary op: {dtype}")
 
     @staticmethod
     def build_BoolOp(ctx: ASTContext, node: ast.BoolOp):
@@ -2396,40 +2379,24 @@ class ASTTransformer(ASTBuilder):
         )
 
     @staticmethod
-    def build_If(ctx: ASTContext, node: ast.If, is_affine: bool = False):
-        if is_affine:
-            # Should build the condition on-the-fly
-            cond, var = build_stmt(ctx, node.test)
-            if_op = affine_d.AffineIfOp(
-                cond,
-                [ASTTransformer.get_mlir_op_result(ctx, var)],
-                ip=ctx.get_ip(),
-                has_else=len(node.orelse),
-            )
-        else:
-            cond = build_stmt(ctx, node.test)
-            if_op = scf_d.IfOp(
-                ASTTransformer.get_mlir_op_result(ctx, cond),
-                ip=ctx.get_ip(),
-                has_else=len(node.orelse),
-            )
+    def build_If(ctx: ASTContext, node: ast.If):
+        cond = build_stmt(ctx, node.test)
+        if_op = scf_d.IfOp(
+            ASTTransformer.get_mlir_op_result(ctx, cond),
+            ip=ctx.get_ip(),
+            has_else=len(node.orelse),
+        )
         ctx.set_ip(if_op.then_block)
         with ctx.block_scope_guard():
             build_stmts(ctx, node.body)
-            if is_affine:
-                affine_d.AffineYieldOp([], ip=ctx.get_ip())
-            else:
-                scf_d.YieldOp([], ip=ctx.get_ip())
+            scf_d.YieldOp([], ip=ctx.get_ip())
         ctx.pop_ip()
         if len(node.orelse) > 0:
             else_block = if_op.elseRegion.blocks[0]
             ctx.set_ip(else_block)
             with ctx.block_scope_guard():
                 build_stmts(ctx, node.orelse)
-                if is_affine:
-                    affine_d.AffineYieldOp([], ip=ctx.get_ip())
-                else:
-                    scf_d.YieldOp([], ip=ctx.get_ip())
+                scf_d.YieldOp([], ip=ctx.get_ip())
             ctx.pop_ip()
 
     @staticmethod

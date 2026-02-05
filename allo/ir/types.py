@@ -343,7 +343,7 @@ def allo_type_from_mlir_type(mlir_type):
         return Int(bits=mlir_type.width)
     # float
     if isinstance(mlir_type, BF16Type):
-        return Float(16, 7 , "bf16")
+        return Float(16, 7, "bf16")
     if isinstance(mlir_type, F16Type):
         return Float(16, 10, "f16")
     if isinstance(mlir_type, F32Type):
