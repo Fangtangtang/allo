@@ -43,6 +43,9 @@ class TypeAnnotation:
         return f"{self.dtype}[{', '.join(str(s) for s in self.shape)}]"
 
 
+_TYPE_REGISTRY = {}
+
+
 class AlloType:
     def __init__(self, bits, fracs, name):
         if not isinstance(bits, numbers.Integral):
@@ -60,6 +63,8 @@ class AlloType:
         self.name = name
         self.stateful = False
         self.constexpr = False
+        if name not in _TYPE_REGISTRY:
+            _TYPE_REGISTRY[name] = self
 
     def build(self):
         # Required a MLIR context outside
