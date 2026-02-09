@@ -17,5 +17,6 @@
 	branch = dev
 
 [submodule "allo/exp_ir"]
-	path = allo/exp_ir
+	path = allo_exp
 	url = https://github.com/Fangtangtang/allo-compiler.git
+	branch = main
