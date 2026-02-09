@@ -16,3 +16,6 @@
 	url = https://github.com/Fangtangtang/shardy.git
 	branch = dev
 
+[submodule "allo/exp_ir"]
+	path = allo/exp_ir
+	url = https://github.com/Fangtangtang/allo-compiler.git
