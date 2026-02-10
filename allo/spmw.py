@@ -32,20 +32,19 @@ def kernel(fn):
 
 
 def unit():
-    def decorator(fn):
-        return fn
+    return kernel
 
-    return decorator
 
 def work(*, mapping: list[int], args=None):
     def decorator(fn):
         src, node = find_function_ast(fn)
         fn._df_meta = {
             "mapping": mapping,
-            "args": args,
+            "args": [] if args is None else args,
         }
         fn._source = ast.get_source_segment(src, node)
         fn._ast = node
 
-        return fn 
+        return fn
+
     return decorator
