@@ -3,48 +3,57 @@
 
 import ast
 from pathlib import Path
+from enum import Enum, auto
+
+
+class FunctionType(Enum):
+    KERNEL = auto()
+    UNIT = auto()
+    WORK = auto()
+
 
 MODULE_CACHE = {}
-
-
-def get_module(filename):
-    if filename not in MODULE_CACHE:
-        src = Path(filename).read_text()
-        MODULE_CACHE[filename] = (src, ast.parse(src))
-    return MODULE_CACHE[filename]
 
 
 def find_function_ast(fn):
     filename = fn.__code__.co_filename
     lineno = fn.__code__.co_firstlineno + 1
-    src, tree = get_module(filename)
+    if filename not in MODULE_CACHE:
+        src = Path(filename).read_text()
+        MODULE_CACHE[filename] = (src, ast.parse(src))
+    src, tree = MODULE_CACHE[filename]
+
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.lineno == lineno:
             return src, node
     raise RuntimeError("Function AST not found")
 
 
-def kernel(fn):
+def _annotate_function(fn, ftype: FunctionType):
     src, node = find_function_ast(fn)
     fn._source = ast.get_source_segment(src, node)
     fn._ast = node
+    fn._type = ftype
     return fn
 
 
+def kernel(fn):
+    return _annotate_function(fn, FunctionType.KERNEL)
+
+
 def unit():
-    return kernel
+    def decorator(fn):
+        return _annotate_function(fn, FunctionType.UNIT)
+
+    return decorator
 
 
 def work(*, mapping: list[int], args=None):
     def decorator(fn):
-        src, node = find_function_ast(fn)
         fn._df_meta = {
             "mapping": mapping,
             "args": [] if args is None else args,
         }
-        fn._source = ast.get_source_segment(src, node)
-        fn._ast = node
-
-        return fn
+        return _annotate_function(fn, FunctionType.WORK)
 
     return decorator
