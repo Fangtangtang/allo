@@ -48,12 +48,8 @@ def unit():
     return decorator
 
 
-def work(*, mapping: list[int], args=None):
+def work(*, mapping: list[int], inputs=None, outputs=None):
     def decorator(fn):
-        fn._df_meta = {
-            "mapping": mapping,
-            "args": [] if args is None else args,
-        }
         return _annotate_function(fn, FunctionType.WORK)
 
     return decorator
