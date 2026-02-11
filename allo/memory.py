@@ -2,6 +2,7 @@
 # Copyright Allo authors. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import re
 from itertools import product
 from collections import defaultdict
 from dataclasses import dataclass
@@ -35,12 +36,42 @@ class Layout:
     class Shard:
         axis: int
 
+        def __repr__(self):
+            return f"S({self.axis})"
+
     @dataclass(frozen=True)
     class Replicate:
-        pass
+        def __repr__(self):
+            return "R"
 
     def __init__(self, partitions: list[Replicate | Shard]):
         self.partitions = partitions
+
+    @classmethod
+    def from_string(cls, s: str) -> "Layout":
+        """
+        Parse string like:
+            "[S(0)]"
+            "[S(0), R]"
+            "[R, S(1)]"
+        """
+        s = s.strip()
+        assert s.startswith("[") and s.endswith("]"), "Layout must be enclosed in []"
+        content = s[1:-1].strip()
+        tokens = re.findall(r"R|S\(\d+\)", content.replace(" ", ""))
+        partitions = [
+            cls.Replicate if t == "R" else cls.Shard(int(t[2:-1])) for t in tokens
+        ]
+        return cls(partitions)
+
+    def shard(self, shape: list[int], grid: list[int]):
+        local_shape = []
+        for dim, partition in zip(shape, self.partitions):
+            if isinstance(partition, Layout.Shard):
+                local_shape.append(dim // grid[partition.axis])
+            else:
+                local_shape.append(dim)
+        return local_shape
 
     def get_placement(self, mesh_dims: list[int]):
         """
@@ -77,6 +108,13 @@ class Layout:
             # Convert to tuples for final output
             result[tensor_id] = [tuple(coord) for coord in coords]
         return result
+
+    def __repr__(self):
+        inner = ", ".join(repr(p) for p in self.partitions)
+        return f"[{inner}]"
+
+    def __str__(self):
+        return self.__repr__()
 
 
 class Memory:
