@@ -53,3 +53,6 @@ def work(*, mapping: list[int], inputs=None, outputs=None):
         return _annotate_function(fn, FunctionType.WORK)
 
     return decorator
+
+def get_wid():
+    raise NotImplementedError("This function should be called in a work.")
