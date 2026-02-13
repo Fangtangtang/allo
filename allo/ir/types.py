@@ -332,7 +332,7 @@ class Stream(AlloType):
         shape = ", ".join(str(s) for s in self.shape)
         prefix = "Stateful[" if self.stateful else ""
         suffix = "]" if self.stateful else ""
-        return f"{prefix}Stream({self.dtype}[{shape}]){suffix}"
+        return f"{prefix}Stream({self.dtype}[{shape}], {self.depth}){suffix}"
 
 
 def allo_type_from_mlir_type(mlir_type):

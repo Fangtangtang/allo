@@ -24,6 +24,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/FunctionImplementation.h"
+#include "mlir/IR/SymbolTable.h"
 
 namespace mlir {
 namespace allo {
@@ -63,6 +64,60 @@ LogicalResult CustomizationOp::verify() {
              << i << '(' << entryBlock.getArgument(i).getType()
              << ") must match the type of the corresponding argument in "
              << "function signature(" << fnInputTypes[i] << ')';
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// StreamGlobalOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult StreamGlobalOp::verify() {
+  Type type = getElementType();
+  if (!llvm::isa<StreamType>(type)) {
+     return emitOpError("element type of global stream must be stream type");
+  }
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// GlobalStreamGetOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult GlobalStreamGetOp::verify() {
+  Operation *symbol = SymbolTable::lookupNearestSymbolFrom(*this, getGlobalAttr());
+  auto global = llvm::dyn_cast_or_null<StreamGlobalOp>(symbol);
+  if (!global)
+    return emitOpError("global stream not found: ") << getGlobal();
+  
+  if (global.getShape().size() != getIndices().size())
+    return emitOpError("rank mismatch: expected ") << global.getShape().size() << " indices, got " << getIndices().size();
+  
+  auto type = global.getElementType();
+  auto streamType = llvm::cast<StreamType>(type);
+  if (getResult().getType() != streamType.getBaseType())
+    return emitOpError("result type mismatch");
+  
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// GlobalStreamPutOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult GlobalStreamPutOp::verify() {
+  Operation *symbol = SymbolTable::lookupNearestSymbolFrom(*this, getGlobalAttr());
+  auto global = llvm::dyn_cast_or_null<StreamGlobalOp>(symbol);
+  if (!global)
+    return emitOpError("global stream not found: ") << getGlobal();
+  
+  if (global.getShape().size() != getIndices().size())
+    return emitOpError("rank mismatch: expected ") << global.getShape().size() << " indices, got " << getIndices().size();
+  
+  auto type = global.getElementType();
+  auto streamType = llvm::cast<StreamType>(type);
+  if (getData().getType() != streamType.getBaseType())
+    return emitOpError("data type mismatch");
 
   return success();
 }

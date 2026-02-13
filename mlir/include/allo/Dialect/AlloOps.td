@@ -1049,6 +1049,36 @@ def StreamPutOp : Allo_Op<"stream_put"> {
   }];
 }
 
+def StreamGlobalOp : Allo_Op<"stream_global", [Symbol]> {
+  let summary = "Create a global stream object";
+  let arguments = (ins SymbolNameAttr:$sym_name, TypeAttr:$element_type, DenseI64ArrayAttr:$shape);
+  let assemblyFormat = [{
+      $sym_name `(` $shape `)` `:` $element_type attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+def GlobalStreamGetOp : Allo_Op<"get_stream_global"> {
+  let summary = "Get an object from a global stream";
+  let arguments = (ins FlatSymbolRefAttr:$global, Variadic<Index>:$indices);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = [{
+      $global `[` $indices `]` attr-dict `:` type($result)
+  }];
+  let hasVerifier = 1;
+}
+
+def GlobalStreamPutOp : Allo_Op<"put_stream_global"> {
+  let summary = "Put an object to a global stream";
+  let arguments = (ins FlatSymbolRefAttr:$global, Variadic<Index>:$indices, AnyType:$data);
+  let results = (outs);
+  let assemblyFormat = [{
+      $global `[` $indices `]` `,` $data attr-dict `:` type($data)
+  }];
+  let hasVerifier = 1;
+}
+
+
 //===----------------------------------------------------------------------===//
 // Layout operations
 //===----------------------------------------------------------------------===//
