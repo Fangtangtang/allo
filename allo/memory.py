@@ -110,7 +110,9 @@ class Layout:
         return result
 
     def __repr__(self):
-        inner = ", ".join(repr(p) for p in self.partitions)
+        inner = ", ".join(
+            repr(p) if isinstance(p, Layout.Shard) else "R" for p in self.partitions
+        )
         return f"[{inner}]"
 
     def __str__(self):

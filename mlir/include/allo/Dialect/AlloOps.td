@@ -1060,7 +1060,15 @@ def StreamGlobalOp : Allo_Op<"stream_global", [Symbol]> {
 
 def GlobalStreamGetOp : Allo_Op<"get_stream_global"> {
   let summary = "Get an object from a global stream";
-  let arguments = (ins FlatSymbolRefAttr:$global, Variadic<Index>:$indices);
+  // arguments:
+  // - $global: symbol name of the global stream
+  // - $indices: variadic index operands
+  // - $map: affine map
+  let arguments = (
+    ins FlatSymbolRefAttr:$global,
+        Variadic<Index>:$indices,
+        AffineMapAttr:$map
+  );
   let results = (outs AnyType:$result);
   let assemblyFormat = [{
       $global `[` $indices `]` attr-dict `:` type($result)
@@ -1070,7 +1078,17 @@ def GlobalStreamGetOp : Allo_Op<"get_stream_global"> {
 
 def GlobalStreamPutOp : Allo_Op<"put_stream_global"> {
   let summary = "Put an object to a global stream";
-  let arguments = (ins FlatSymbolRefAttr:$global, Variadic<Index>:$indices, AnyType:$data);
+  // arguments:
+  // - $global: symbol name of the global stream
+  // - $indices: variadic index operands
+  // - $data: value to put
+  // - $map: affine map to compute indices
+  let arguments = (
+      ins FlatSymbolRefAttr:$global,
+          Variadic<Index>:$indices,
+          AnyType:$data,
+          AffineMapAttr:$map
+  );
   let results = (outs);
   let assemblyFormat = [{
       $global `[` $indices `]` `,` $data attr-dict `:` type($data)

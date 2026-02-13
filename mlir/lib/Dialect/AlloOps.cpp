@@ -90,14 +90,25 @@ LogicalResult GlobalStreamGetOp::verify() {
   if (!global)
     return emitOpError("global stream not found: ") << getGlobal();
   
-  if (global.getShape().size() != getIndices().size())
-    return emitOpError("rank mismatch: expected ") << global.getShape().size() << " indices, got " << getIndices().size();
-  
   auto type = global.getElementType();
   auto streamType = llvm::cast<StreamType>(type);
   if (getResult().getType() != streamType.getBaseType())
     return emitOpError("result type mismatch");
   
+  AffineMap map = getMap();
+
+  if (map.getNumDims() + map.getNumSymbols() != getIndices().size())
+    return emitOpError("affine map dim & symbol count mismatch");
+
+  int64_t rank = global.getShape().size();
+  if (map.getNumResults() != rank)
+    return emitOpError("affine map result count mismatch: expected ")
+           << rank << ", got " << map.getNumResults();
+
+  for (Value idx : getIndices())
+    if (!idx.getType().isIndex())
+      return emitOpError("indices must be of index type");
+
   return success();
 }
 
@@ -111,13 +122,24 @@ LogicalResult GlobalStreamPutOp::verify() {
   if (!global)
     return emitOpError("global stream not found: ") << getGlobal();
   
-  if (global.getShape().size() != getIndices().size())
-    return emitOpError("rank mismatch: expected ") << global.getShape().size() << " indices, got " << getIndices().size();
-  
   auto type = global.getElementType();
   auto streamType = llvm::cast<StreamType>(type);
   if (getData().getType() != streamType.getBaseType())
     return emitOpError("data type mismatch");
+
+  AffineMap map = getMap();
+
+  if (map.getNumDims() + map.getNumSymbols() != getIndices().size())
+    return emitOpError("affine map dim & symbol count mismatch");
+
+  int64_t rank = global.getShape().size();
+  if (map.getNumResults() != rank)
+    return emitOpError("affine map result count mismatch: expected ")
+           << rank << ", got " << map.getNumResults();
+
+  for (Value idx : getIndices())
+    if (!idx.getType().isIndex())
+      return emitOpError("indices must be of index type");
 
   return success();
 }
