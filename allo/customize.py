@@ -1360,7 +1360,11 @@ def customize(
     module = ASTTransformer()(ctx, tree, file_name)
     func_instances = {
         orig_name: {
-            dim: f"{orig_name}_{str(freeze_list(predicate_tag))}"
+            dim: (
+                f"{orig_name}_{str(freeze_list(predicate_tag))}"
+                if isinstance(predicate_tag, list)
+                else predicate_tag
+            )
             for dim, predicate_tag in kernel_instance_info.items()
         }
         for orig_name, kernel_instance_info in ctx.func_predicate_tags.items()

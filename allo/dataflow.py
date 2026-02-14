@@ -607,16 +607,17 @@ def build(
 
     if target == "aie":
         global_vars = get_global_vars(func)
+        unroll = True
         # [NOTE]: set unroll = False to improve compilation efficiency
         s: Schedule = _customize(
             func,
             global_vars=global_vars,
             enable_tensor=False,
-            unroll=False,
+            unroll=unroll,
             typing_rule_set="cpp-style",
         )
         stream_info, stream_types_dict, extra_stream_info = move_stream_to_interface(
-            s, with_stream_type=True, with_extra_info=True, unroll=False
+            s, with_stream_type=True, with_extra_info=True, unroll=unroll
         )
         s = _build_top(s, stream_info, True)
         aie_mod = AIE_MLIRModule(

@@ -854,6 +854,7 @@ class TypeInferer(ASTVisitor):
                 for axis, val in enumerate(dim):
                     new_ctx.global_vars.update({"df.p" + str(axis): val})
                 node.name = construct_kernel_name(orig_name, dim)
+                old_ctx.func_predicate_tags[orig_name][dim] = node.name
                 TypeInferer.visit_FunctionDef(new_ctx, node)
                 node.name = orig_name
         else:
