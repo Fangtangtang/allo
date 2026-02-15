@@ -449,18 +449,18 @@ def mod_rule():
 def cmp_rule():
     int_rules = {
         (Int, Int): lambda t1, t2: Int(max(t1.bits, t2.bits)),
-        (Int, UInt): lambda t1, t2: Int(max(t1.bits, t2.bits + 1)),
+        (Int, UInt): lambda t1, t2: UInt(max(t1.bits, t2.bits + 1)),
         (Int, Index): lambda t1, t2: Int(max(t1.bits, t2.bits + 1)),
         (Int, Fixed): lambda t1, t2: Fixed(
             max(t1.bits, t2.bits - t2.fracs) + t2.fracs, t2.fracs
         ),
-        (Int, UFixed): lambda t1, t2: Fixed(
+        (Int, UFixed): lambda t1, t2: UFixed(
             max(t1.bits, t2.bits - t2.fracs + 1) + t2.fracs, t2.fracs
         ),
         (Int, Float): lambda t1, t2: t2,
     }
     uint_rules = {
-        (UInt, Int): lambda t1, t2: Int(max(t1.bits + 1, t2.bits)),
+        (UInt, Int): lambda t1, t2: UInt(max(t1.bits + 1, t2.bits)),
         (UInt, UInt): lambda t1, t2: UInt(max(t1.bits, t2.bits)),
         (UInt, Index): lambda t1, t2: UInt(max(t1.bits, t2.bits)),
         (UInt, Fixed): lambda t1, t2: Fixed(
@@ -497,14 +497,14 @@ def cmp_rule():
             max(t1.bits - t1.fracs, t2.bits - t2.fracs) + max(t1.fracs, t2.fracs),
             max(t1.fracs, t2.fracs),
         ),
-        (Fixed, UFixed): lambda t1, t2: Fixed(
+        (Fixed, UFixed): lambda t1, t2: UFixed(
             max(t1.bits - t1.fracs, t2.bits - t2.fracs + 1) + max(t1.fracs, t2.fracs),
             max(t1.fracs, t2.fracs),
         ),
         (Fixed, Float): lambda t1, t2: t2,
     }
     ufixed_rules = {
-        (UFixed, Int): lambda t1, t2: Fixed(
+        (UFixed, Int): lambda t1, t2: UFixed(
             max(t1.bits - t1.fracs + 1, t2.bits) + t1.fracs, t1.fracs
         ),
         (UFixed, UInt): lambda t1, t2: UFixed(
@@ -513,7 +513,7 @@ def cmp_rule():
         (UFixed, Index): lambda t1, t2: UFixed(
             max(t1.bits - t1.fracs, t2.bits) + t1.fracs, t1.fracs
         ),
-        (UFixed, Fixed): lambda t1, t2: Fixed(
+        (UFixed, Fixed): lambda t1, t2: UFixed(
             max(t1.bits - t1.fracs + 1, t2.bits - t2.fracs) + max(t1.fracs, t2.fracs),
             max(t1.fracs, t2.fracs),
         ),
