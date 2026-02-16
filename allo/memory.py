@@ -306,8 +306,7 @@ class DTensor:
     Distributed tensor.
     """
 
-    def __init__(self, rank, mapping, shape, dtype, spec, name=None, top_name=None):
-        self.rank = rank
+    def __init__(self, mapping, shape, dtype, spec, name=None, top_name=None):
         self.mapping = mapping  # mesh dims
         self.shape = shape  # tensor shape
         self.dtype = dtype
@@ -469,7 +468,6 @@ class DTensor:
         parts.extend(
             [
                 f"mapping={self.mapping}",
-                f"rank={self.rank}",
                 f"local_shape={self.get_local_shape()}",
             ]
         )

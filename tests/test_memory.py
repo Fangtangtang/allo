@@ -106,7 +106,7 @@ class TestMemoryWithDTensor:
         """Test creating DTensor with Memory spec."""
         mem = Memory(resource="URAM")
         dtensor = DTensor(
-            rank=None, mapping=None, shape=(32, 32), dtype=int32, spec=mem, name="A"
+            mapping=None, shape=(32, 32), dtype=int32, spec=mem, name="A"
         )
         assert dtensor.memory == mem
         assert dtensor.layout is None
@@ -117,7 +117,6 @@ class TestMemoryWithDTensor:
         """Test creating DTensor with Layout spec (backward compatibility)."""
         layout = Layout([S(0), R])
         dtensor = DTensor(
-            rank=None,
             mapping=None,
             shape=(32, 32),
             dtype=int32,
@@ -131,7 +130,7 @@ class TestMemoryWithDTensor:
         """Test DTensor string representation includes memory."""
         mem = Memory(resource="BRAM", storage_type="RAM_2P")
         dtensor = DTensor(
-            rank=None, mapping=None, shape=(64,), dtype=float32, spec=mem, name="C"
+            mapping=None, shape=(64,), dtype=float32, spec=mem, name="C"
         )
         str_repr = str(dtensor)
         assert "memory=" in str_repr

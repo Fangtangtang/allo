@@ -921,7 +921,6 @@ class TypeInferer(ASTVisitor):
                         "Stateful variables can only be declared locally within a kernel."
                     )
                 arg.dtensor = DTensor(
-                    ctx.rank,
                     ctx.mapping,
                     arg.shape,
                     arg.dtype,
