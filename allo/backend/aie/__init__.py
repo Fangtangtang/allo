@@ -741,23 +741,20 @@ class AIE_MLIRModule:
             os.path.join(self.project_dir, "raw.mlir"), "w", encoding="utf-8"
         ) as f:
             f.write(str(self.allo_module))
-        if not skip:
-            # inject external kernels
-            # (inject before virtual mapping since using external kernel may require layout transformation when transferring data)
-            used_external_kernels, self.injected_external_kernels, self.include_src = (
-                inject_external_kernels(
-                    self.allo_module,
-                    self.top_func_name,
-                    self.external_kernel_lib,
-                    "aie2" if self.device == "npu1" else "aie2p",
-                )
+        # inject external kernels
+        # (inject before virtual mapping since using external kernel may require layout transformation when transferring data)
+        used_external_kernels, self.injected_external_kernels, self.include_src = (
+            inject_external_kernels(
+                self.allo_module,
+                self.top_func_name,
+                self.external_kernel_lib,
+                "aie2" if self.device == "npu1" else "aie2p",
             )
+        )
+        if not skip:
             self.analyze_kernel_parameters(
                 get_df_kernels(self.allo_module), self.injected_external_kernels
             )
-        else:
-            used_external_kernels = None
-            self.injected_external_kernels = {}  # TODO
 
         # ------------------------- virtual mapping -------------------------
         self.init_virtual_graph(used_external_kernels)
