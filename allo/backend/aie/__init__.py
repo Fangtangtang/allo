@@ -66,8 +66,6 @@ class AIE_MLIRModule:
     def __init__(
         self,
         module: allo_ir.ir.Module,
-        top_func_name: str,
-        func_args: dict,
         project_dir: str,
         func_instances: dict = None,
     ):
@@ -75,12 +73,27 @@ class AIE_MLIRModule:
         self.trace_size = 0
         self.project_dir: str = project_dir
         self.allo_module: allo_ir.ir.Module = module
-        self.top_func_name: str = top_func_name
+        # original name -> {grid coordinates -> instance tag}
         self.func_instances = func_instances
-        self.raw_function_args = func_args
+
+        self.aie_module: aie_ir.Module = None
+
+    def init_spmw(self, core_func_args, global_tensors):
+        self.external_kernel_lib: dict[str, ExternalModule] = {}  # TODO
+        self.streams: dict[str, Stream] = {}  # TODO
+        self.stream_info: dict[str, dict[str, bool]] = {}  # TODO
+        self.computation_is_dag = True  # TODO
+
+        # function name -> (argument index -> (argument, is_input))
+        self.core_func_args: dict = core_func_args
+        self.global_tensors: dict[int, DTensor] = global_tensors
+        self.module_runtime_args: list[RuntimeArgs] = None
+        self.top_func_name = "top"  # FIXME: useless??
 
     def init(
         self,
+        top_func_name: str,
+        func_args: dict,
         stream_info: dict,
         stream_types_dict: dict[str, Type],
         ext_libs: list = None,
@@ -91,8 +104,7 @@ class AIE_MLIRModule:
             we need to carefully manage data transfer between 'functions' to avoid deadlocks.
             For example, launching the kernels in topological order.
         """
-        # module metadata
-        self.trace_size = 0
+        self.top_func_name: str = top_func_name
 
         self.external_kernel_lib: dict[str, ExternalModule] = {}
         for ext_kernel in ext_libs:
@@ -102,7 +114,7 @@ class AIE_MLIRModule:
         self.func_args: dict[str, list[Argument | list[Argument]]] = {}
         self.streams: dict[str, Stream] = {}
         self.stream_info: dict[str, dict[str, bool]] = {}
-        self._init_func_args(self.raw_function_args)
+        self._init_func_args(func_args)
         self.computation_is_dag = self._init_streams(
             stream_info, stream_types_dict, extra_stream_info
         )
@@ -114,8 +126,6 @@ class AIE_MLIRModule:
         self.core_func_args: dict[
             str, dict[int, tuple[Argument | list[Argument], bool]]
         ] = None
-
-        self.aie_module: aie_ir.Module = None
 
     def _init_func_args(self, func_args: dict):
         tmp_map: dict = {}
@@ -274,7 +284,7 @@ class AIE_MLIRModule:
                             and not argument.dtensor is None
                         ):
                             argument.dtensor.set_access_pattern()
-                            argument.dtensor.type_as_param = kernel.arguments[
+                            argument.dtensor.tile_shape = kernel.arguments[
                                 io_idx
                             ].type.shape
                             global_idx = top_func_args.index(argument.dtensor.top_name)
@@ -702,6 +712,7 @@ class AIE_MLIRModule:
         num_iters: int = 100,
         trace: list[tuple[str, tuple[int, ...]]] = None,
         trace_size: int = 4096,
+        skip: bool = False,
     ):
         # virtual mapping can only be applied to DAG
         if not self.computation_is_dag:
@@ -730,19 +741,24 @@ class AIE_MLIRModule:
             os.path.join(self.project_dir, "raw.mlir"), "w", encoding="utf-8"
         ) as f:
             f.write(str(self.allo_module))
-        # inject external kernels
-        # (inject before virtual mapping since using external kernel may require layout transformation when transferring data)
-        used_external_kernels, self.injected_external_kernels, self.include_src = (
-            inject_external_kernels(
-                self.allo_module,
-                self.top_func_name,
-                self.external_kernel_lib,
-                "aie2" if self.device == "npu1" else "aie2p",
+        if not skip:
+            # inject external kernels
+            # (inject before virtual mapping since using external kernel may require layout transformation when transferring data)
+            used_external_kernels, self.injected_external_kernels, self.include_src = (
+                inject_external_kernels(
+                    self.allo_module,
+                    self.top_func_name,
+                    self.external_kernel_lib,
+                    "aie2" if self.device == "npu1" else "aie2p",
+                )
             )
-        )
-        self.analyze_kernel_parameters(
-            get_df_kernels(self.allo_module), self.injected_external_kernels
-        )
+            self.analyze_kernel_parameters(
+                get_df_kernels(self.allo_module), self.injected_external_kernels
+            )
+        else:
+            used_external_kernels = None
+            self.injected_external_kernels = {}  # TODO
+
         # ------------------------- virtual mapping -------------------------
         self.init_virtual_graph(used_external_kernels)
         if os.getenv("DEBUG") == "1":
@@ -803,7 +819,7 @@ class AIE_MLIRModule:
             module_str = pattern.sub(repl, module_str)
             self.allo_module = allo_ir.ir.Module.parse(module_str)
 
-        top_func, core_funcs, external_funcs = classify_aie_functions(
+        _, core_funcs, external_funcs = classify_aie_functions(
             self.allo_module, self.top_func_name
         )
 
@@ -826,7 +842,6 @@ class AIE_MLIRModule:
         code_generator = CodeGenerator(
             device_type,
             self.global_tensors,
-            top_func,
             self.core_func_args,
             self.streams,
             self.virtual_computation_graph,

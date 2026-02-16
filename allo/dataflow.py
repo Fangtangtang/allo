@@ -620,10 +620,10 @@ def build(
             s, with_stream_type=True, with_extra_info=True, unroll=unroll
         )
         s = _build_top(s, stream_info, True)
-        aie_mod = AIE_MLIRModule(
-            s.module, s.top_func_name, s.func_args, project, s.func_instances
-        )
+        aie_mod = AIE_MLIRModule(s.module, project, s.func_instances)
         aie_mod.init(
+            s.top_func_name,
+            s.func_args,
             stream_info,
             stream_types_dict,
             s.ext_libs,

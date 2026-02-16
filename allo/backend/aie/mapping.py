@@ -438,7 +438,7 @@ class InitialNode(NodeBase):
         self,
         func_sample: func_d.FuncOp,
         func_name: str,
-        used_external_kernel: bool,
+        used_external_kernel: set[str],
         tag: str,
     ):
         super().__init__(func_name, func_sample, used_external_kernel, tag, 1)
@@ -565,9 +565,14 @@ class ComputationGraph:
         df_kernels = []
         self.samples = set()
         for func in allo_module.body.operations:
-            if func.attributes["sym_name"].value == top_func_name:
+            if self.insert_point is None:
                 self.insert_point = InsertionPoint(func)
-            elif isinstance(func, func_d.FuncOp) and "df.kernel" in func.attributes:
+            if func.attributes["sym_name"].value == top_func_name:
+                pass
+            elif (
+                isinstance(func, func_d.FuncOp)
+                and getattr(func.sym_visibility, "value", None) != "private"
+            ):
                 df_kernels.append(func)
                 self.samples.add(func.attributes["sym_name"].value)
 
@@ -586,7 +591,11 @@ class ComputationGraph:
                 node = InitialNode(
                     func_sample,
                     func_name,
-                    used_external_kernels[predicate_tag],
+                    (
+                        used_external_kernels[predicate_tag]
+                        if used_external_kernels
+                        else set()
+                    ),
                     predicate_tag,
                 )
                 _, indexes = parse_kernel_name(func_name)

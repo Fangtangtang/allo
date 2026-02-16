@@ -661,12 +661,9 @@ def classify_aie_functions(
                     external_funcs.append(func)
                 elif func.attributes["sym_name"].value == top_function_name:
                     top_func = func
-                elif "df.kernel" in func.attributes:
-                    core_funcs.append(func)
                 else:
-                    raise ValueError(
-                        f"Unknown function type: {func.attributes['sym_name'].value}"
-                    )
+                    core_funcs.append(func)
+
     return top_func, core_funcs, external_funcs
 
 

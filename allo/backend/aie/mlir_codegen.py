@@ -80,7 +80,6 @@ class CodeGenerator:
         self,
         device_type: str,
         global_tensors: dict[int, DTensor],
-        top_function: allo_func_d.FuncOp,
         core_func_args: dict[str, dict[int, tuple[Argument, bool]]],
         streams: dict[str, Stream],
         virtual_computation_graph: ComputationGraph = None,
@@ -92,7 +91,6 @@ class CodeGenerator:
         self.global_tensors: dict[int, DTensor] = global_tensors
         self.arg_slots_in_runtime_args: dict[int, tuple[int, int]] = {}
         self.module_runtime_args: list[RuntimeArgs] = []
-        self.top_function = top_function
         self.core_func_args = core_func_args
         self.streams = streams
         self.virtual_computation_graph: ComputationGraph = virtual_computation_graph
@@ -1436,7 +1434,7 @@ class CodeGenerator:
                             tile_size,
                             dtensor.is_input,
                             dtensor.dtype,
-                            dtensor.type_as_param,
+                            dtensor.tile_shape,
                         ):
                             break
                         size_cp = size_.copy()
@@ -1462,7 +1460,7 @@ class CodeGenerator:
                                 tile_size,
                                 dtensor.is_input,
                                 dtensor.dtype,
-                                dtensor.type_as_param,
+                                dtensor.tile_shape,
                             ):
                                 break
                             size_cp = partitioned_size

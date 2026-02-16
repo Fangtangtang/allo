@@ -336,7 +336,7 @@ class DTensor:
         self.access_pattern_set = False
         self.global_id: int = None
         self.is_input: bool = None
-        self.type_as_param: list = None
+        self.tile_shape: list = None
 
     def get_local_shape(self):
         """
