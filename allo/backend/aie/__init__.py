@@ -69,10 +69,21 @@ class AIE_MLIRModule:
         top_func_name: str,
         func_args: dict,
         project_dir: str,
+        func_instances: dict = None,
+    ):
+        # module metadata
+        self.trace_size = 0
+        self.project_dir: str = project_dir
+        self.allo_module: allo_ir.ir.Module = module
+        self.top_func_name: str = top_func_name
+        self.func_instances = func_instances
+        self.raw_function_args = func_args
+
+    def init(
+        self,
         stream_info: dict,
         stream_types_dict: dict[str, Type],
         ext_libs: list = None,
-        func_instances: dict = None,
         extra_stream_info: dict = None,
     ):
         """
@@ -82,10 +93,6 @@ class AIE_MLIRModule:
         """
         # module metadata
         self.trace_size = 0
-        self.project_dir: str = project_dir
-        self.allo_module: allo_ir.ir.Module = module
-        self.top_func_name: str = top_func_name
-        self.func_instances = func_instances
 
         self.external_kernel_lib: dict[str, ExternalModule] = {}
         for ext_kernel in ext_libs:
@@ -95,7 +102,7 @@ class AIE_MLIRModule:
         self.func_args: dict[str, list[Argument | list[Argument]]] = {}
         self.streams: dict[str, Stream] = {}
         self.stream_info: dict[str, dict[str, bool]] = {}
-        self._init_func_args(func_args)
+        self._init_func_args(self.raw_function_args)
         self.computation_is_dag = self._init_streams(
             stream_info, stream_types_dict, extra_stream_info
         )

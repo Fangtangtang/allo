@@ -607,7 +607,7 @@ def build(
 
     if target == "aie":
         global_vars = get_global_vars(func)
-        unroll = True
+        unroll = False
         # [NOTE]: set unroll = False to improve compilation efficiency
         s: Schedule = _customize(
             func,
@@ -621,14 +621,12 @@ def build(
         )
         s = _build_top(s, stream_info, True)
         aie_mod = AIE_MLIRModule(
-            s.module,
-            s.top_func_name,
-            s.func_args,
-            project,
+            s.module, s.top_func_name, s.func_args, project, s.func_instances
+        )
+        aie_mod.init(
             stream_info,
             stream_types_dict,
             s.ext_libs,
-            s.func_instances,
             extra_stream_info=extra_stream_info,
         )
         if device_type is None:
