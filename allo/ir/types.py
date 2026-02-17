@@ -17,7 +17,7 @@ from .._mlir.ir import (
 )
 from .._mlir.dialects import allo as allo_d
 from .._mlir.exceptions import DTypeError, DTypeWarning
-
+import allo._mlir.extras.types as mlir_types
 
 class TypeAnnotation:
     """
@@ -140,7 +140,7 @@ class Int(AlloType):
         super().__init__(bits, 0, f"i{bits}")
 
     def build(self):
-        return IntegerType.get_signless(self.bits)
+        return mlir_types.i(self.bits)
 
     @staticmethod
     def isinstance(other):
@@ -167,7 +167,7 @@ class UInt(AlloType):
         # unsigned integers as arguments, we use the signless integer type,
         # label it in the IR with attributes, and then cast it to unsigned
         # in the codegen.
-        return IntegerType.get_signless(self.bits)
+        return mlir_types.i(self.bits)
 
     @staticmethod
     def isinstance(other):

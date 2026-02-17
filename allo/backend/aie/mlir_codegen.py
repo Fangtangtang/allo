@@ -121,7 +121,7 @@ class CodeGenerator:
             None  # mark the inserting point for buffers
         )
 
-    def preporocess_dumped_core_func(
+    def preprocess_dumped_core_func(
         self,
         original_func: allo_func_d.FuncOp,
         func_args: dict[int, tuple[Union[Argument, list[Argument]], bool]],
@@ -257,7 +257,7 @@ class CodeGenerator:
                 input_arg_depth.append(elem.value)
         else:
             input_arg_depth = None
-        func_string = self.preporocess_dumped_core_func(original_func, func_args)
+        func_string = self.preprocess_dumped_core_func(original_func, func_args)
         original_module = aie_ir.Module.parse(func_string)
         parsed_function: aie_func_d.FuncOp = None
         for func in original_module.body.operations:
