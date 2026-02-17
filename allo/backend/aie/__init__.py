@@ -36,6 +36,7 @@ from .external_kernel import ExternalModule, ExternalModuleBase
 from .mlir_codegen import CodeGenerator
 from .vliw import vliw
 from .utils import (
+    StreamType,
     Argument,
     Stream,
     inject_external_kernels,
@@ -172,9 +173,7 @@ class AIE_MLIRModule:
         for func_name, info_list in stream_info.items():
             self.stream_info[func_name] = {}
             for name, io in info_list:
-                self.streams[name].set_element_type(
-                    str(stream_types_dict[name]), self.allo_module.context
-                )
+                self.streams[name].set_element_type(stream_types_dict[name])
                 if io == "in":
                     self.streams[name].dst = func_name
                     self.stream_info[func_name][name] = True

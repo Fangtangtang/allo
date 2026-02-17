@@ -125,7 +125,7 @@ class Stream:
         self.src_layout_transform: tuple[list[int], list[int], list[int], str] = None
         self.dst_layout_transform: tuple[list[int], list[int], list[int], str] = None
 
-    def set_element_type(self, type_str: str, context: Context):
+    def set_element_type(self, stype: allo_d.StreamType):
         """
         Set the element type of the stream from a type string.
         This function parses the type string and extracts the data shape and dtype.
@@ -134,61 +134,22 @@ class Stream:
             - type_str (str): The IR type string
             - context (Context): The current allo MLIR context used for constructing types
         """
+        type_str = str(stype)
         if self.type is not None:
             assert type_str == self.type_str
             return
         self.type_str = type_str
-        match = re.match(r"!allo\.stream<([^,]+),\s*(\d+)>", type_str)
-        shape: list[int] = None
-        dtype: str = None
-        if match:
-            with context, allo_ir.ir.Location.unknown():
-                element_type_str = match.group(1)
-                depth = int(match.group(2))
-                memref_match = re.match(
-                    r"memref<([0-9x\?]*)x?([a-z0-9]+)>", element_type_str
-                )
-                if memref_match:
-                    shape_part = memref_match.group(1)
-                    dtype = memref_match.group(2)
-                    if shape_part == "":
-                        shape = []
-                    else:
-                        shape = [
-                            -1 if dim == "?" else int(dim)
-                            for dim in shape_part.split("x")
-                            if dim
-                        ]
-                else:
-                    type_match = re.match(r"([a-z]+[0-9]*)", element_type_str)
-                    if type_match:
-                        shape, dtype = [], element_type_str
-                    else:
-                        raise ValueError(f"Invalid stream type {type_str}.")
-
-                def get_element_allo_type(dtype_str: str) -> Type:
-                    if dtype_str == "i32":
-                        return IntegerType.get_signless(32)
-                    if dtype_str == "i16":
-                        return IntegerType.get_signless(16)
-                    if dtype_str == "i8":
-                        return IntegerType.get_signless(8)
-                    if dtype_str == "f32":
-                        return F32Type.get()
-                    if dtype_str == "f16":
-                        return F16Type.get()
-                    if dtype_str == "bf16":
-                        return BF16Type.get()
-                    raise ValueError(f"Unsupported dtype: {dtype_str}")
-
-                self.allo_element_type = MemRefType.get(
-                    shape,
-                    get_element_allo_type(dtype),
-                )
-                self.type = StreamType(depth, shape, dtype)
-                self.is_tensor = len(shape) > 0
+        stream_type = allo_d.StreamType(stype)
+        base_type = stream_type.base_type
+        if isinstance(base_type, MemRefType):
+            shape, dtype = base_type.shape, base_type.element_type
+            self.allo_element_type = base_type
         else:
-            raise ValueError(f"Invalid stream type {type_str}.")
+            shape, dtype = [], base_type
+            with stype.context, allo_ir.ir.Location.unknown():
+                self.allo_element_type = MemRefType.get([], dtype)
+        self.type = StreamType(stream_type.depth, shape, dtype)
+        self.is_tensor = len(shape) > 0
 
     def get_dimensions_to_stream(self):
         if (
@@ -215,7 +176,7 @@ class Stream:
         sizes = list(layout_transform[1])
         strides = list(layout_transform[2])
         assert len(sizes) == len(strides)
-        if self.type_str == "i4":
+        if self.allo_element_type.element_type.width == 4:
             sizes[-1] //= 2
             for i in range(len(sizes) - 1):
                 strides[i] //= 2
