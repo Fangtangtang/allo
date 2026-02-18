@@ -7,8 +7,6 @@ add_mlir_library(MLIRAlloSupport
   ${globbed}
 
   LINK_LIBS PUBLIC
-  SdyDialect          # Linked from Shardy
-  StablehloOps        # Linked from StableHLO
   MLIRIR
   MLIRParser
   MLIRPass
