@@ -112,6 +112,49 @@ LogicalResult GlobalStreamGetOp::verify() {
   return success();
 }
 
+void GlobalStreamGetOp::print(OpAsmPrinter &p) {
+  p << " @" << getGlobal() << '[';
+  if (AffineMapAttr mapAttr =
+          (*this)->getAttrOfType<AffineMapAttr>("map")) {
+    p.printAffineMapOfSSAIds(mapAttr, getIndices());
+  }
+  p << ']';
+  p.printOptionalAttrDict((*this)->getAttrs(),{"map", "global"});
+  p << " : " << getResult().getType();
+}
+
+
+ParseResult GlobalStreamGetOp::parse(OpAsmParser &parser,
+                                     OperationState &result) {
+  auto &builder = parser.getBuilder();
+  auto indexTy = builder.getIndexType();
+
+  FlatSymbolRefAttr globalAttr;
+  if (parser.parseAttribute(globalAttr, "global", result.attributes))
+    return failure();
+
+  AffineMapAttr mapAttr;
+  SmallVector<OpAsmParser::UnresolvedOperand, 2> mapOperands;
+  if (parser.parseAffineMapOfSSAIds(mapOperands, mapAttr, "map", result.attributes))
+    return failure();
+
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+
+  Type resultType;
+  if (parser.parseColonType(resultType))
+    return failure();
+
+  result.addTypes(resultType);
+
+  if (parser.resolveOperands(mapOperands, indexTy, result.operands))
+    return failure();
+
+  return success();
+}
+
+
+
 //===----------------------------------------------------------------------===//
 // GlobalStreamPutOp
 //===----------------------------------------------------------------------===//
@@ -140,6 +183,55 @@ LogicalResult GlobalStreamPutOp::verify() {
   for (Value idx : getIndices())
     if (!idx.getType().isIndex())
       return emitOpError("indices must be of index type");
+
+  return success();
+}
+
+void GlobalStreamPutOp::print(OpAsmPrinter &p) {
+  p << " " << getData();
+  p << ", @" << getGlobal() << '[';
+  if (AffineMapAttr mapAttr =
+          (*this)->getAttrOfType<AffineMapAttr>("map")) {
+    p.printAffineMapOfSSAIds(mapAttr, getIndices());
+  }
+  p << ']';
+  p.printOptionalAttrDict((*this)->getAttrs(),{"map", "global"});
+  p << " : " << getData().getType();
+}
+
+
+ParseResult GlobalStreamPutOp::parse(OpAsmParser &parser,
+                                     OperationState &result) {
+  auto &builder = parser.getBuilder();
+  auto indexTy = builder.getIndexType();
+  
+  OpAsmParser::UnresolvedOperand data;
+  if (parser.parseOperand(data))
+    return failure();
+  
+  if (parser.parseComma()) // ,
+    return failure();
+
+  FlatSymbolRefAttr globalAttr;
+  if (parser.parseAttribute(globalAttr, "global", result.attributes))
+    return failure();
+
+  AffineMapAttr mapAttr;
+  SmallVector<OpAsmParser::UnresolvedOperand, 2> mapOperands;
+  if (parser.parseAffineMapOfSSAIds(mapOperands, mapAttr, "map", result.attributes))
+    return failure();
+
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+
+  Type dataType;
+  if (parser.parseColonType(dataType))
+    return failure();
+
+  if (parser.resolveOperands(mapOperands, indexTy, result.operands))
+    return failure();
+  if (parser.resolveOperand(data, dataType, result.operands))
+    return failure();
 
   return success();
 }

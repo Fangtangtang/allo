@@ -1053,7 +1053,7 @@ def StreamGlobalOp : Allo_Op<"stream_global", [Symbol]> {
   let summary = "Create a global stream object";
   let arguments = (ins SymbolNameAttr:$sym_name, TypeAttr:$element_type, DenseI64ArrayAttr:$shape);
   let assemblyFormat = [{
-      $sym_name `(` $shape `)` `:` $element_type attr-dict
+      $sym_name `:` $element_type $shape  attr-dict
   }];
   let hasVerifier = 1;
 }
@@ -1070,10 +1070,8 @@ def GlobalStreamGetOp : Allo_Op<"get_stream_global"> {
         AffineMapAttr:$map
   );
   let results = (outs AnyType:$result);
-  let assemblyFormat = [{
-      $global `[` $indices `]` attr-dict `:` type($result)
-  }];
   let hasVerifier = 1;
+  let hasCustomAssemblyFormat = 1;
 }
 
 def GlobalStreamPutOp : Allo_Op<"put_stream_global"> {
@@ -1090,10 +1088,8 @@ def GlobalStreamPutOp : Allo_Op<"put_stream_global"> {
           AffineMapAttr:$map
   );
   let results = (outs);
-  let assemblyFormat = [{
-      $global `[` $indices `]` `,` $data attr-dict `:` type($data)
-  }];
   let hasVerifier = 1;
+  let hasCustomAssemblyFormat = 1;
 }
 
 
