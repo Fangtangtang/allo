@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # pylint: disable=redefined-builtin, no-name-in-module
 
+import abc
 import re
 import numbers
 from collections import OrderedDict
@@ -18,6 +19,7 @@ from .._mlir.ir import (
 from .._mlir.dialects import allo as allo_d
 from .._mlir.exceptions import DTypeError, DTypeWarning
 import allo._mlir.extras.types as mlir_types
+
 
 class TypeAnnotation:
     """
@@ -46,7 +48,7 @@ class TypeAnnotation:
 _TYPE_REGISTRY = {}
 
 
-class AlloType:
+class AlloType(abc.ABC):
     def __init__(self, bits, fracs, name):
         if not isinstance(bits, numbers.Integral):
             raise DTypeError("Bitwidth must be an integer.")
@@ -66,9 +68,17 @@ class AlloType:
         if name not in _TYPE_REGISTRY:
             _TYPE_REGISTRY[name] = self
 
+    @abc.abstractmethod
     def build(self):
         # Required a MLIR context outside
-        raise NotImplementedError
+        pass
+
+    @abc.abstractmethod
+    def type_hint(self) -> str:
+        """
+        MLIR do not classify signed / unsigned, tag hint for correct lowering
+        """
+        pass
 
     @staticmethod
     def isinstance(other):
@@ -119,6 +129,9 @@ class Index(AlloType):
     def build(self):
         return IndexType.get()
 
+    def type_hint(self) -> str:
+        return "_index"
+
     @staticmethod
     def isinstance(other):
         return isinstance(other, (Index, int))
@@ -141,6 +154,9 @@ class Int(AlloType):
 
     def build(self):
         return mlir_types.i(self.bits)
+
+    def type_hint(self) -> str:
+        return "signed"
 
     @staticmethod
     def isinstance(other):
@@ -168,6 +184,9 @@ class UInt(AlloType):
         # label it in the IR with attributes, and then cast it to unsigned
         # in the codegen.
         return mlir_types.i(self.bits)
+
+    def type_hint(self) -> str:
+        return "unsigned"
 
     @staticmethod
     def isinstance(other):
@@ -214,6 +233,9 @@ class Float(AlloType):
         if self.bits == 64:
             return F64Type.get()
 
+    def type_hint(self) -> str:
+        return "_float"
+
     @staticmethod
     def isinstance(other):
         return isinstance(other, (Float, float))
@@ -240,6 +262,9 @@ class Fixed(AlloType):
     def build(self):
         return allo_d.FixedType.get(self.bits, self.fracs)
 
+    def type_hint(self) -> str:
+        return "signed"
+
 
 class UFixed(AlloType):
     """
@@ -260,6 +285,9 @@ class UFixed(AlloType):
 
     def build(self):
         return allo_d.UFixedType.get(self.bits, self.fracs)
+
+    def type_hint(self) -> str:
+        return "unsigned"
 
 
 class Struct(AlloType):
@@ -297,6 +325,9 @@ class Struct(AlloType):
             types.append(dtype.build())
         return allo_d.StructType.get(types)
 
+    def type_hint(self) -> str:
+        return "_struct"
+
 
 class ConstExpr:
     """
@@ -333,6 +364,9 @@ class Stream(AlloType):
         prefix = "Stateful[" if self.stateful else ""
         suffix = "]" if self.stateful else ""
         return f"{prefix}Stream({self.dtype}[{shape}], {self.depth}){suffix}"
+
+    def type_hint(self) -> str:
+        return "_stream"
 
 
 def allo_type_from_mlir_type(mlir_type):
