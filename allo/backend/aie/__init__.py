@@ -753,6 +753,7 @@ class AIE_MLIRModule:
             import time
 
             start = time.perf_counter()
+            assert len(self.grids) == 1
             for name, hint in self.hint:
                 assert name in self.grids
                 grid, grid_size = self.grids[name]

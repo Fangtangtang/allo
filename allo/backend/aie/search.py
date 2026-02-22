@@ -88,13 +88,13 @@ def bundle_on_axes(axes, b_tiles, grid, grid_size):
     return new_grid, mapping_primitives, sizes
 
 
-def search(reduce_axes, parallel_axes, grid, grid_size):
+def search(reduce_axes, parallel_axes, grid, grid_size, threshold=16):
     mappings = []
     factors = [1, 2, 4, 8, 16]
     axes_list = reduce_axes + parallel_axes
 
     def reduce_graph(grid_, grid_size_, mapping_primitives, axes_id):
-        if np.prod(grid_size_) <= 16:
+        if np.prod(grid_size_) <= threshold:
             print(np.prod(grid_size_))
             mappings.append(mapping_primitives)
             return
