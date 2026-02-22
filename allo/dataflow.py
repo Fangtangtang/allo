@@ -447,6 +447,7 @@ def build(
     trace: list[tuple[str, tuple[int, ...]]] = None,
     trace_size: int = 4096,
     device_type: Union[str, None] = None,
+    hint=None,
 ):
     assert not profile or target == "aie", "Profiling is only supported for AIE target"
     assert (
@@ -477,6 +478,8 @@ def build(
             s.ext_libs,
             s.func_instances,
             extra_stream_info=extra_stream_info,
+            grids=s.grids,
+            hint=hint,
         )
         if device_type is None:
             if os.getenv("NPU2") == "1":

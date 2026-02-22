@@ -58,6 +58,7 @@ class ASTContext:
         enable_tensor=False,
         typing_rule_set="default",
         verbose=False,
+        grids=None,
     ):
         self.ip_stack = []
         self.buffers = {}
@@ -102,6 +103,7 @@ class ASTContext:
         self.func_predicate_tags = (
             {} if func_predicate_tags is None else func_predicate_tags
         )
+        self.grids = {} if grids is None else grids
         # df.kernel name -> {predicate tag -> kernel instance},
         self.func_tag2instance = {} if func_tag2instance is None else func_tag2instance
         # a nested structure of (predicate, []),
@@ -132,6 +134,7 @@ class ASTContext:
             enable_tensor=self.enable_tensor,
             typing_rule_set=self.typing_rule_set,
             verbose=self.verbose,
+            grids=self.grids,
         )
         ctx.func_id = self.func_id
         ctx.func_name2id = self.func_name2id

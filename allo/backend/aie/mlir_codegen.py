@@ -1742,7 +1742,6 @@ class CodeGenerator:
             # mapping to physical/logical
             # TODO: co-designed mapping to different types of tiles
             arg_to_fifo = self.map_data_transfer()
-            print(arg_to_fifo)
             core_func_connected_mem_tile: dict[str, dict[str, int]] = {}
             for func_name in arg_to_fifo.keys():
                 core_func_connected_mem_tile[func_name] = {

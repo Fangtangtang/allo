@@ -732,6 +732,16 @@ class TypeInferer(ASTVisitor):
                                 arg.top_arg = top_arg_name.id
                             orig_name = node.name
                             old_ctx.func_predicate_tags[orig_name] = {}
+
+                            def helper(dim, indices):
+                                if dim == len(mapping):
+                                    return construct_kernel_name(orig_name, indices)
+                                return [
+                                    helper(dim + 1, indices + [i])
+                                    for i in range(mapping[dim])
+                                ]
+
+                            old_ctx.grids[orig_name] = (helper(0, []), mapping)
                             if ctx.unroll:
                                 for dim in np.ndindex(*mapping):
                                     new_ctx = old_ctx.copy()

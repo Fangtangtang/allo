@@ -119,6 +119,7 @@ class Schedule:
         ext_libs=None,
         inst_list=None,
         func_instances=None,
+        grids=None,
     ):
         self.module = module
         self.top_func = top_func
@@ -137,6 +138,7 @@ class Schedule:
                 if func_name not in self.func_args:
                     self.func_args[func_name] = []
         self.func_instances = func_instances
+        self.grids = grids
         self.systolic = check_systolic(self)
 
     def get_loops(self, func=None):
@@ -1384,6 +1386,7 @@ def customize(
         ext_libs=ctx.ext_libs,
         inst_list=instantiate,
         func_instances=func_instances,
+        grids=ctx_type_inf.grids,
     )
     sch.stateful_var_map = getattr(ctx, "stateful_var_map", {})
     # Attach buffers to schedule:

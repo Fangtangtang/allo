@@ -7,6 +7,7 @@ import re
 import subprocess
 import shutil
 import numpy as np
+from .search import chain_on_axes, search
 
 try:
     import aie.ir as aie_ir
@@ -74,6 +75,8 @@ class AIE_MLIRModule:
         ext_libs: list = None,
         func_instances: dict = None,
         extra_stream_info: dict = None,
+        grids=None,
+        hint=None,
     ):
         """
         Note: the module is data-driven,
@@ -86,6 +89,8 @@ class AIE_MLIRModule:
         self.allo_module: allo_ir.ir.Module = module
         self.top_func_name: str = top_func_name
         self.func_instances = func_instances
+        self.grids = grids
+        self.hint = hint
 
         self.external_kernel_lib: dict[str, ExternalModule] = {}
         for ext_kernel in ext_libs:
@@ -743,8 +748,38 @@ class AIE_MLIRModule:
         if os.getenv("DEBUG") == "1":
             self.virtual_computation_graph.dump(self.project_dir)
 
+        if os.getenv("EXP_MAPPING") == "1" and mapping_primitives is None:
+            # try to generate mapping primitives
+            import time
+
+            start = time.perf_counter()
+            for name, hint in self.hint:
+                assert name in self.grids
+                grid, grid_size = self.grids[name]
+                reduce_axes = []
+                parallel_axes = []
+                for i, h in enumerate(hint):
+                    if h == "+":
+                        reduce_axes.append(i)
+                    elif h == "-":
+                        parallel_axes.append(i)
+                assert len(reduce_axes) <= 1
+                mappings = search(reduce_axes, parallel_axes, grid, grid_size)
+            end = time.perf_counter()
+            print(f"Execution time: {end - start:.6f} seconds")
+            mapping_primitives = mappings[0]
+            for i, mapping in enumerate(mappings):
+                with open(
+                    os.path.join(f"{self.project_dir}/mappings", f"{i}.txt"),
+                    "w",
+                    encoding="utf-8",
+                ) as f:
+                    for pr in mapping:
+                        f.write(f"{str(pr)}\n")
+
         if mapping_primitives is not None:
             for mapping in mapping_primitives:
+                # print(mapping)
                 primitive = mapping[0]
                 arg_list = mapping[1]
                 if primitive == "chain":
