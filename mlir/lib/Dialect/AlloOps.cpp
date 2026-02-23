@@ -25,6 +25,8 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/FunctionImplementation.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 
 namespace mlir {
 namespace allo {
@@ -153,7 +155,43 @@ ParseResult GlobalStreamGetOp::parse(OpAsmParser &parser,
   return success();
 }
 
+template <typename OpTy>
+static void simplifyStreamAffineMap(OpTy op) {
+  AffineMap map = op.getMap();
+  SmallVector<AffineExpr, 4> symReplacements;
 
+  auto *context = map.getContext();
+  unsigned numDims = map.getNumDims();
+  unsigned numSymbols = map.getNumSymbols();
+
+  // Collect dim operands (these must stay)
+  SmallVector<Value, 4> newOperands;
+  for (unsigned i = 0; i < numDims; ++i) {
+    newOperands.push_back(op.getIndices()[i]);
+  }
+  // Replace symbols with constants
+  for (unsigned i = 0; i < numSymbols; ++i) {
+    Value opValue = op.getIndices()[numDims + i];
+    if (auto constOp = opValue.template getDefiningOp<arith::ConstantOp>()) {
+      int64_t val = llvm::cast<IntegerAttr>(constOp.getValue()).getInt();
+      symReplacements.push_back(getAffineConstantExpr(val, context));
+    } else {
+      op.emitOpError() << "expected arith.constant for symbol, but got: " << opValue;
+      return;
+    }
+  }
+
+  // Replace only symbols
+  AffineMap newMap = map.replaceDimsAndSymbols({}, symReplacements, numDims, 0);
+  newMap = mlir::compressUnusedSymbols(mlir::simplifyAffineMap(newMap));
+  op.setMapAttr(AffineMapAttr::get(newMap));
+  // Update operands: keep dims only
+  op.getIndicesMutable().assign(newOperands);
+}
+
+void GlobalStreamGetOp::simplifyAffineMap() {
+  simplifyStreamAffineMap(*this);
+}
 
 //===----------------------------------------------------------------------===//
 // GlobalStreamPutOp
@@ -235,6 +273,12 @@ ParseResult GlobalStreamPutOp::parse(OpAsmParser &parser,
 
   return success();
 }
+
+
+void GlobalStreamPutOp::simplifyAffineMap() {
+  simplifyStreamAffineMap(*this);
+}
+
 
 //===----------------------------------------------------------------------===//
 // General helpers for comparison ops

@@ -1072,6 +1072,9 @@ def GlobalStreamGetOp : Allo_Op<"get_stream_global"> {
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
   let hasCustomAssemblyFormat = 1;
+  let extraClassDeclaration = [{
+    void simplifyAffineMap();
+  }];
 }
 
 def GlobalStreamPutOp : Allo_Op<"put_stream_global"> {
@@ -1090,6 +1093,9 @@ def GlobalStreamPutOp : Allo_Op<"put_stream_global"> {
   let results = (outs);
   let hasVerifier = 1;
   let hasCustomAssemblyFormat = 1;
+  let extraClassDeclaration = [{
+    void simplifyAffineMap();
+  }];
 }
 
 

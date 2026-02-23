@@ -242,6 +242,15 @@ static MlirOperation getNextUseInFunction(MlirValue value, MlirOperation curUse,
   return wrap(result);
 }
 
+static void simplifyStreamAffineMap(MlirOperation op) {
+  mlir::Operation *operation = unwrap(op);
+  if (auto putOp = llvm::dyn_cast<GlobalStreamPutOp>(operation)) {
+    putOp.simplifyAffineMap();
+  } else if (auto getOp = llvm::dyn_cast<GlobalStreamGetOp>(operation)) {
+    getOp.simplifyAffineMap();
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // Allo Python module definition
 //===----------------------------------------------------------------------===//
@@ -357,4 +366,5 @@ NB_MODULE(_allo, m) {
   allo_m.def("get_first_use_in_function", &getFirstUseInFunction);
   allo_m.def("get_last_use_in_function", &getLastUseInFunction);
   allo_m.def("get_next_use_in_function", &getNextUseInFunction);
+  allo_m.def("simplify_stream_affine_map", &simplifyStreamAffineMap);
 }
