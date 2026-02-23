@@ -163,15 +163,19 @@ static void simplifyStreamAffineMap(OpTy op) {
   auto *context = map.getContext();
   unsigned numDims = map.getNumDims();
   unsigned numSymbols = map.getNumSymbols();
+  auto indices = op.getIndices(); 
 
   // Collect dim operands (these must stay)
   SmallVector<Value, 4> newOperands;
   for (unsigned i = 0; i < numDims; ++i) {
-    newOperands.push_back(op.getIndices()[i]);
+    newOperands.push_back(indices[i]);
+  }
+  if (indices.size() > numDims + numSymbols) {
+    newOperands.push_back(indices[numDims + numSymbols]);
   }
   // Replace symbols with constants
   for (unsigned i = 0; i < numSymbols; ++i) {
-    Value opValue = op.getIndices()[numDims + i];
+    Value opValue = indices[numDims + i];
     if (auto constOp = opValue.template getDefiningOp<arith::ConstantOp>()) {
       int64_t val = llvm::cast<IntegerAttr>(constOp.getValue()).getInt();
       symReplacements.push_back(getAffineConstantExpr(val, context));
