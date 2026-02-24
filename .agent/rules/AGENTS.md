@@ -8,7 +8,7 @@ trigger: always_on
 
 # Building
 - Run `pip install -v -e .` to build the full project (includes MLIR/C++ backend)
-- Always `conda activate allo` using miniconda under the user's home directory before building or running tests
+- Always `source ~/miniconda3/bin/activate allo` before building or running tests
 
 # Testing
 - Run `bash scripts/lint/task_lint.sh` for formatting checks

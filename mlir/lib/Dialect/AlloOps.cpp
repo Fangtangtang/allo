@@ -158,6 +158,7 @@ ParseResult GlobalStreamGetOp::parse(OpAsmParser &parser,
 template <typename OpTy>
 static void simplifyStreamAffineMap(OpTy op) {
   AffineMap map = op.getMap();
+  SmallVector<AffineExpr, 4> dimReplacements;
   SmallVector<AffineExpr, 4> symReplacements;
 
   auto *context = map.getContext();
@@ -168,8 +169,17 @@ static void simplifyStreamAffineMap(OpTy op) {
   // Collect dim operands (these must stay)
   SmallVector<Value, 4> newOperands;
   for (unsigned i = 0; i < numDims; ++i) {
-    newOperands.push_back(indices[i]);
+    Value opValue = indices[i];
+    if (auto constOp = opValue.template getDefiningOp<arith::ConstantOp>()) {
+      int64_t val = llvm::cast<IntegerAttr>(constOp.getValue()).getInt();
+      dimReplacements.push_back(getAffineConstantExpr(val, context));
+    } else {
+      dimReplacements.push_back(getAffineDimExpr(newOperands.size(), context));
+      newOperands.push_back(opValue);
+    }
+    // newOperands.push_back(indices[i]);
   }
+  auto newDims = newOperands.size();
   if (indices.size() > numDims + numSymbols) {
     newOperands.push_back(indices[numDims + numSymbols]);
   }
@@ -186,7 +196,7 @@ static void simplifyStreamAffineMap(OpTy op) {
   }
 
   // Replace only symbols
-  AffineMap newMap = map.replaceDimsAndSymbols({}, symReplacements, numDims, 0);
+  AffineMap newMap = map.replaceDimsAndSymbols(dimReplacements, symReplacements, newDims, 0);
   newMap = mlir::compressUnusedSymbols(mlir::simplifyAffineMap(newMap));
   op.setMapAttr(AffineMapAttr::get(newMap));
   // Update operands: keep dims only
