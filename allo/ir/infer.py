@@ -42,7 +42,7 @@ from ..utils import (
     construct_kernel_name,
 )
 from ..memory import DTensor, Layout
-from .utils import parse_ast, get_func_id_from_param_types, resolve_generic_types
+from .utils import parse_ast, resolve_generic_types
 
 
 # pylint: disable=too-many-public-methods

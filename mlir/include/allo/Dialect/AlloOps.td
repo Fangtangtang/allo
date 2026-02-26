@@ -935,7 +935,7 @@ def OrOp : Allo_Op<"or"> {
 //===----------------------------------------------------------------------===//
 
 def YieldOp : Allo_Op<"yield", [NoMemoryEffect, Terminator,
-                               ParentOneOf<["AndOp, OrOp"]>]> {
+                               ParentOneOf<["AndOp", "OrOp", "GridMapOp"]>]> {
   let summary = "yield and termination operation";
   let description = [{
     "allo.yield" yields an SSA value from the Allo dialect op region and
@@ -1144,6 +1144,37 @@ def TransformLayoutOp : Allo_Op<"transform_layout"> {
             `strides` `=` $strides
             attr-dict `:` type($source) `->` type($result)
   }];
+}
+
+//===----------------------------------------------------------------------===//
+// SPMW operations
+//===----------------------------------------------------------------------===//
+def GridMapOp : Allo_Op<"grid_map",
+  [RecursiveMemoryEffects, SingleBlockImplicitTerminator<"YieldOp">]> {
+  let summary = "Grid map operation";
+  let description = [{
+    The grid_map operation distributes a computation over a logical grid.
+    It takes a list of memrefs with static shape (`tensors`) as input arguments.
+    It shuns isolation from above and contains a single block whose arguments are the sharded memrefs.
+  }];
+
+  let arguments = (ins
+    Variadic<AnyStaticShapeMemRef>:$tensors,
+    ArrayAttr:$sharding,
+    DenseI64ArrayAttr:$grid
+  );
+  let regions = (region SizedRegion<1>:$body);
+
+  let assemblyFormat = [{
+    `(` $tensors `)`
+    `sharding````=```$sharding
+    `grid````=```$grid
+    $body
+    attr-dict
+    `:` type($tensors)
+  }];
+
+  let hasVerifier = 1;
 }
 
 #endif // ALLO_OPS
