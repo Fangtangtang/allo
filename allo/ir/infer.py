@@ -4,9 +4,9 @@
 
 import ast
 import copy
-import sys
 import os
-import traceback
+import inspect
+import textwrap
 import warnings
 import sympy
 import numpy as np
@@ -42,8 +42,7 @@ from ..utils import (
     construct_kernel_name,
 )
 from ..memory import DTensor, Layout
-from ..logging import print_error_message
-from .utils import parse_ast, resolve_generic_types
+from .utils import parse_ast, get_func_id_from_param_types, resolve_generic_types
 
 
 # pylint: disable=too-many-public-methods
@@ -73,106 +72,84 @@ class TypeInferer(ASTVisitor):
         return dtype
 
     @staticmethod
-    def _visit_type_hint_subscript(ctx: ASTContext, node: ast.Subscript):
-        if isinstance(node.value, ast.Call):
-            # e.g., a: UInt(16)[4]
-            dtype = TypeInferer.visit_call_type(ctx, node.value)
-        elif isinstance(node.value, ast.Subscript):
-            # e.g., pipe: Stream[Ty, 4][4]
-            base_type, base_shape, _ = TypeInferer.visit_type_hint(ctx, node.value)
-            assert isinstance(base_type, Stream) and len(base_shape) == 0
-            elts = (
-                node.slice.elts if isinstance(node.slice, ast.Tuple) else [node.slice]
-            )
-            shape = tuple(ASTResolver.resolve(x, ctx.global_vars) for x in elts)
-            assert all(
-                isinstance(x, (int)) for x in shape
-            ), "stream array shape should be a compile time constant"
-            return base_type, shape, None
-        else:
-            dtype = ASTResolver.resolve(node.value, ctx.global_vars)
-        if dtype is Stream:
-            # e.g., pipe: Stream[Ty, 4]
-            assert (
-                isinstance(node.slice, ast.Tuple) and len(node.slice.elts) == 2
-            ), "Only support `ele_type` and `depth` for now"
-            base_type, base_shape, _ = TypeInferer.visit_type_hint(
-                ctx, node.slice.elts[0]
-            )
-            depth = ASTResolver.resolve(node.slice.elts[1], ctx.global_vars)
-            stream_dtype = Stream(dtype=base_type, shape=base_shape, depth=depth)
-            shape = tuple()
-            return stream_dtype, shape, None
-        if dtype is ConstExpr:
-            # e.g., a: ConstExpr[int32]
-            base_type, base_shape, _ = TypeInferer.visit_type_hint(ctx, node.slice)
-            assert len(base_shape) == 0, "ConstExpr only supports scalar types"
-            const_dtype = copy.deepcopy(base_type)
-            const_dtype.constexpr = True
-            return const_dtype, tuple(), None
-        assert dtype is not None, f"Unsupported type `{node.value.id}`"
-        size = node.slice.value if isinstance(node.slice, ast.Index) else node.slice
-        elts = size.elts if isinstance(size, ast.Tuple) else [size]
-        shape = tuple(ASTResolver.resolve_constant(x, ctx) for x in elts)
-        return (
-            dtype,
-            shape,
-            Layout([Layout.Replicate] * len(shape)),
-        )  # default layout
-
-    @staticmethod
-    def _visit_type_hint_name(ctx: ASTContext, node: ast.Name):
-        dtype = ASTResolver.resolve(node, ctx.global_vars)
-        assert dtype is not None, f"Unsupported type `{node.id}`"
-        return dtype, tuple(), None
-
-    @staticmethod
-    def _visit_type_hint_call(ctx: ASTContext, node: ast.Call):
-        dtype = TypeInferer.visit_call_type(ctx, node)
-        return dtype, tuple(), None
-
-    @staticmethod
-    def _visit_type_hint_const(ctx: ASTContext, node: ast.Constant):
-        assert isinstance(node.value, str), "Only support string type annotation"
-        tree = ast.parse(node.value)
-        return TypeInferer.visit_type_hint(ctx, tree.body[0].value)
-
-    @staticmethod
-    def _visit_type_hint_attr(ctx: ASTContext, node: ast.Attribute):
-        # e.g., allo.ir.types.float32
-        dtype = ASTResolver.resolve(node, ctx.global_vars)
-        return dtype, tuple(), None
-
-    @staticmethod
-    def _visit_type_hint_binop(ctx: ASTContext, node: ast.BinOp):
-        # memory refinement
-        # or, stateful variable
-        # e.g., A: Ty[M] @ stateful
-        dtype, shape, node_left_layout = TypeInferer.visit_type_hint(ctx, node.left)
-        spec = ASTResolver.resolve(node.right, ctx.global_vars)
-        if isinstance(spec, list):
-            spec = Layout(spec)
-        if spec is Stateful:
-            # Create a copy with stateful=True
-            stateful_dtype = copy.deepcopy(dtype)
-            stateful_dtype.stateful = True
-            return stateful_dtype, shape, node_left_layout
-        return dtype, shape, spec
-
-    @staticmethod
     def visit_type_hint(ctx: ASTContext, node: ast.AST):
         if isinstance(node, ast.Subscript):
-            return TypeInferer._visit_type_hint_subscript(ctx, node)
+            if isinstance(node.value, ast.Call):
+                # e.g., a: UInt(16)[4]
+                dtype = TypeInferer.visit_call_type(ctx, node.value)
+            elif isinstance(node.value, ast.Subscript):
+                # e.g., pipe: Stream[Ty, 4][4]
+                base_type, base_shape, _ = TypeInferer.visit_type_hint(ctx, node.value)
+                assert isinstance(base_type, Stream) and len(base_shape) == 0
+                elts = (
+                    node.slice.elts
+                    if isinstance(node.slice, ast.Tuple)
+                    else [node.slice]
+                )
+                shape = tuple(ASTResolver.resolve(x, ctx.global_vars) for x in elts)
+                assert all(
+                    isinstance(x, (int)) for x in shape
+                ), "stream array shape should be a compile time constant"
+                return base_type, shape, None
+            else:
+                dtype = ASTResolver.resolve(node.value, ctx.global_vars)
+            if dtype is Stream:
+                # e.g., pipe: Stream[Ty, 4]
+                assert (
+                    isinstance(node.slice, ast.Tuple) and len(node.slice.elts) == 2
+                ), "Only support `ele_type` and `depth` for now"
+                base_type, base_shape, _ = TypeInferer.visit_type_hint(
+                    ctx, node.slice.elts[0]
+                )
+                depth = ASTResolver.resolve(node.slice.elts[1], ctx.global_vars)
+                stream_dtype = Stream(dtype=base_type, shape=base_shape, depth=depth)
+                shape = tuple()
+                return stream_dtype, shape, None
+            if dtype is ConstExpr:
+                # e.g., a: ConstExpr[int32]
+                base_type, base_shape, _ = TypeInferer.visit_type_hint(ctx, node.slice)
+                assert len(base_shape) == 0, "ConstExpr only supports scalar types"
+                const_dtype = copy.deepcopy(base_type)
+                const_dtype.constexpr = True
+                return const_dtype, tuple(), None
+            assert dtype is not None, f"Unsupported type `{node.value.id}`"
+            size = node.slice.value if isinstance(node.slice, ast.Index) else node.slice
+            elts = size.elts if isinstance(size, ast.Tuple) else [size]
+            shape = tuple(ASTResolver.resolve_constant(x, ctx) for x in elts)
+            return (
+                dtype,
+                shape,
+                Layout([Layout.Replicate] * len(shape)),
+            )  # default layout
         if isinstance(node, ast.Name):
-            return TypeInferer._visit_type_hint_name(ctx, node)
+            dtype = ASTResolver.resolve(node, ctx.global_vars)
+            assert dtype is not None, f"Unsupported type `{node.id}`"
+            return dtype, tuple(), None
         if isinstance(node, ast.Call):
-            return TypeInferer._visit_type_hint_call(ctx, node)
+            dtype = TypeInferer.visit_call_type(ctx, node)
+            return dtype, tuple(), None
         if isinstance(node, ast.Constant):
-            return TypeInferer._visit_type_hint_const(ctx, node)
+            assert isinstance(node.value, str), "Only support string type annotation"
+            tree = ast.parse(node.value)
+            return TypeInferer.visit_type_hint(ctx, tree.body[0].value)
         if isinstance(node, ast.Attribute):
-            return TypeInferer._visit_type_hint_attr(ctx, node)
+            # e.g., allo.ir.types.float32
+            dtype = ASTResolver.resolve(node, ctx.global_vars)
+            return dtype, tuple(), None
         if isinstance(node, ast.BinOp):
-            return TypeInferer._visit_type_hint_binop(ctx, node)
+            # memory refinement
+            # or, stateful variable
+            # e.g., A: Ty[M] @ stateful
+            dtype, shape, node_left_layout = TypeInferer.visit_type_hint(ctx, node.left)
+            spec = ASTResolver.resolve(node.right, ctx.global_vars)
+            if isinstance(spec, list):
+                spec = Layout(spec)
+            if spec is Stateful:
+                # Create a copy with stateful=True
+                stateful_dtype = copy.deepcopy(dtype)
+                stateful_dtype.stateful = True
+                return stateful_dtype, shape, node_left_layout
+            return dtype, shape, spec
         raise RuntimeError("Unsupported function argument type")
 
     @staticmethod
@@ -427,9 +404,6 @@ class TypeInferer(ASTVisitor):
                 target_ = ctx.get_symbol(target.id, allow_missing=True)
                 target_shape, target_dtype = None, None
                 if target_ is not None:
-                    assert not getattr(
-                        target_.dtype, "constexpr", False
-                    ), "Cannot reassign constants."
                     target_shape, target_dtype = target_.shape, target_.dtype
                 if not rhs_visited:
                     rhs = TypeInferer.visit_assignment_val(
@@ -502,9 +476,7 @@ class TypeInferer(ASTVisitor):
             lhs = visit_stmt(ctx, node.target)
         elif isinstance(node.target, ast.Name):  # scalar
             lhs = ctx.get_symbol(node.target.id)
-            assert lhs is not None and not getattr(
-                lhs.dtype, "constexpr", False
-            ), "Cannot reassign constants."
+            assert lhs is not None
             node.target.dtype, node.target.shape = lhs.dtype, lhs.shape
         else:
             raise RuntimeError("Unsupported AugAssign")
@@ -693,29 +665,28 @@ class TypeInferer(ASTVisitor):
             )
             value.dtype = target_dtype
         elif isinstance(value, ast.Subscript) and isinstance(value.value, ast.Name):
-            # Handle slicing of a constant numpy array, e.g., np_array[i]
+            # Handle slicing of a constant numpy array, e.g., np_array[pid]
             array_name = value.value.id
             if array_name in ctx.global_vars and isinstance(
                 ctx.global_vars[array_name], np.ndarray
             ):
                 assert target_shape is not None and target_dtype is not None
                 np_array = ctx.global_vars[array_name]
-                # Evaluate the slice at compile time
+                # Evaluate slice with current context to validate shape
                 slice_expr = compile(ast.Expression(value.slice), "", "eval")
                 # pylint: disable=eval-used
                 slice_val = eval(slice_expr, ctx.global_vars)
-                # Extract the slice
                 sliced_array = np_array[slice_val]
-                # Ensure it's still a numpy array (scalar case)
                 if not isinstance(sliced_array, np.ndarray):
                     sliced_array = np.array([sliced_array], dtype=np_array.dtype)
                 assert (
                     sliced_array.shape == target_shape
                 ), f"Slice shape mismatch, got {sliced_array.shape} and {target_shape}"
-                TypeInferer.visit_constant_tensor(
-                    ctx, value, sliced_array, dtype=target_dtype
-                )
+                # Store source array for deferred evaluation in builder
+                # The slice AST is already available as value.slice
+                value.const_array_source = np_array
                 value.dtype = target_dtype
+                value.shape = target_shape
             else:
                 visit_stmt(ctx, value)
         else:
@@ -1299,8 +1270,12 @@ class TypeInferer(ASTVisitor):
             new_args = visit_stmts(ctx, node.args)
             if len(new_args) == 0:
                 # No argument
-                node.shape = None
-                node.dtype = None
+                if fn_name == "get_pid":
+                    node.shape = (tuple(), tuple(), tuple())
+                    node.dtype = (Index(), Index(), Index())
+                else:
+                    node.shape = None
+                    node.dtype = None
                 return node
             if all(len(arg.shape) == 0 for arg in new_args):
                 # element-wise operation
@@ -1624,11 +1599,5 @@ visit_stmt = TypeInferer()
 def visit_stmts(ctx: ASTContext, stmts: list[ast.expr]):
     results = []
     for stmt in stmts:
-        try:
-            results.append(visit_stmt(ctx, stmt))
-        # pylint: disable=broad-exception-caught
-        except Exception as e:
-            print(f"{traceback.format_exc()}")
-            print_error_message(str(e), stmt, ctx.top_func_tree)
-            sys.exit(1)
+        results.append(visit_stmt(ctx, stmt))
     return results

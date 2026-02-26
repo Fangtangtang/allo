@@ -16,4 +16,11 @@ add_mlir_library(MLIRAlloSupport
   MLIRMemRefDialect
   MLIRAnalysis
   MLIRAffineAnalysis
+)
+
+if(BUILD_DATAFLOW)
+  target_link_libraries(MLIRAlloSupport PUBLIC
+    SdyDialect          # Linked from Shardy
+    StablehloOps        # Linked from StableHLO
   )
+endif()

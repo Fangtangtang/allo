@@ -73,11 +73,27 @@ set(_source_components
   AlloMLIRPythonExtensions
   MLIRPythonSources
   MLIRPythonExtension.RegisterEverything
-  SdyPythonSources
-  SdyPythonExtensions
-  MpmdPythonSources
-  MpmdPythonExtensions
 )
+
+file(GLOB_RECURSE MLIR_PYTHON_EXTRA_SOURCES
+  RELATIVE "${PROJECT_SOURCE_DIR}/../externals/mlir-python-extra/mlir"
+  "${PROJECT_SOURCE_DIR}/../externals/mlir-python-extra/mlir/extras/*.py"
+)
+declare_mlir_python_sources(MlirPythonExtraSources
+  ROOT_DIR "${PROJECT_SOURCE_DIR}/../externals/mlir-python-extra/mlir"
+  SOURCES
+    ${MLIR_PYTHON_EXTRA_SOURCES}
+)
+list(APPEND _source_components MlirPythonExtraSources)
+
+if(BUILD_DATAFLOW)
+  list(APPEND _source_components
+    SdyPythonSources
+    SdyPythonExtensions
+    MpmdPythonSources
+    MpmdPythonExtensions
+  )
+endif()
 
 add_mlir_python_common_capi_library(AlloMLIRAggregateCAPI
   INSTALL_COMPONENT AlloMLIRPythonModules
@@ -96,4 +112,4 @@ add_mlir_python_modules(AlloMLIRPythonModules
   DECLARED_SOURCES ${_source_components}
   COMMON_CAPI_LINK_LIBS
     AlloMLIRAggregateCAPI
-  )
+)
