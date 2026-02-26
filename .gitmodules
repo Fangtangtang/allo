@@ -24,4 +24,4 @@
 [submodule "exp_compiler"]
 	path = allo_exp
 	url = https://github.com/Fangtangtang/allo-compiler.git
-	branch = main
+	branch = sdy-based
