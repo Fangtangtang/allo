@@ -801,7 +801,7 @@ class AIE_MLIRModule:
             mlir_pass_manager.parse(pipeline).run(self.allo_module.operation)
         # ------------------------- mlir-aie code generation -------------------------
         with allo_ir.ir.Context() as ctx, allo_ir.ir.Location.unknown():
-            register_dialect(ctx, True)
+            register_dialect(ctx)
             pattern = re.compile(r"memref<([\dx]+)xi4>")
             module_str = str(self.allo_module)
 
