@@ -53,4 +53,3 @@ add_custom_target(CopyMlirPythonExtras ALL
     COMMENT "Copying mlir-python-extra to allo._mlir.extras"
     DEPENDS ${MLIR_PYTHON_EXTRA_SRC}
 )
-
