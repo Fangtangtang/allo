@@ -5,8 +5,6 @@
 import ast
 import copy
 import os
-import inspect
-import textwrap
 import warnings
 import sympy
 import numpy as np
@@ -1295,7 +1293,13 @@ class TypeInferer(ASTVisitor):
             stmts = [SymbolTable.function_to_nodes[func_name]]
         else:
             # Visit arguments in the top-level
-            tree = parse_ast(func, verbose=ctx.verbose)
+            visit_stmts(ctx, node.args)
+            src, starting_line_no = inspect.getsourcelines(func)
+            src = [textwrap.fill(line, tabsize=4, width=9999) for line in src]
+            src = textwrap.dedent("\n".join(src))
+            tree = parse_ast(
+                src, starting_line_no=starting_line_no, verbose=ctx.verbose
+            )
             # Create a new context to avoid name collision
             func_ctx = ctx.copy()
             stmts = visit_stmts(func_ctx, tree.body)

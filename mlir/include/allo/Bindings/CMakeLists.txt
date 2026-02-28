@@ -86,14 +86,6 @@ declare_mlir_python_sources(MlirPythonExtraSources
 )
 list(APPEND _source_components MlirPythonExtraSources)
 
-if(BUILD_DATAFLOW)
-  list(APPEND _source_components
-    SdyPythonSources
-    SdyPythonExtensions
-    MpmdPythonSources
-    MpmdPythonExtensions
-  )
-endif()
 
 add_mlir_python_common_capi_library(AlloMLIRAggregateCAPI
   INSTALL_COMPONENT AlloMLIRPythonModules
@@ -112,4 +104,4 @@ add_mlir_python_modules(AlloMLIRPythonModules
   DECLARED_SOURCES ${_source_components}
   COMMON_CAPI_LINK_LIBS
     AlloMLIRAggregateCAPI
-)
+  )

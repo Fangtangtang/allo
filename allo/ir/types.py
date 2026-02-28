@@ -115,8 +115,6 @@ class Stateful:
         window: float32[4] @ Stateful       # Stateful array
     """
 
-    pass
-
 
 class Index(AlloType):
     """
