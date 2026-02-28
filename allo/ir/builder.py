@@ -6,7 +6,6 @@
 import gc
 import ast
 import copy
-import inspect
 import itertools
 import numpy as np
 from .._mlir.ir import (
@@ -29,8 +28,6 @@ from .._mlir.ir import (
     AffineConstantExpr,
     AffineMap,
     AffineMapAttr,
-    IntegerSet,
-    IntegerSetAttr,
     FlatSymbolRefAttr,
     DenseElementsAttr,
     TypeAttr,

@@ -124,7 +124,6 @@ def lower_linalg_and_attach_names(module):
 
 # pylint: disable=too-many-branches
 def generate_input_output_buffers(module, top_func_name, flatten=False, mappings=None):
-    results = {"inputs": [], "outputs": []}
     top_func = find_func_in_module(module, top_func_name)
 
     if mappings is None:
@@ -267,8 +266,6 @@ def generate_input_output_buffers(module, top_func_name, flatten=False, mappings
                         FlatSymbolRefAttr.get(load_func_names[idx]),
                         [arg, alloc_op.result],
                     )
-                    results["inputs"].append(MockBuffer(top_func_name, f"buf{idx}"))
-
                 # Record buffers
                 bufs[idx] = alloc_op
 
@@ -317,10 +314,6 @@ def generate_input_output_buffers(module, top_func_name, flatten=False, mappings
                     ip=ip_return,
                 )
 
-                results["outputs"].append(
-                    MockBuffer(top_func_name, arg.owner.attributes["name"].value)
-                )
-
         else:
             # argument as output
             for idx, arg in enumerate(top_func.arguments):
@@ -335,12 +328,8 @@ def generate_input_output_buffers(module, top_func_name, flatten=False, mappings
                         ip=ip_return,
                     )
 
-                    results["outputs"].append(MockBuffer(top_func_name, f"result{idx}"))
-
         func_type = FunctionType.get(new_in_types, new_out_types)
         top_func.attributes["function_type"] = TypeAttr.get(func_type)
-
-    return results
 
 
 # pylint: disable=dangerous-default-value
