@@ -83,6 +83,7 @@ class ASTContext:
         global_vars,
         mlir_ctx,
         inst=None,
+        func_args=None,
         func_predicate_tags=None,
         func_tag2instance=None,
         unroll=True,
