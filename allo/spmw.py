@@ -20,18 +20,18 @@ def find_function_ast(fn):
     lineno = fn.__code__.co_firstlineno + 1
     if filename not in MODULE_CACHE:
         src = Path(filename).read_text()
-        MODULE_CACHE[filename] = (src, ast.parse(src))
-    src, tree = MODULE_CACHE[filename]
+        MODULE_CACHE[filename] = ast.parse(src)
+    tree = MODULE_CACHE[filename]
 
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.lineno == lineno:
-            return src, node
+            return node
     raise RuntimeError("Function AST not found")
 
 
 def _annotate_function(fn, ftype: FunctionType):
-    src, node = find_function_ast(fn)
-    fn._source = ast.get_source_segment(src, node)
+    node = find_function_ast(fn)
+    fn._source = fn.__code__.co_filename
     fn._ast = node
     fn._type = ftype
     return fn
