@@ -400,7 +400,17 @@ LogicalResult GridMapOp::verify() {
       if (s >= static_cast<int64_t>(grid.size()))
         return emitOpError() << "sharding axis " << s << " at index " << idx << " exceeds grid dimension size " << grid.size();
       if (s >= 0) {
-        shape[k] = shape[k] / grid[s];
+        int64_t gridVal = grid[s];
+        if (gridVal <= 0)
+          return emitOpError() << "grid value " << gridVal << " at axis " << s
+                               << " must be positive for tensor " << idx
+                               << ", dimension " << k;
+        if (shape[k] % gridVal != 0)
+          return emitOpError() << "dimension size " << shape[k] << " of tensor "
+                               << idx << ", dimension " << k
+                               << " must be evenly divisible by grid value "
+                               << gridVal << " at axis " << s;
+        shape[k] = shape[k] / gridVal;
       }
     }
     auto expectedArgType = MemRefType::get(shape, memrefType.getElementType(),
