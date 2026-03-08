@@ -1659,3 +1659,102 @@ void transform::ReshapeOp::getEffects(
   transform::producesHandle(getOperation()->getOpResults(), effects);
   transform::modifiesPayload(effects);
 }
+
+/// --------------------------------------------------------------
+/// InjectLibCall Op
+/// --------------------------------------------------------------
+
+DiagnosedSilenceableFailure
+transform::InjectLibCallOp::apply(transform::TransformRewriter &rewriter,
+                                  transform::TransformResults &results,
+                                  transform::TransformState &state) {
+  // 1. Collect all target payload operations
+  SmallVector<Operation *> targetOps;
+  for (auto handle : getTargets()) {
+    auto ops = state.getPayloadOps(handle);
+    for (Operation *op : ops) {
+      targetOps.push_back(op);
+    }
+  }
+  if (targetOps.empty()) {
+    return emitSilenceableError() << "no target operations provided";
+  }
+  // 2. Verify all target ops are in the same block (to find the 'first' operation as insertion point)
+  Block *parentBlock = targetOps.front()->getBlock();
+  for (auto *op : targetOps) {
+    if (op->getBlock() != parentBlock) {
+      return emitSilenceableError()
+             << "all target operations must be in the same block";
+    }
+  }
+  // 3. Find the first operation
+  DenseMap<Operation *, unsigned> opOrderMap;
+  unsigned orderIdx = 0;
+  for (auto &op : *parentBlock) {
+    opOrderMap[&op] = orderIdx++;
+  }
+  llvm::sort(targetOps, [&](Operation *a, Operation *b) {
+    return opOrderMap[a] < opOrderMap[b];
+  });
+  Operation *firstOp = targetOps.front();
+
+  // 4. Collect call argument values from handles
+  SmallVector<Value> callArgValues;
+  for (auto handle : getCallArgs()) {
+    auto values = state.getPayloadValues(handle);
+    for (Value v : values) {
+      callArgValues.push_back(v);
+    }
+  }
+  // 5. Build function type from call argument value types (no return values)
+  SmallVector<Type> argTypes;
+  for (Value v : callArgValues) {
+    argTypes.push_back(v.getType());
+  }
+  auto funcType = FunctionType::get(rewriter.getContext(), argTypes, {});
+
+  // 6. Find the nearest parent ModuleOp
+  auto moduleOp = firstOp->getParentOfType<ModuleOp>();
+  if (!moduleOp) {
+    return emitSilenceableError()
+           << "cannot find a parent ModuleOp";
+  }
+  // 7. Insert private func.func declaration in the module (or reuse existing)
+  std::string funcName = getFuncName().str();
+  if (auto existingFunc = moduleOp.lookupSymbol<func::FuncOp>(funcName)) {
+    // Function already exists, verify the type matches
+    if (existingFunc.getFunctionType() != funcType) {
+      return emitSilenceableError()
+             << "function '" << funcName
+             << "' already exists with a different type: expected "
+             << funcType << " but found "
+             << existingFunc.getFunctionType();
+    }
+  } else {
+    // Insert a new private declaration
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToEnd(moduleOp.getBody());
+    auto funcOp = func::FuncOp::create(
+        rewriter, firstOp->getLoc(), funcName, funcType);
+    funcOp.setPrivate();
+  }
+
+  // 8. Insert func.call at the position of the first target op
+  {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(firstOp);
+    func::CallOp::create(rewriter, firstOp->getLoc(), funcName, TypeRange{}, callArgValues);
+  }
+  // 9. Erase target operations in reverse program order
+  for (auto *op : llvm::reverse(targetOps)) {
+    rewriter.eraseOp(op);
+  }
+  return DiagnosedSilenceableFailure::success();
+}
+
+void transform::InjectLibCallOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  transform::consumesHandle(getTargetsMutable(), effects);
+  transform::consumesHandle(getCallArgsMutable(), effects);
+  transform::modifiesPayload(effects);
+}

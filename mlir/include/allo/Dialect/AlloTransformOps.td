@@ -355,4 +355,35 @@ def ReshapeOp: Op<Transform_Dialect, "allo.reshape", [
     }];
 }
 
+def InjectLibCallOp : Op<Transform_Dialect, "allo.inject_lib_call", [
+                     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+                     DeclareOpInterfaceMethods<TransformOpInterface>,
+                     ReportTrackingListenerFailuresOpTrait,
+                     AttrSizedOperandSegments
+                     ]> {
+    let summary = "Replace operations with an external library function call";
+    let description = [{
+        allo.inject_lib_call(targets, call_args, func_name, func_type)
+
+        Replace a list of operations with a call to an external library function.
+        A private func.func declaration is inserted into the nearest parent module.
+        The original operations are erased and replaced with a func.call at the
+        position of the first target operation.
+
+        Parameters
+        * targets (list of Operation handles) - The operations to be removed
+        * call_args (list of Value handles) - The values to pass as function arguments
+        * func_name (str) - The name of the external library function
+    }];
+    let arguments = (ins Variadic<TransformHandleTypeInterface>:$targets,
+                     Variadic<TransformHandleTypeInterface>:$call_args,
+                     StrAttr:$func_name);
+    let results = (outs);
+    let assemblyFormat = [{
+        `targets` `(` $targets `)` `args` `(` $call_args `)`
+        `,` $func_name attr-dict
+        `:` functional-type(operands, results)
+    }];
+}
+
 #endif // ALLO_TRANSFORM_OPS

@@ -38,6 +38,16 @@ declare_mlir_dialect_python_bindings(
     __init__.py
   DIALECT_NAME allo
 )
+  
+declare_mlir_dialect_extension_python_bindings(
+  ADD_TO_PARENT AlloMLIRPythonSources.Dialects
+  ROOT_DIR "${ALLO_MLIR_PYTHON_ROOT_DIR}"
+  TD_FILE dialects/AlloTransformBinding.td
+  SOURCES
+    dialects/transform/allo.py
+  DIALECT_NAME transform
+  EXTENSION_NAME transform_allo_extension
+)
 
 ################################################################################
 # Extensions
