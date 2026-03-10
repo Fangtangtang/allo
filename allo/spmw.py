@@ -48,12 +48,15 @@ def unit():
     return decorator
 
 
-def work(*, mapping: list[int], inputs=None, outputs=None):
+def work(*, grid: list[int]):
     def decorator(fn):
         return _annotate_function(fn, FunctionType.WORK)
 
     return decorator
 
 
-def get_wid():
+def axes():
+    """
+    Get a tuple of axes of the work grid. The result must be unpacked.
+    """
     raise NotImplementedError("This function should be called in a work.")
