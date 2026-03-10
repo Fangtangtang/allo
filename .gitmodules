@@ -10,8 +10,3 @@
 	path = externals/mlir-python-extra
 	url = https://github.com/Fangtangtang/mlir-python-extra.git
 	branch = main
-
-[submodule "exp_compiler"]
-	path = allo_exp
-	url = https://github.com/Fangtangtang/allo-compiler.git
-	branch = main
