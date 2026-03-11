@@ -26,8 +26,7 @@ class GridMapOp(GridMapOp):
 
     def __init__(
         self,
-        inputs,
-        outputs,
+        args,
         shardings: list[list[int]],
         grid: list[int],
         loc=None,
@@ -40,13 +39,8 @@ class GridMapOp(GridMapOp):
             ]
         )
         grid_attr = DenseI64ArrayAttr.get(grid)
-        args = inputs + outputs
-
         super().__init__(
             tensors=args, sharding=sharding_attr, grid=grid_attr, loc=loc, ip=ip
-        )
-        self.attributes[GridMapOp.interface_attr] = StringAttr.get(
-            "i" * len(inputs) + "o" * len(outputs)
         )
         arg_types = []
         for i, arg in enumerate(args):
@@ -77,5 +71,7 @@ class GridMapOp(GridMapOp):
 
     @property
     def interfaces(self):
-        attr = self.attributes[GridMapOp.interface_attr].value
-        return [i == "i" for i in attr]
+        if GridMapOp.interface_attr in self.attributes:
+            attr = self.attributes[GridMapOp.interface_attr].value
+            return [i == "i" for i in attr]
+        return [None] * len(self.tensors)
