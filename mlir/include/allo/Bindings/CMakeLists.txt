@@ -86,7 +86,6 @@ declare_mlir_python_sources(MlirPythonExtraSources
 )
 list(APPEND _source_components MlirPythonExtraSources)
 
-
 add_mlir_python_common_capi_library(AlloMLIRAggregateCAPI
   INSTALL_COMPONENT AlloMLIRPythonModules
   INSTALL_DESTINATION _mlir

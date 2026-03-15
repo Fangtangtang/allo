@@ -47,23 +47,6 @@ class Layout:
     def __init__(self, partitions: list[Replicate | Shard]):
         self.partitions = partitions
 
-    @classmethod
-    def from_string(cls, s: str) -> "Layout":
-        """
-        Parse string like:
-            "[S(0)]"
-            "[S(0), R]"
-            "[R, S(1)]"
-        """
-        s = s.strip()
-        assert s.startswith("[") and s.endswith("]"), "Layout must be enclosed in []"
-        content = s[1:-1].strip()
-        tokens = re.findall(r"R|S\(\d+\)", content.replace(" ", ""))
-        partitions = [
-            cls.Replicate if t == "R" else cls.Shard(int(t[2:-1])) for t in tokens
-        ]
-        return cls(partitions)
-
     def shard(self, shape: list[int], grid: list[int]):
         local_shape = []
         for dim, partition in zip(shape, self.partitions):

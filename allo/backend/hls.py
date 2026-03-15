@@ -219,7 +219,7 @@ class HLSModule:
                 for io_type in load_store_mapping[top_func_name]:
                     if io_type in {"both", "out"}:
                         cnt += 1
-                    elif io_type == "in" and cnt > 0:
+                    elif io_type == "in" and cnt > 0 and platform in {"vitis_hls"}:
                         raise RuntimeError("Output arguments must appear at the end.")
                 self.num_output_args = cnt
 
@@ -251,6 +251,8 @@ class HLSModule:
         buf = io.StringIO()
         success = True
         match platform:
+            # [NOTE]: If the HLS backend reports "<func_name> was not declared in this scope", it is likely caused by a forward reference.
+            #           MLIR allows calling functions before their definition, but C++ HLS kernels require a prior declaration.
             case "tapa":
                 success = allo_d.emit_thls(self.module, buf)
             case "intel_hls":

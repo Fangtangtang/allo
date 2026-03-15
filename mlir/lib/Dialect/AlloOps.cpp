@@ -211,11 +211,12 @@ void GlobalStreamGetOp::simplifyAffineMap() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult GlobalStreamPutOp::verify() {
-  Operation *symbol = SymbolTable::lookupNearestSymbolFrom(*this, getGlobalAttr());
+  Operation *symbol =
+      SymbolTable::lookupNearestSymbolFrom(*this, getGlobalAttr());
   auto global = llvm::dyn_cast_or_null<StreamGlobalOp>(symbol);
   if (!global)
     return emitOpError("global stream not found: ") << getGlobal();
-  
+
   auto type = global.getElementType();
   auto streamType = llvm::cast<StreamType>(type);
   if (getData().getType() != streamType.getBaseType())
@@ -255,11 +256,11 @@ ParseResult GlobalStreamPutOp::parse(OpAsmParser &parser,
                                      OperationState &result) {
   auto &builder = parser.getBuilder();
   auto indexTy = builder.getIndexType();
-  
+
   OpAsmParser::UnresolvedOperand data;
   if (parser.parseOperand(data))
     return failure();
-  
+
   if (parser.parseComma()) // ,
     return failure();
 
@@ -269,7 +270,8 @@ ParseResult GlobalStreamPutOp::parse(OpAsmParser &parser,
 
   AffineMapAttr mapAttr;
   SmallVector<OpAsmParser::UnresolvedOperand, 2> mapOperands;
-  if (parser.parseAffineMapOfSSAIds(mapOperands, mapAttr, "map", result.attributes))
+  if (parser.parseAffineMapOfSSAIds(mapOperands, mapAttr, "map",
+                                    result.attributes))
     return failure();
 
   if (parser.parseOptionalAttrDict(result.attributes))
@@ -372,33 +374,39 @@ LogicalResult GridMapOp::verify() {
 
   if (tensors.size() != sharding.size())
     return emitOpError() << "number of tensors (" << tensors.size()
-                         << ") and sharding lists (" << sharding.size() << ") must match";
+                         << ") and sharding lists (" << sharding.size()
+                         << ") must match";
 
   if (!getBody().hasOneBlock())
     return emitOpError() << "region must contain exactly one block";
 
   Block &bodyBlock = getBody().front();
   if (bodyBlock.getNumArguments() != tensors.size())
-    return emitOpError() << "number of block arguments (" << bodyBlock.getNumArguments()
-                         << ") and tensors (" << tensors.size() << ") must match";
+    return emitOpError() << "number of block arguments ("
+                         << bodyBlock.getNumArguments() << ") and tensors ("
+                         << tensors.size() << ") must match";
 
   for (auto [idx, tensor] : llvm::enumerate(tensors)) {
     auto memrefType = llvm::cast<MemRefType>(tensor.getType());
     auto shardingList = llvm::dyn_cast<ArrayAttr>(sharding[idx]);
     if (!shardingList)
-      return emitOpError() << "sharding at index " << idx << " must be an ArrayAttr";
+      return emitOpError() << "sharding at index " << idx
+                           << " must be an ArrayAttr";
     if (memrefType.getRank() != static_cast<int64_t>(shardingList.size()))
       return emitOpError() << "memref rank (" << memrefType.getRank()
-                           << ") and sharding list size (" << shardingList.size()
-                           << ") must match for tensor " << idx;
+                           << ") and sharding list size ("
+                           << shardingList.size() << ") must match for tensor "
+                           << idx;
     auto shape = llvm::to_vector<4>(memrefType.getShape());
     for (size_t k = 0; k < shardingList.size(); ++k) {
       auto shardingIntAttr = llvm::dyn_cast<IntegerAttr>(shardingList[k]);
       if (!shardingIntAttr)
-        return emitOpError() << "sharding at index " << idx << ", dimension " << k << " must be an IntegerAttr";
+        return emitOpError() << "sharding at index " << idx << ", dimension "
+                             << k << " must be an IntegerAttr";
       int64_t s = shardingIntAttr.getInt();
       if (s >= static_cast<int64_t>(grid.size()))
-        return emitOpError() << "sharding axis " << s << " at index " << idx << " exceeds grid dimension size " << grid.size();
+        return emitOpError() << "sharding axis " << s << " at index " << idx
+                             << " exceeds grid dimension size " << grid.size();
       if (s >= 0) {
         int64_t gridVal = grid[s];
         if (gridVal <= 0)
@@ -413,11 +421,14 @@ LogicalResult GridMapOp::verify() {
         shape[k] = shape[k] / gridVal;
       }
     }
-    auto expectedArgType = MemRefType::get(shape, memrefType.getElementType(),
-                                           memrefType.getLayout(), memrefType.getMemorySpace());
+    auto expectedArgType =
+        MemRefType::get(shape, memrefType.getElementType(),
+                        memrefType.getLayout(), memrefType.getMemorySpace());
     if (bodyBlock.getArgument(idx).getType() != expectedArgType)
-      return emitOpError() << "block argument " << idx << " type " << bodyBlock.getArgument(idx).getType()
-                           << " does not match expected sharded type " << expectedArgType;
+      return emitOpError() << "block argument " << idx << " type "
+                           << bodyBlock.getArgument(idx).getType()
+                           << " does not match expected sharded type "
+                           << expectedArgType;
   }
 
   return success();
