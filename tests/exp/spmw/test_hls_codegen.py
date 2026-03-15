@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import numpy as np
-from src.hls import to_hls
+from allo.exp import to_hls
 import allo
 from allo.ir.types import int32, Stream
 import allo.backend.hls as hls

@@ -3,7 +3,7 @@
 
 import numpy as np
 import tempfile
-from src.hls import to_hls
+from allo.exp import to_hls
 import allo.backend.hls as hls
 from allo.ir.types import int32, ConstExpr, index
 from allo import spmw

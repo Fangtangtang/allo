@@ -5,7 +5,7 @@ import allo
 from allo.ir.types import float32, Stream
 from allo import spmw
 import allo.backend.hls as hls
-from src.hls import to_hls
+from allo.exp import to_hls
 import numpy as np
 import tempfile
 

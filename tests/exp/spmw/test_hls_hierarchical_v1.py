@@ -3,7 +3,7 @@
 
 import numpy as np
 import allo.backend.hls as hls
-from src.hls import to_hls
+from allo.exp import to_hls
 import tempfile
 import allo
 from allo.ir.types import int32
