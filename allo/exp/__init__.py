@@ -3,9 +3,10 @@
 import ast
 from typing import Union
 from collections.abc import Callable
+from allo.ir.utils import get_global_vars
 from allo.backend.llvm import LLVMModule
 from .config import ir_builder_config_context
-from .utils import SymbolTable, get_global_vars
+from .utils import SymbolTable
 from .ast_preprocessor import ASTPreProcessor
 from .ir_builder import IRBuilder
 

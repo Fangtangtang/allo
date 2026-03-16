@@ -1,12 +1,12 @@
 # Copyright Allo authors. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
+# pylint: disable=broad-exception-caught
 
 import ast
 from contextlib import contextmanager
 import allo._mlir.extras.types as mlir_types
 from allo._mlir.extras.dialects.affine import AffExpr
-
-from allo._mlir.extras.dialects import func as func
+from allo._mlir.extras.dialects import func
 from allo._mlir.dialects import (
     allo as allo_d,
     func as func_d,
@@ -41,6 +41,7 @@ from .builtin import BUILTIN_HANDLERS
 from .config import _INTERFACE_CONFIG
 
 
+# pylint: disable=too-many-public-methods, too-many-function-args
 class IRBuilder(ast.NodeVisitor):
     @contextmanager
     def block_scope(self):
@@ -93,7 +94,7 @@ class IRBuilder(ast.NodeVisitor):
                 node.lineno,
                 node.col_offset,
             )
-        except:
+        except Exception:
             loc = Location.unknown()
         try:
             with loc:
@@ -195,7 +196,7 @@ class IRBuilder(ast.NodeVisitor):
         build type from annotation
 
         Args:
-            annotation
+            annotation: type annotation
             force_memref: if True, return memref type
 
         Returns:
@@ -228,9 +229,9 @@ class IRBuilder(ast.NodeVisitor):
         raise RuntimeError("unreachable")
 
     def visit_Constant(self, node: ast.Constant):
-        if type(node.value) is int:
+        if isinstance(node.value, int):
             return arith_d.ConstantOp(mlir_types.index(), node.value, ip=self.get_ip())
-        if type(node.value) is bool:
+        if isinstance(node.value, bool):
             return arith_d.ConstantOp(mlir_types.i(1), node.value, ip=self.get_ip())
         raise NotImplementedError
 
@@ -273,6 +274,7 @@ class IRBuilder(ast.NodeVisitor):
             ivs + symbols,
         )
 
+    # pylint: disable=redefined-variable-type
     def visit_Subscript(self, node: ast.Subscript, val=None):
         base = self.get_op_result(self.visit(node.value))
         if isinstance(base, MockCallResultTuple):
@@ -323,75 +325,74 @@ class IRBuilder(ast.NodeVisitor):
                         ip=self.get_ip(),
                     )
                     return op
-                else:  # ast.Store
-                    op = affine_d.AffineStoreOp(
-                        val,
-                        base,
-                        ivs + symbols,
-                        affine_attr,
-                        ip=self.get_ip(),
-                    )
-                    return None
-            else:  # memref operaitons
-                indices = [self.get_op_result(self.visit(elt)) for elt in elts]
-                if isinstance(node.ctx, ast.Load):
-                    op = memref_d.LoadOp(base, indices, ip=self.get_ip())
-                    return op
-                else:  # ast.Store
-                    op = memref_d.StoreOp(val, base, indices, ip=self.get_ip())
-                    return None
-        else:  # access slice
-            # TODO: support hybrid slice
-            dynamic_offset = []
-            for elt, offset_ in zip(elts, offsets):
-                if offset_ < 0:
-                    dynamic_offset.append(self.get_op_result(self.visit(elt)))
-            sizes.extend(shape[len(offsets) :])
-            strides.extend([1] * (len(shape) - len(offsets)))
-            offsets.extend([0] * (len(shape) - len(offsets)))
-            if isinstance(layout, StridedLayoutAttr):
-                orig_offset = layout.offset
-                orig_strides = layout.strides
-            elif isinstance(layout, AffineMapAttr):
-                orig_offset = 0
-                orig_strides = [1]
-                for i in reversed(shape[1:]):
-                    orig_strides.insert(0, orig_strides[0] * i)
-            else:
-                raise RuntimeError(f"Unsupported layout type {type(layout)}")
-            result_sizes = []
-            stride_attr = []
-            for idx_, size in enumerate(sizes):
-                if size > 1:
-                    result_sizes.append(size)
-                    stride_attr.append(strides[idx_] * orig_strides[idx_])
-            if len(dynamic_offset) > 0 or orig_offset < 0:
-                offset_attr = ShapedType.get_dynamic_stride_or_offset()
-            else:
-                offset_attr = orig_offset + sum(
-                    o * s for o, s in zip(offsets, orig_strides)
+                # ast.Store
+                op = affine_d.AffineStoreOp(
+                    val,
+                    base,
+                    ivs + symbols,
+                    affine_attr,
+                    ip=self.get_ip(),
                 )
-            result = MemRefType.get(
-                shape=result_sizes,
-                element_type=base.type.element_type,
-                # relative to the base memref
-                layout=StridedLayoutAttr.get(offset=offset_attr, strides=stride_attr),
-            )
-            subview = memref_d.SubViewOp(
-                source=base,
-                result=result,
-                static_offsets=offsets,
-                static_sizes=sizes,
-                static_strides=strides,
-                offsets=dynamic_offset,
-                sizes=[],
-                strides=[],
-                ip=self.get_ip(),
-            )
+                return None
+            # memref operaitons
+            indices = [self.get_op_result(self.visit(elt)) for elt in elts]
             if isinstance(node.ctx, ast.Load):
-                return subview
-            else:
-                return memref_d.CopyOp(val, subview.result, ip=self.get_ip())
+                op = memref_d.LoadOp(base, indices, ip=self.get_ip())
+                return op
+            # ast.Store
+            op = memref_d.StoreOp(val, base, indices, ip=self.get_ip())
+            return None
+        # access slice
+        # TODO: support hybrid slice
+        dynamic_offset = []
+        for elt, offset_ in zip(elts, offsets):
+            if offset_ < 0:
+                dynamic_offset.append(self.get_op_result(self.visit(elt)))
+        sizes.extend(shape[len(offsets) :])
+        strides.extend([1] * (len(shape) - len(offsets)))
+        offsets.extend([0] * (len(shape) - len(offsets)))
+        if isinstance(layout, StridedLayoutAttr):
+            orig_offset = layout.offset
+            orig_strides = layout.strides
+        elif isinstance(layout, AffineMapAttr):
+            orig_offset = 0
+            orig_strides = [1]
+            for i in reversed(shape[1:]):
+                orig_strides.insert(0, orig_strides[0] * i)
+        else:
+            raise RuntimeError(f"Unsupported layout type {type(layout)}")
+        result_sizes = []
+        stride_attr = []
+        for idx_, size in enumerate(sizes):
+            if size > 1:
+                result_sizes.append(size)
+                stride_attr.append(strides[idx_] * orig_strides[idx_])
+        if len(dynamic_offset) > 0 or orig_offset < 0:
+            offset_attr = ShapedType.get_dynamic_stride_or_offset()
+        else:
+            offset_attr = orig_offset + sum(
+                o * s for o, s in zip(offsets, orig_strides)
+            )
+        result = MemRefType.get(
+            shape=result_sizes,
+            element_type=base.type.element_type,
+            # relative to the base memref
+            layout=StridedLayoutAttr.get(offset=offset_attr, strides=stride_attr),
+        )
+        subview = memref_d.SubViewOp(
+            source=base,
+            result=result,
+            static_offsets=offsets,
+            static_sizes=sizes,
+            static_strides=strides,
+            offsets=dynamic_offset,
+            sizes=[],
+            strides=[],
+            ip=self.get_ip(),
+        )
+        if isinstance(node.ctx, ast.Load):
+            return subview
+        return memref_d.CopyOp(val, subview.result, ip=self.get_ip())
 
     def visit_BoolOp(self, node: ast.BoolOp):
         opcls = {
@@ -478,6 +479,7 @@ class IRBuilder(ast.NodeVisitor):
         )
         if use_affine_loop:
             step = int(args[2].value)
+            # pylint: disable=unexpected-keyword-arg, no-value-for-parameter
             for_op = affine_d.AffineForOp(
                 lower_bound=lb,
                 upper_bound=ub,
@@ -495,7 +497,8 @@ class IRBuilder(ast.NodeVisitor):
             lb = self.get_op_result(self.visit(args[0]))
             rb = self.get_op_result(self.visit(args[1]))
             step = self.get_op_result(self.visit(args[2]))
-            for_op = scf_d.ForOp(lb, rb, step, iter_args=None, ip=self.get_ip())
+            # pylint: disable=no-value-for-parameter
+            for_op = scf_d.ForOp(lb, rb, step, ip=self.get_ip())
             scf_d.YieldOp([], ip=InsertionPoint(for_op.body))
 
         with self.block_scope():
@@ -507,7 +510,6 @@ class IRBuilder(ast.NodeVisitor):
             for stmt in node.body:
                 self.visit(stmt)
             self.pop_ip()
-        return
 
     def visit_While(self, node: ast.While):
         while_op = scf_d.WhileOp([], [], ip=self.get_ip())
@@ -538,6 +540,7 @@ class IRBuilder(ast.NodeVisitor):
                     for stmt in node.orelse:
                         self.visit(stmt)
             return
+        # pylint: disable=unexpected-keyword-arg, no-value-for-parameter
         if_op = scf_d.IfOp(
             self.get_op_result(self.visit(node.test)),
             ip=self.get_ip(),
@@ -617,9 +620,9 @@ class IRBuilder(ast.NodeVisitor):
             op = allo_d.GridMapOp(grid_args, shardings, grid)
             block = op.block
         block_args = list(block.arguments)
-        for i in range(len(call_args)):
-            if isinstance(call_args[i], int):
-                call_args[i] = block_args[call_args[i]]
+        for i, call_arg in enumerate(call_args):
+            if isinstance(call_arg, int):
+                call_args[i] = block_args[call_arg]
         func_d.CallOp(
             [],
             FlatSymbolRefAttr.get(callee_name),

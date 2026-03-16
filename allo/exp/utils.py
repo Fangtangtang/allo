@@ -5,16 +5,11 @@ import ast
 import copy
 from dataclasses import dataclass
 import hashlib
-import inspect
 from pathlib import Path
-from collections.abc import Callable
-from types import FunctionType as PyFunctionType
 import numpy as np
 from rich.console import Console
 from rich.text import Text
 from rich.panel import Panel
-from allo.ir.types import AlloType
-from allo.memory import Memory
 
 
 @dataclass(frozen=True)
@@ -43,7 +38,7 @@ def report_error(
     col_offset = getattr(node, "col_offset", None)
     end_lineno = getattr(node, "end_lineno", lineno)
     end_col_offset = getattr(node, "end_col_offset", None)
-    source_lines = Path(error.source_file).read_text().splitlines()
+    source_lines = Path(error.source_file).read_text(encoding="utf-8").splitlines()
 
     console = Console(stderr=True)
 
@@ -127,6 +122,7 @@ class SymbolTable:
         key = tuple(args)
         func_dict = self.tmpl_instantiations.setdefault(name, {})
         if key not in func_dict:
+            # pylint: disable=bad-builtin
             func_dict[key] = (
                 "_" + name + "_" + "_".join(map(str, args)) + "_" + str(len(func_dict))
             )
@@ -148,64 +144,6 @@ class SymbolTable:
         return hashlib.sha256(
             arr.tobytes() + str((arr.shape, arr.dtype)).encode()
         ).hexdigest()[:16]
-
-
-def get_global_vars(func):
-    def _get_global_vars(_func, skip={"get_global_vars", "process"}, stop={"<module>"}):
-        if isinstance(_func, Callable):
-            # Discussions: https://github.com/taichi-dev/taichi/issues/282
-            global_vars = _func.__globals__.copy()
-        else:
-            global_vars = {}
-
-        # Get back to outer scopes
-        # Mainly used to get the annotation definitions (shape and type),
-        # which are probably not defined in __globals__
-        frame = inspect.currentframe().f_back
-        while frame:
-            if frame.f_code.co_name in skip:
-                frame = frame.f_back
-                continue
-            # collect allowed types
-            for name, var in frame.f_locals.items():
-                # FIXME: find a better way to collect required symbols
-                if isinstance(
-                    var, (int, float, AlloType, Memory, list)
-                ) or inspect.isfunction(var):
-                    global_vars[name] = var
-            # boundary
-            if frame.f_code.co_name in stop:
-                break
-            frame = frame.f_back
-
-        if isinstance(_func, Callable):
-            freevar_names = _func.__code__.co_freevars
-            closure = _func.__closure__
-            if closure:
-                freevar_values = [x.cell_contents for x in closure]
-                for name, value in zip(freevar_names, freevar_values):
-                    global_vars[name] = value
-        return global_vars
-
-    all_globals = {}
-    worklist = [func]
-    visited_funcs = set()
-
-    while worklist:
-        f = worklist.pop()
-        if f in visited_funcs:
-            continue
-        visited_funcs.add(f)
-
-        gv = _get_global_vars(f)
-        for name, val in gv.items():
-            if name not in all_globals:
-                all_globals[name] = val
-                # import functions from other files
-                if isinstance(val, PyFunctionType):
-                    worklist.append(val)
-
-    return all_globals
 
 
 class Scope:

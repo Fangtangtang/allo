@@ -1,17 +1,15 @@
 # Copyright Allo authors. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-
+# pylint: disable=broad-exception-caught
 import ast
 import copy
 from typing import Union
-from collections import deque, ChainMap
 from contextlib import contextmanager
+from collections import deque, ChainMap
 from collections.abc import Callable
 from dataclasses import dataclass
 import numpy as np
 import sympy
-from .utils import get_ast, report_error, ErrorMsg, SymbolTable, Scope, ErrorValue
-from .config import _INTERFACE_CONFIG
 from allo.spmw import FunctionType
 from allo.ir.types import (
     AlloType,
@@ -25,6 +23,8 @@ from allo.ir.types import (
 )
 from allo.memory import Layout
 from .builtin import BUILTIN_HANDLERS
+from .utils import get_ast, report_error, ErrorMsg, SymbolTable, Scope, ErrorValue
+from .config import _INTERFACE_CONFIG
 
 
 @dataclass(frozen=True)
@@ -33,7 +33,7 @@ class Axes:
     wid: ast.Name
 
 
-# pylint: disable=too-many-instance-attributes
+# pylint: disable=too-many-instance-attributes, too-many-public-methods
 class ASTPreProcessor(ast.NodeTransformer):
     @contextmanager
     def namespace(self, node: ast.FunctionDef):
@@ -1039,15 +1039,14 @@ class ASTPreProcessor(ast.NodeTransformer):
                 else:
                     raise RuntimeError("unreachable") from exc
             return None
-        else:
-            if node.value is not None:
-                value = self.visit(node.value)
-                if isinstance(value, ast.arg):
-                    self.put_var(node.target.id, value)
-                    return None
-                value = self.visit_cast(value, dtype)
-                node.value = self.visit_broadcast(value, dtype, shape)
-            self.put_var(node.target.id, node.target)
+        if node.value is not None:
+            value = self.visit(node.value)
+            if isinstance(value, ast.arg):
+                self.put_var(node.target.id, value)
+                return None
+            value = self.visit_cast(value, dtype)
+            node.value = self.visit_broadcast(value, dtype, shape)
+        self.put_var(node.target.id, node.target)
         node.target.dtype = node.dtype = dtype
         node.target.shape = node.shape = shape
         node.target.spec = node.spec = spec
@@ -1106,7 +1105,7 @@ class ASTPreProcessor(ast.NodeTransformer):
                 _INTERFACE_CONFIG.lib
             ), "Invalid for statement"
             attr = module.__name__
-            assert attr == "grid" or attr == "reduction", "Unsupported loop type"
+            assert attr in {"grid", "reduction"}, "Unsupported loop type"
             targets = (
                 node.target.elts
                 if isinstance(node.target, ast.Tuple)
@@ -1208,10 +1207,10 @@ class ASTPreProcessor(ast.NodeTransformer):
                         self.visit_constant(iv)
                         for iv in node.items[0].context_expr.args
                     ]
-                except:
+                except Exception as exc:
                     raise RuntimeError(
                         "meta_for loop args must be compile time constants"
-                    )
+                    ) from exc
                 if len(ivs_) == 1:
                     ivs_.insert(0, ast.Constant(value=0))
                 if len(ivs_) == 2:
@@ -1363,9 +1362,12 @@ class ASTPreProcessor(ast.NodeTransformer):
                     new_args.append(arg_)
                 # FIXME: assuming no kwargs for now
                 try:
+                    # pylint: disable=unused-variable
                     result_type, *other_types = BUILTIN_HANDLERS[name].infer(*arg_types)
-                except NotImplementedError:
-                    raise RuntimeError(f"Custom handler {name} must implement `infer`")
+                except NotImplementedError as exc:
+                    raise RuntimeError(
+                        f"Custom handler {name} must implement `infer`"
+                    ) from exc
 
                 # FIXME: should support casting and broadcasting
                 call_node = ast.Call(
@@ -1379,8 +1381,8 @@ class ASTPreProcessor(ast.NodeTransformer):
                 )
                 # FIXME: result dtype, shape?
                 return call_node
-            else:  # call another source kernel
-                return self.visit_call_kernel(node, func)
+            # call another source kernel
+            return self.visit_call_kernel(node, func)
         if isinstance(node.func, ast.Subscript):  # call an instantiated kernel
             elts = (
                 node.func.slice.elts
