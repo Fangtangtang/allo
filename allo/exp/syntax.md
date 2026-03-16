@@ -19,6 +19,16 @@ An array index.
 * `Int`: An integer of variable bitwidth. `Int(bits)`
 * `UInt`: An unsigned integer of variable bitwidth. `UInt(bits)`
 
+##### Bit Operations
+
+Allo supports accessing individual bits or bit ranges on integers.
+
+```python
+a: int32
+a[0] # access bit 0 of a
+a[28:32] # access range [28, 32) of a
+```
+
 #### Floating points
 A floating point decimal number.
 
