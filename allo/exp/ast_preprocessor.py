@@ -873,16 +873,11 @@ class ASTPreProcessor(ast.NodeTransformer):
 
     def visit_BoolOp(self, node: ast.BoolOp):
         # e.g., x and y, x or y
-        arg_dtypes = []
         new_value = []
         for value in node.values:
-            val = self.visit(value)
-            arg_dtype = getattr(val, "dtype", getattr(val, "value", None))
-            arg_dtypes.append(arg_dtype)
+            val = self.visit_cast(self.visit(value), allo_bool)
             new_value.append(val)
         node.values = new_value
-        for val in node.values:
-            val.dtype, val.shape = allo_bool, tuple()
         node.dtype, node.shape = allo_bool, tuple()
         return node
 

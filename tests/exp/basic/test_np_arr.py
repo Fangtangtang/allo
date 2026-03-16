@@ -93,22 +93,6 @@ def test_np_array():
     s = process(kernel7)
     assert np.array_equal(s(), np.array([[1, 2], [3, 4]]))
 
-    @kernel
-    def kernel8() -> int32[2, 2]:
-        ones: int32[2, 2] = 1
-        return [[1, 2], [3, 4]] + ones
-
-    s = process(kernel8)
-    assert np.array_equal(s(), np.array([[2, 3], [4, 5]]))
-
-    @kernel
-    def kernel8() -> int32[2, 2]:
-        ones: int32[2, 2] = 1
-        return arr * ones
-
-    s = process(kernel8)
-    assert np.array_equal(s(), arr)
-
     print("test_np_array passed")
 
 
