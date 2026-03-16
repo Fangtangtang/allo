@@ -350,7 +350,7 @@ def kernel(n: int32) -> int32:
 | `or`     | Logical OR  | `a or b`  |
 | `not`    | Logical NOT | `not a`   |
 
-#### Comparison Expressions
+### Comparison Expressions
 All standard comparison operators are supported: ``==``, ``!=``, ``<``, ``<=``, ``>``, ``>=``.
 
 **Restriction**: Chained comparisons are currently not supported.
