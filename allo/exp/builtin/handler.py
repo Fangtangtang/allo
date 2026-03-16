@@ -17,6 +17,7 @@ def register_builtin_handler(name):
     return decorator
 
 
+# pylint: disable=unused-argument
 def register_custom_handler(name=None):
     def decorator(cls):
         handler_name = name if name else cls.__name__
@@ -48,7 +49,6 @@ class BuiltinHandler(abc.ABC):
             node: The ast.Call node.
             args: The arguments passed to the function call
         """
-        pass
 
     @staticmethod
     def infer(*args):
@@ -72,7 +72,8 @@ class BuiltinHandler(abc.ABC):
 
         Args:
             node: The ast.Call node.
-            ivs: The list of induction variables.
+            ivs: The list of induction variables (dims).
+            symbols: The list of symbols.
         """
         return None
 

@@ -495,7 +495,7 @@ class IRBuilder(ast.NodeVisitor):
             lb = self.get_op_result(self.visit(args[0]))
             rb = self.get_op_result(self.visit(args[1]))
             step = self.get_op_result(self.visit(args[2]))
-            for_op = scf_d.ForOp(lb, rb, step, ip=self.get_ip())
+            for_op = scf_d.ForOp(lb, rb, step, iter_args=None, ip=self.get_ip())
             scf_d.YieldOp([], ip=InsertionPoint(for_op.body))
 
         with self.block_scope():
@@ -582,6 +582,7 @@ class IRBuilder(ast.NodeVisitor):
             rets.append(ret)
         func_d.ReturnOp(rets, ip=self.get_ip())
 
+    # pylint: disable=unused-argument
     def visit_Pass(self, node: ast.Pass):
         return None
 
@@ -600,7 +601,7 @@ class IRBuilder(ast.NodeVisitor):
         call_args = []
         assert len(top_args) == len(callee.args.args)
         for arg, top_arg in zip(callee.args.args, top_args):
-            dtype, shape, spec, type_hint = self.parse_type_ann(arg.annotation)
+            _, _, spec, _ = self.parse_type_ann(arg.annotation)
             if isinstance(spec, Layout):
                 call_args.append(len(grid_args))
                 grid_args.append(top_arg)

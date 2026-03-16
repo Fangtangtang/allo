@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ast
+from allo._mlir.dialects import allo as allo_d
+from allo._mlir.ir import AffineMap, AffineMapAttr, UnitAttr
 from .handler import BuiltinHandler, register_builtin_handler
-from allo._mlir.dialects import allo as allo_d, memref as memref_d
-from allo._mlir.ir import AffineMap, AffineMapAttr, UnitAttr, StringAttr, TypeAttr
 
 
 ##################################################

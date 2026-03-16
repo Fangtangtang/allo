@@ -6,10 +6,10 @@ import copy
 from dataclasses import dataclass
 import hashlib
 import inspect
-import numpy as np
 from pathlib import Path
 from collections.abc import Callable
 from types import FunctionType as PyFunctionType
+import numpy as np
 from rich.console import Console
 from rich.text import Text
 from rich.panel import Panel

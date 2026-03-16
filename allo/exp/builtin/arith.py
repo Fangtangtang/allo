@@ -1,10 +1,9 @@
 # Copyright Allo authors. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
+# pylint: disable=redefined-variable-type
 
 import ast
 import numpy as np
-from .handler import BuiltinHandler, register_builtin_handler, TypingRule
-from ..config import get_typing_rule_config
 from allo._mlir.extras.dialects.affine import AffExpr
 from allo._mlir.dialects import (
     allo as allo_d,
@@ -27,162 +26,17 @@ from allo.ir.types import (
     UInt,
     Fixed,
     UFixed,
+    float32,
     bool as allo_bool,
 )
+from .handler import BuiltinHandler, register_builtin_handler, TypingRule
+from ..config import get_typing_rule_config
 
 ##################################################
 # Binary Arithmetic Operations
 #
 # [NOTE]: the typing rules are not fully tested!!!
 ##################################################
-
-
-# =======================================================================
-# Default rules
-# =======================================================================
-def dummy_binary_arith_rule():
-    int_rules = {
-        (Int, Int): lambda t1, t2: (
-            (
-                Int(max(t1.bits, t2.bits)),
-                Int(max(t1.bits, t2.bits)),
-                Int(max(t1.bits, t2.bits)),
-            )
-            if all(t.bits in {8, 16, 32, 64} for t in (t1, t2))
-            else TypeError(f"{t1}, {t2} fail binary arithmetic rule")
-        ),
-        (Int, UInt): lambda t1, t2: (
-            (UInt(t2.bits), UInt(t2.bits), UInt(t2.bits))
-            if t2.bits >= t1.bits and all(t.bits in {8, 16, 32, 64} for t in (t1, t2))
-            else (
-                (Int(t1.bits), Int(t1.bits), Int(t1.bits))
-                if all(t.bits in {8, 16, 32, 64} for t in (t1, t2))
-                else TypeError(f"{t1}, {t2} fail binary arithmetic rule")
-            )
-        ),
-        (Int, Index): lambda t1, t2: (
-            (
-                Int(max(t1.bits, t2.bits)),
-                Int(max(t1.bits, t2.bits)),
-                Int(max(t1.bits, t2.bits)),
-            )
-            if t1.bits in {8, 16, 32, 64}
-            else TypeError(f"{t1}, {t2} fail binary arithmetic rule")
-        ),
-        (Int, Float): lambda t1, t2: (
-            (t2, t2, t2)
-            if t1.bits in {8, 16, 32, 64}
-            else TypeError(f"{t1}, {t2} fail binary arithmetic rule")
-        ),
-        # python native value
-        (Int, int): lambda t1, v2: (t1, t1, t1),
-        (int, Int): lambda v1, t2: (t2, t2, t2),
-        (Int, float): lambda t1, v2: (Float(64), Float(64), Float(64)),
-        (float, Int): lambda v1, t2: (Float(64), Float(64), Float(64)),
-        # numpy array
-        (Int, np.ndarray): lambda t1, v2: (t1, t1, t1),
-        (np.ndarray, Int): lambda v1, t2: (t2, t2, t2),
-    }
-    uint_rules = {
-        (UInt, Int): lambda t1, t2: (
-            (UInt(t1.bits), UInt(t1.bits), UInt(t1.bits))
-            if t1.bits >= t2.bits and all(t.bits in {8, 16, 32, 64} for t in (t1, t2))
-            else (
-                (Int(t2.bits), Int(t2.bits), Int(t2.bits))
-                if all(t.bits in {8, 16, 32, 64} for t in (t1, t2))
-                else TypeError(f"{t1}, {t2} fail binary arithmetic rule")
-            )
-        ),
-        (UInt, UInt): lambda t1, t2: (
-            (
-                UInt(max(t1.bits, t2.bits)),
-                UInt(max(t1.bits, t2.bits)),
-                UInt(max(t1.bits, t2.bits)),
-            )
-            if all(t.bits in {8, 16, 32, 64} for t in (t1, t2))
-            else TypeError(f"{t1}, {t2} fail binary arithmetic rule")
-        ),
-        (UInt, Index): lambda t1, t2: (
-            (UInt(t1.bits), UInt(t1.bits), UInt(t1.bits))
-            if t1.bits >= 32 and t1.bits in {8, 16, 32, 64}
-            else (
-                (Index(), Index(), Index())
-                if t1.bits in {8, 16, 32, 64}
-                else TypeError(f"{t1}, {t2} fail binary arithmetic rule")
-            )
-        ),
-        (UInt, Float): lambda t1, t2: (
-            (t2, t2, t2)
-            if t1.bits in {8, 16, 32, 64}
-            else TypeError(f"{t1}, {t2} fail binary arithmetic rule")
-        ),
-        # python native value
-        (UInt, int): lambda t1, v2: (t1, t1, t1),
-        (int, UInt): lambda v1, t2: (t2, t2, t2),
-        (UInt, float): lambda t1, v2: (Float(64), Float(64), Float(64)),
-        (float, UInt): lambda v1, t2: (Float(64), Float(64), Float(64)),
-        # numpy array
-        (UInt, np.ndarray): lambda t1, v2: (t1, t1, t1),
-        (np.ndarray, UInt): lambda v1, t2: (t2, t2, t2),
-    }
-    index_rules = {
-        (Index, Int): lambda t1, t2: (
-            (
-                Int(max(t1.bits, t2.bits)),
-                Int(max(t1.bits, t2.bits)),
-                Int(max(t1.bits, t2.bits)),
-            )
-            if t2.bits in {8, 16, 32, 64}
-            else TypeError(f"{t1}, {t2} fail binary arithmetic rule")
-        ),
-        (Index, UInt): lambda t1, t2: (
-            (UInt(t2.bits), UInt(t2.bits), UInt(t2.bits))
-            if t2.bits >= 32 and t2.bits in {8, 16, 32, 64}
-            else (
-                (Index(), Index(), Index())
-                if t2.bits in {8, 16, 32, 64}
-                else TypeError(f"{t1}, {t2} fail binary arithmetic rule")
-            )
-        ),
-        (Index, Index): lambda t1, t2: (UInt(32), UInt(32), UInt(32)),
-        (Index, Float): lambda t1, t2: (t2, t2, t2),
-        # python native value
-        (Index, int): lambda t1, v2: (UInt(32), UInt(32), UInt(32)),
-        (int, Index): lambda v1, t2: (UInt(32), UInt(32), UInt(32)),
-        # numpy array
-        (Index, np.ndarray): lambda t1, v2: (UInt(32), UInt(32), UInt(32)),
-        (np.ndarray, Index): lambda v1, t2: (UInt(32), UInt(32), UInt(32)),
-    }
-    float_rules = {
-        (Float, Int): lambda t1, t2: (
-            (t1, t1, t1)
-            if t2.bits in {8, 16, 32, 64}
-            else TypeError(f"{t1}, {t2} fail binary arithmetic rule")
-        ),
-        (Float, UInt): lambda t1, t2: (
-            (t1, t1, t1)
-            if t2.bits in {8, 16, 32, 64}
-            else TypeError(f"{t1}, {t2} fail binary arithmetic rule")
-        ),
-        (Float, Index): lambda t1, t2: (t1, t1, t1),
-        (Float, Float): lambda t1, t2: (
-            (t1, t1, t1) if t1.bits >= t2.bits else (t2, t2, t2)
-        ),
-        # python native value
-        (Float, int): lambda t1, v2: (t1, t1, t1),
-        (int, Float): lambda v1, t2: (t2, t2, t2),
-        (Float, float): lambda t1, v2: (t1, t1, t1),
-        (float, Float): lambda v1, t2: (t2, t2, t2),
-        # numpy array
-        (Float, np.ndarray): lambda t1, v2: (t1, t1, t1),
-        (np.ndarray, Float): lambda v1, t2: (t2, t2, t2),
-    }
-    return TypingRule(
-        [int_rules, uint_rules, index_rules, float_rules],
-    )
-
-
-DUMMY_BINARY_ARITH_RULE = dummy_binary_arith_rule()
 
 
 # =======================================================================
@@ -204,8 +58,8 @@ def add_sub_rule():
         (Int, Float): lambda t1, t2: (t2,) * 3,
         (Int, int): lambda t1, v2: (Int(max(t1.bits + 1, 32)),) * 3,
         (int, Int): lambda v1, t2: (Int(max(t2.bits + 1, 32)),) * 3,
-        (Int, float): lambda t1, v2: (Float(64),) * 3,
-        (float, Int): lambda v1, t2: (Float(64),) * 3,
+        (Int, float): lambda t1, v2: (float32,) * 3,
+        (float, Int): lambda v1, t2: (float32,) * 3,
         (Int, np.ndarray): lambda t1, v2: (Int(max(t1.bits + 1, 32)),) * 3,
         (np.ndarray, Int): lambda v1, t2: (Int(max(t2.bits + 1, 32)),) * 3,
     }
@@ -224,8 +78,8 @@ def add_sub_rule():
         (UInt, Float): lambda t1, t2: (t2,) * 3,
         (UInt, int): lambda t1, v2: (UInt(max(t1.bits + 1, 32)),) * 3,
         (int, UInt): lambda v1, t2: (UInt(max(t2.bits + 1, 32)),) * 3,
-        (UInt, float): lambda t1, v2: (Float(64),) * 3,
-        (float, UInt): lambda v1, t2: (Float(64),) * 3,
+        (UInt, float): lambda t1, v2: (float32,) * 3,
+        (float, UInt): lambda v1, t2: (float32,) * 3,
         (UInt, np.ndarray): lambda t1, v2: (UInt(max(t1.bits + 1, 32)),) * 3,
         (np.ndarray, UInt): lambda v1, t2: (UInt(max(t2.bits + 1, 32)),) * 3,
     }
@@ -348,8 +202,8 @@ def mul_rule():
         (Int, Float): lambda t1, t2: (t2,) * 3,
         (Int, int): lambda t1, v2: (Int(t1.bits + 32),) * 3,
         (int, Int): lambda v1, t2: (Int(t2.bits + 32),) * 3,
-        (Int, float): lambda t1, v2: (Float(64),) * 3,
-        (float, Int): lambda v1, t2: (Float(64),) * 3,
+        (Int, float): lambda t1, v2: (float32,) * 3,
+        (float, Int): lambda v1, t2: (float32,) * 3,
         (Int, np.ndarray): lambda t1, v2: (Int(t1.bits + 32),) * 3,
         (np.ndarray, Int): lambda v1, t2: (Int(t2.bits + 32),) * 3,
     }
@@ -368,8 +222,8 @@ def mul_rule():
         (UInt, Float): lambda t1, t2: (t2,) * 3,
         (UInt, int): lambda t1, v2: (UInt(t1.bits + 32),) * 3,
         (int, UInt): lambda v1, t2: (UInt(t2.bits + 32),) * 3,
-        (UInt, float): lambda t1, v2: (Float(64),) * 3,
-        (float, UInt): lambda v1, t2: (Float(64),) * 3,
+        (UInt, float): lambda t1, v2: (float32,) * 3,
+        (float, UInt): lambda v1, t2: (float32,) * 3,
         (UInt, np.ndarray): lambda t1, v2: (UInt(t1.bits + 32),) * 3,
         (np.ndarray, UInt): lambda v1, t2: (UInt(t2.bits + 32),) * 3,
     }
@@ -464,8 +318,8 @@ def div_rule():
         (Int, Float): lambda t1, t2: (t2,) * 3,
         (Int, int): lambda t1, v2: (t1,) * 3,
         (int, Int): lambda v1, t2: (t2,) * 3,
-        (Int, float): lambda t1, v2: (Float(64),) * 3,
-        (float, Int): lambda v1, t2: (Float(64),) * 3,
+        (Int, float): lambda t1, v2: (float32,) * 3,
+        (float, Int): lambda v1, t2: (float32,) * 3,
         (Int, np.ndarray): lambda t1, v2: (t1,) * 3,
         (np.ndarray, Int): lambda v1, t2: (t2,) * 3,
     }
@@ -480,8 +334,8 @@ def div_rule():
         (UInt, Float): lambda t1, t2: (t2,) * 3,
         (UInt, int): lambda t1, v2: (t1,) * 3,
         (int, UInt): lambda v1, t2: (t2,) * 3,
-        (UInt, float): lambda t1, v2: (Float(64),) * 3,
-        (float, UInt): lambda v1, t2: (Float(64),) * 3,
+        (UInt, float): lambda t1, v2: (float32,) * 3,
+        (float, UInt): lambda v1, t2: (float32,) * 3,
         (UInt, np.ndarray): lambda t1, v2: (t1,) * 3,
         (np.ndarray, UInt): lambda v1, t2: (t2,) * 3,
     }
@@ -496,8 +350,8 @@ def div_rule():
         (Index, Float): lambda t1, t2: (t2,) * 3,
         (Index, int): lambda t1, v2: (t1,) * 3,
         (int, Index): lambda v1, t2: (t2,) * 3,
-        (Index, float): lambda t1, v2: (Float(64),) * 3,
-        (float, Index): lambda v1, t2: (Float(64),) * 3,
+        (Index, float): lambda t1, v2: (float32,) * 3,
+        (float, Index): lambda v1, t2: (float32,) * 3,
         (Index, np.ndarray): lambda t1, v2: (t1,) * 3,
         (np.ndarray, Index): lambda v1, t2: (t2,) * 3,
     }
@@ -570,8 +424,8 @@ def mod_rule():
         (Int, Float): lambda t1, t2: (t2,) * 3,
         (Int, int): lambda t1, v2: (Int(max(t1.bits, 32)),) * 3,
         (int, Int): lambda v1, t2: (Int(max(t2.bits, 32)),) * 3,
-        (Int, float): lambda t1, v2: (Float(64),) * 3,
-        (float, Int): lambda v1, t2: (Float(64),) * 3,
+        (Int, float): lambda t1, v2: (float32,) * 3,
+        (float, Int): lambda v1, t2: (float32,) * 3,
         (Int, np.ndarray): lambda t1, v2: (Int(max(t1.bits, 32)),) * 3,
         (np.ndarray, Int): lambda v1, t2: (Int(max(t2.bits, 32)),) * 3,
     }
@@ -590,8 +444,8 @@ def mod_rule():
         (UInt, Float): lambda t1, t2: (t2,) * 3,
         (UInt, int): lambda t1, v2: (UInt(max(t1.bits + 1, 32)),) * 3,
         (int, UInt): lambda v1, t2: (UInt(max(t2.bits + 1, 32)),) * 3,
-        (UInt, float): lambda t1, v2: (Float(64),) * 3,
-        (float, UInt): lambda v1, t2: (Float(64),) * 3,
+        (UInt, float): lambda t1, v2: (float32,) * 3,
+        (float, UInt): lambda v1, t2: (float32,) * 3,
         (UInt, np.ndarray): lambda t1, v2: (UInt(max(t1.bits + 1, 32)),) * 3,
         (np.ndarray, UInt): lambda v1, t2: (UInt(max(t2.bits + 1, 32)),) * 3,
     }
@@ -724,20 +578,16 @@ class AddHandler(BuiltinHandler):
                 op = allo_d.AddFixedOp(left, right, ip=self.builder.get_ip())
             op.attributes[type_hint] = UnitAttr.get()
             return op
-        else:
-            if not type_compatible([left.type, right.type, result_type]):
-                raise ValueError("hard constraint of linalg_d.add failed")
-            alloc_op = self.builder.build_buffer(result_type, type_hint)
-            with self.builder.get_ip():
-                linalg_d.add(left, right, outs=[alloc_op])
-            return alloc_op
+        if not type_compatible([left.type, right.type, result_type]):
+            raise ValueError("hard constraint of linalg_d.add failed")
+        alloc_op = self.builder.build_buffer(result_type, type_hint)
+        with self.builder.get_ip():
+            linalg_d.add(left, right, outs=[alloc_op])
+        return alloc_op
 
     @staticmethod
     def infer(*args):
-        rules = {
-            "default": DUMMY_BINARY_ARITH_RULE,
-            "hls": HLS_ADD_SUB_RULE,
-        }
+        rules = {"hls": HLS_ADD_SUB_RULE}
         return rules[get_typing_rule_config()](args[0], args[1])
 
     def get_affine_expr(self, node: ast.Call, ivs: list, symbols: list):
@@ -765,20 +615,16 @@ class SubHandler(BuiltinHandler):
                 op = allo_d.SubFixedOp(left, right, ip=self.builder.get_ip())
             op.attributes[type_hint] = UnitAttr.get()
             return op
-        else:
-            if not type_compatible([left.type, right.type, result_type]):
-                raise ValueError("hard constraint of linalg_d.sub failed")
-            alloc_op = self.builder.build_buffer(result_type, type_hint)
-            with self.builder.get_ip():
-                linalg_d.sub(left, right, outs=[alloc_op])
-            return alloc_op
+        if not type_compatible([left.type, right.type, result_type]):
+            raise ValueError("hard constraint of linalg_d.sub failed")
+        alloc_op = self.builder.build_buffer(result_type, type_hint)
+        with self.builder.get_ip():
+            linalg_d.sub(left, right, outs=[alloc_op])
+        return alloc_op
 
     @staticmethod
     def infer(*args):
-        rules = {
-            "default": DUMMY_BINARY_ARITH_RULE,
-            "hls": HLS_ADD_SUB_RULE,
-        }
+        rules = {"hls": HLS_ADD_SUB_RULE}
         return rules[get_typing_rule_config()](args[0], args[1])
 
     def get_affine_expr(self, node: ast.Call, ivs: list, symbols: list):
@@ -806,20 +652,16 @@ class MultHandler(BuiltinHandler):
                 op = allo_d.MulFixedOp(left, right, ip=self.builder.get_ip())
             op.attributes[type_hint] = UnitAttr.get()
             return op
-        else:
-            if not type_compatible([left.type, right.type, result_type]):
-                raise ValueError("hard constraint of linalg_d.mul failed")
-            alloc_op = self.builder.build_buffer(result_type, type_hint)
-            with self.builder.get_ip():
-                linalg_d.mul(left, right, outs=[alloc_op])
-            return alloc_op
+        if not type_compatible([left.type, right.type, result_type]):
+            raise ValueError("hard constraint of linalg_d.mul failed")
+        alloc_op = self.builder.build_buffer(result_type, type_hint)
+        with self.builder.get_ip():
+            linalg_d.mul(left, right, outs=[alloc_op])
+        return alloc_op
 
     @staticmethod
     def infer(*args):
-        rules = {
-            "default": DUMMY_BINARY_ARITH_RULE,
-            "hls": HLS_MUL_RULE,
-        }
+        rules = {"hls": HLS_ADD_SUB_RULE}
         return rules[get_typing_rule_config()](args[0], args[1])
 
     def get_affine_expr(self, node: ast.Call, ivs: list, symbols: list):
@@ -849,26 +691,21 @@ class DivHandler(BuiltinHandler):
                     op = arith_d.DivSIOp(left, right, ip=self.builder.get_ip())
                 op.attributes[type_hint] = UnitAttr.get()
                 return op
-            elif isinstance(left.type, (BF16Type, F16Type, F32Type, F64Type)):
+            if isinstance(left.type, (BF16Type, F16Type, F32Type, F64Type)):
                 return arith_d.DivFOp(left, right, ip=self.builder.get_ip())
-            else:
-                op = allo_d.DivFixedOp(left, right, ip=self.builder.get_ip())
-                op.attributes[type_hint] = UnitAttr.get()
-                return op
-        else:
-            if not type_compatible([left.type, right.type, result_type]):
-                raise ValueError("hard constraint of linalg_d.div failed")
-            alloc_op = self.builder.build_buffer(result_type, type_hint)
-            with self.builder.get_ip():
-                linalg_d.div(left, right, outs=[alloc_op])
-            return alloc_op
+            op = allo_d.DivFixedOp(left, right, ip=self.builder.get_ip())
+            op.attributes[type_hint] = UnitAttr.get()
+            return op
+        if not type_compatible([left.type, right.type, result_type]):
+            raise ValueError("hard constraint of linalg_d.div failed")
+        alloc_op = self.builder.build_buffer(result_type, type_hint)
+        with self.builder.get_ip():
+            linalg_d.div(left, right, outs=[alloc_op])
+        return alloc_op
 
     @staticmethod
     def infer(*args):
-        rules = {
-            "default": DUMMY_BINARY_ARITH_RULE,
-            "hls": HLS_DIV_RULE,
-        }
+        rules = {"hls": HLS_ADD_SUB_RULE}
         return rules[get_typing_rule_config()](args[0], args[1])
 
     def get_affine_expr(self, node: ast.Call, ivs: list, symbols: list):
@@ -885,7 +722,7 @@ class FloorDivHandler(BuiltinHandler):
         args_ = node.args
         left = self.builder.get_op_result(self.builder.visit(args_[0]))
         right = self.builder.get_op_result(self.builder.visit(args_[1]))
-        result_type, type_hint = self.builder.build_type(args_[2])
+        _, type_hint = self.builder.build_type(args_[2])
         if len(getattr(left.type, "shape", [])) == 0:
             # scalar
             if isinstance(left.type, IntegerType) and type_hint.startswith("s"):
@@ -894,10 +731,7 @@ class FloorDivHandler(BuiltinHandler):
 
     @staticmethod
     def infer(*args):
-        rules = {
-            "default": DUMMY_BINARY_ARITH_RULE,
-            "hls": HLS_DIV_RULE,
-        }
+        rules = {"hls": HLS_ADD_SUB_RULE}
         return rules[get_typing_rule_config()](args[0], args[1])
 
     def get_affine_expr(self, node: ast.Call, ivs: list, symbols: list):
@@ -914,7 +748,7 @@ class ModHandler(BuiltinHandler):
         args_ = node.args
         left = self.builder.get_op_result(self.builder.visit(args_[0]))
         right = self.builder.get_op_result(self.builder.visit(args_[1]))
-        result_type, type_hint = self.builder.build_type(args_[2])
+        _, type_hint = self.builder.build_type(args_[2])
         if len(getattr(left.type, "shape", [])) == 0:
             # scalar
             if isinstance(left.type, IntegerType):
@@ -930,10 +764,7 @@ class ModHandler(BuiltinHandler):
 
     @staticmethod
     def infer(*args):
-        rules = {
-            "default": DUMMY_BINARY_ARITH_RULE,
-            "hls": HLS_MOD_RULE,
-        }
+        rules = {"hls": HLS_ADD_SUB_RULE}
         return rules[get_typing_rule_config()](args[0], args[1])
 
     def get_affine_expr(self, node: ast.Call, ivs: list, symbols: list):
@@ -949,148 +780,6 @@ class ModHandler(BuiltinHandler):
 #
 # [NOTE]: the typing rules are not fully tested!!!
 ##################################################
-
-
-# =======================================================================
-# Default rules
-# =======================================================================
-def dummy_comparison_rule():
-    # [NOTE]: the return type is always bool (currently using i1)
-    int_rules = {
-        (Int, Int): lambda t1, t2: (
-            (allo_bool, Int(max(t1.bits, t2.bits)), Int(max(t1.bits, t2.bits)))
-            if all(t.bits in {8, 16, 32, 64} for t in (t1, t2))
-            else TypeError(f"{t1}, {t2} fail binary comparison rule")
-        ),
-        (Int, UInt): lambda t1, t2: (
-            (allo_bool, UInt(t2.bits), UInt(t2.bits), "u")
-            if t2.bits >= t1.bits and all(t.bits in {8, 16, 32, 64} for t in (t1, t2))
-            else (
-                (allo_bool, Int(t1.bits), Int(t1.bits))
-                if all(t.bits in {8, 16, 32, 64} for t in (t1, t2))
-                else TypeError(f"{t1}, {t2} fail binary comparison rule")
-            )
-        ),
-        (Int, Index): lambda t1, t2: (
-            (allo_bool, Int(max(t1.bits, t2.bits)), Int(max(t1.bits, t2.bits)))
-            if t1.bits in {8, 16, 32, 64}
-            else TypeError(f"{t1}, {t2} fail binary comparison rule")
-        ),
-        (Int, Float): lambda t1, t2: (
-            (allo_bool, t2, t2)
-            if t1.bits in {8, 16, 32, 64}
-            else TypeError(f"{t1}, {t2} fail binary comparison rule")
-        ),
-        # python native value
-        (Int, int): lambda t1, v2: (allo_bool, t1, t1),
-        (int, Int): lambda v1, t2: (allo_bool, t2, t2),
-        (Int, float): lambda t1, v2: (allo_bool, Float(64), Float(64)),
-        (float, Int): lambda v1, t2: (allo_bool, Float(64), Float(64)),
-    }
-    uint_rules = {
-        (UInt, Int): lambda t1, t2: (
-            (allo_bool, UInt(t1.bits), UInt(t1.bits), "u")
-            if t1.bits >= t2.bits and all(t.bits in {8, 16, 32, 64} for t in (t1, t2))
-            else (
-                (allo_bool, Int(t2.bits), Int(t2.bits))
-                if all(t.bits in {8, 16, 32, 64} for t in (t1, t2))
-                else TypeError(f"{t1}, {t2} fail binary comparison rule")
-            )
-        ),
-        (UInt, UInt): lambda t1, t2: (
-            (allo_bool, allo_bool, allo_bool, "u")
-            if t1 == t2 == allo_bool
-            else (
-                (
-                    allo_bool,
-                    UInt(max(t1.bits, t2.bits)),
-                    UInt(max(t1.bits, t2.bits)),
-                    "u",
-                )
-                if all(t.bits in {8, 16, 32, 64} for t in (t1, t2))
-                else TypeError(f"{t1}, {t2} fail binary comparison rule")
-            )
-        ),
-        (UInt, Index): lambda t1, t2: (
-            (allo_bool, UInt(t1.bits), UInt(t1.bits), "u")
-            if t1.bits >= 32 and t1.bits in {8, 16, 32, 64}
-            else (
-                (allo_bool, Index(), Index())
-                if t1.bits in {8, 16, 32, 64}
-                else TypeError(f"{t1}, {t2} fail binary comparison rule")
-            )
-        ),
-        (UInt, Float): lambda t1, t2: (
-            (allo_bool, t2, t2)
-            if t1.bits in {8, 16, 32, 64}
-            else TypeError(f"{t1}, {t2} fail binary comparison rule")
-        ),
-        # python native value
-        (UInt, int): lambda t1, v2: (allo_bool, t1, t1, "u"),
-        (int, UInt): lambda v1, t2: (allo_bool, t2, t2, "u"),
-        (UInt, float): lambda t1, v2: (allo_bool, Float(64), Float(64)),
-        (float, UInt): lambda v1, t2: (allo_bool, Float(64), Float(64)),
-    }
-    index_rules = {
-        (Index, Int): lambda t1, t2: (
-            (allo_bool, Int(max(t1.bits, t2.bits)), Int(max(t1.bits, t2.bits)))
-            if t2.bits in {8, 16, 32, 64}
-            else TypeError(f"{t1}, {t2} fail binary comparison rule")
-        ),
-        (Index, UInt): lambda t1, t2: (
-            (allo_bool, UInt(t2.bits), UInt(t2.bits), "u")
-            if t2.bits >= 32 and t2.bits in {8, 16, 32, 64}
-            else (
-                (allo_bool, Index(), Index())
-                if t2.bits in {8, 16, 32, 64}
-                else TypeError(f"{t1}, {t2} fail binary comparison rule")
-            )
-        ),
-        (Index, Index): lambda t1, t2: (allo_bool, UInt(32), UInt(32)),
-        (Index, Float): lambda t1, t2: (allo_bool, t2, t2),
-        # python native value
-        (Index, int): lambda t1, v2: (allo_bool, UInt(32), UInt(32)),
-        (int, Index): lambda v1, t2: (allo_bool, UInt(32), UInt(32)),
-    }
-    float_rules = {
-        (Float, Int): lambda t1, t2: (
-            (allo_bool, t1, t1)
-            if t2.bits in {8, 16, 32, 64}
-            else TypeError(f"{t1}, {t2} fail binary comparison rule")
-        ),
-        (Float, UInt): lambda t1, t2: (
-            (allo_bool, t1, t1)
-            if t2.bits in {8, 16, 32, 64}
-            else TypeError(f"{t1}, {t2} fail binary comparison rule")
-        ),
-        (Float, Index): lambda t1, t2: (allo_bool, t1, t1),
-        (Float, Float): lambda t1, t2: (
-            (allo_bool, t1, t1) if t1.bits >= t2.bits else (allo_bool, t2, t2)
-        ),
-        # python native value
-        (Float, int): lambda t1, v2: (allo_bool, t1, t1),
-        (int, Float): lambda v1, t2: (allo_bool, t2, t2),
-        (Float, float): lambda t1, v2: (allo_bool, t1, t1),
-        (float, Float): lambda v1, t2: (allo_bool, t2, t2),
-    }
-    bool_rules = {
-        (UInt, bool): lambda t1, v2: (
-            (allo_bool, t1, t1, "u")
-            if t1.bits == 1
-            else TypeError(f"{t1}, {v2} fail binary comparison rule")
-        ),
-        (bool, UInt): lambda v1, t2: (
-            (allo_bool, t2, t2, "u")
-            if t2.bits == 1
-            else TypeError(f"{v1}, {t2} fail binary comparison rule")
-        ),
-    }
-    return TypingRule(
-        [int_rules, uint_rules, index_rules, float_rules, bool_rules],
-    )
-
-
-DUMMY_COMPARISON_RULE = dummy_comparison_rule()
 
 
 # =======================================================================
@@ -1384,10 +1073,7 @@ class EqHandler(BuiltinHandler):
 
     @staticmethod
     def infer(*args):
-        rules = {
-            "default": DUMMY_COMPARISON_RULE,
-            "hls": HLS_CMP_RULE,
-        }
+        rules = {"hls": HLS_CMP_RULE}
         return rules[get_typing_rule_config()](args[0], args[1])
 
 
@@ -1416,10 +1102,7 @@ class NotEqHandler(BuiltinHandler):
 
     @staticmethod
     def infer(*args):
-        rules = {
-            "default": DUMMY_COMPARISON_RULE,
-            "hls": HLS_CMP_RULE,
-        }
+        rules = {"hls": HLS_CMP_RULE}
         return rules[get_typing_rule_config()](args[0], args[1])
 
 
@@ -1453,10 +1136,7 @@ class LtHandler(BuiltinHandler):
 
     @staticmethod
     def infer(*args):
-        rules = {
-            "default": DUMMY_COMPARISON_RULE,
-            "hls": HLS_CMP_RULE,
-        }
+        rules = {"hls": HLS_CMP_RULE}
         return rules[get_typing_rule_config()](args[0], args[1])
 
 
@@ -1490,10 +1170,7 @@ class LtEHandler(BuiltinHandler):
 
     @staticmethod
     def infer(*args):
-        rules = {
-            "default": DUMMY_COMPARISON_RULE,
-            "hls": HLS_CMP_RULE,
-        }
+        rules = {"hls": HLS_CMP_RULE}
         return rules[get_typing_rule_config()](args[0], args[1])
 
 
@@ -1527,10 +1204,7 @@ class GtHandler(BuiltinHandler):
 
     @staticmethod
     def infer(*args):
-        rules = {
-            "default": DUMMY_COMPARISON_RULE,
-            "hls": HLS_CMP_RULE,
-        }
+        rules = {"hls": HLS_CMP_RULE}
         return rules[get_typing_rule_config()](args[0], args[1])
 
 
@@ -1564,8 +1238,5 @@ class GtEHandler(BuiltinHandler):
 
     @staticmethod
     def infer(*args):
-        rules = {
-            "default": DUMMY_COMPARISON_RULE,
-            "hls": HLS_CMP_RULE,
-        }
+        rules = {"hls": HLS_CMP_RULE}
         return rules[get_typing_rule_config()](args[0], args[1])

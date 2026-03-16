@@ -33,6 +33,7 @@ class Axes:
     wid: ast.Name
 
 
+# pylint: disable=too-many-instance-attributes
 class ASTPreProcessor(ast.NodeTransformer):
     @contextmanager
     def namespace(self, node: ast.FunctionDef):
@@ -157,6 +158,7 @@ class ASTPreProcessor(ast.NodeTransformer):
         else:
             self.scopes[-1].consts[name] = const
 
+    # pylint: disable=too-many-nested-blocks
     def get_symbol(self, name, allow_missing=False):
         """
         Get the value of a symbol from the current scope chain.
@@ -218,9 +220,9 @@ class ASTPreProcessor(ast.NodeTransformer):
         try:
             func: ast.FunctionDef = get_ast(fn)
             # if instantiate is not None, we need to use the args to instantiate the unique function
-            node, top_name = self.visit_function_signature(func, instantiate)
+            _, top_name = self.visit_function_signature(func, instantiate)
             while self.worklist:
-                n = self.visit_function_body(
+                self.visit_function_body(
                     self.symbol_table.functions[self.worklist.popleft()]
                 )
             return func, top_name
@@ -229,7 +231,8 @@ class ASTPreProcessor(ast.NodeTransformer):
                 report_error(self.err)
             raise
 
-    def eval_constant(self, node, consts=None):
+    # pylint: disable=eval-used
+    def eval_constant(self, node: ast.expr, consts: dict = None):
         """
         Evaluate the constant expression.
 
@@ -244,6 +247,7 @@ class ASTPreProcessor(ast.NodeTransformer):
             compile(ast.fix_missing_locations(ast.Expression(node)), "", "eval"), consts
         )
 
+    # pylint: disable=inconsistent-return-statements
     def resolve_node(self, node: ast.AST):
         if isinstance(node, ast.Name):
             return self.symbols[node.id]  # limited to single-level symbol lookup
@@ -407,8 +411,8 @@ class ASTPreProcessor(ast.NodeTransformer):
                 target_dtype = np_dtype_to_allo_dtype[node_value.dtype]
             else:
                 node_value = node.value.astype(np_supported_types[str(target_dtype)])
-        except:
-            raise RuntimeError(f"Fail to finalize dtype for {ast.dump(node)}")
+        except Exception as exc:
+            raise RuntimeError(f"Fail to finalize dtype for {ast.dump(node)}") from exc
         # untyped global constant
         node.dtype = target_dtype
         # add a new global op
@@ -444,7 +448,7 @@ class ASTPreProcessor(ast.NodeTransformer):
         dims = []
         for idx, (s, t) in enumerate(zip(padded_shape, target_shape)):
             if s != t:
-                if s != 1 and s != -1:
+                if s not in (1, -1):
                     raise ValueError(f"shape mismatch: {shape} vs {target_shape}")
                 dims.append(idx)
         # FIXME: currently use linalg.broadcast for lowering, can only 'insert' dim
@@ -506,7 +510,7 @@ class ASTPreProcessor(ast.NodeTransformer):
             # [NOTE] the first two return value is not useful here, we keep them to make `infer`'s interface consistent
             _, _, handler = BUILTIN_HANDLERS["cast"].infer(node.dtype, target_dtype)
         except TypeError as e:
-            raise TypeError(f"Cast inference failed: {e}")
+            raise TypeError(f"Cast inference failed: {e}") from e
 
         call_node = ast.Call(
             func=ast.Attribute(
@@ -527,6 +531,7 @@ class ASTPreProcessor(ast.NodeTransformer):
         call_node.shape = node.shape
         return call_node
 
+    # pylint: disable=redefined-variable-type
     def visit_constant(self, node):
         value = self.eval_constant(node)
         if isinstance(value, list):
@@ -555,7 +560,7 @@ class ASTPreProcessor(ast.NodeTransformer):
             return self.visit_cast(const_node, Index()), sympy.Integer(
                 int(const_node.value)
             )
-        except:
+        except Exception:
             pass
         if isinstance(node, ast.Name):
             new_node = self.visit_cast(self.visit(node), Index())
@@ -605,8 +610,8 @@ class ASTPreProcessor(ast.NodeTransformer):
     def visit_List(self, node: ast.List):  # constant tensor
         try:
             return self.visit_constant(node)
-        except:
-            raise RuntimeError("List constant evaluation failed")
+        except Exception as exc:
+            raise RuntimeError("List constant evaluation failed") from exc
 
     def visit_Constant(self, node: ast.Constant):
         # e.g., 1, 1.0, True, False
@@ -630,7 +635,7 @@ class ASTPreProcessor(ast.NodeTransformer):
         # slice: A[0:10], A[::1]
         try:
             return self.visit_constant(node)  # parse as compile time constant
-        except:
+        except Exception:
             pass
         value = self.visit(node.value)
         node.value = value
@@ -782,7 +787,7 @@ class ASTPreProcessor(ast.NodeTransformer):
                 str(type(op).__name__)
             ].infer(arg1, arg2)
         except TypeError as e:
-            raise TypeError(f"Type error in binary operation ({op}): {e}")
+            raise TypeError(f"Type error in binary operation ({op}): {e}") from e
         left = self.visit_cast(left, l_type)
         right = self.visit_cast(right, r_type)
         # Broadcasting
@@ -792,7 +797,9 @@ class ASTPreProcessor(ast.NodeTransformer):
             try:
                 result_shape = self.resolve_broadcast_shape(lhs_shape, rhs_shape)
             except ValueError as e:
-                raise ValueError(f"Broadcasting error in binary operation {op}: {e}")
+                raise ValueError(
+                    f"Broadcasting error in binary operation {op}: {e}"
+                ) from e
             left = self.visit_broadcast(left, left.dtype, result_shape)
             right = self.visit_broadcast(right, right.dtype, result_shape)
         else:
@@ -1025,12 +1032,12 @@ class ASTPreProcessor(ast.NodeTransformer):
                 node.value = ast.Constant(self.eval_constant(node.value))
                 self.put_const(node.target.id, node.value)
                 node.value.dtype, node.value.shape = dtype, shape
-            except:
+            except Exception as exc:
                 if isinstance(node.value, ast.Attribute):  # is symbol
                     assert isinstance(dtype, Index)
                     self.visit_assign_symbol([node.target], [self.visit(node.value)])
                 else:
-                    raise RuntimeError("unreachable")
+                    raise RuntimeError("unreachable") from exc
             return None
         else:
             if node.value is not None:
@@ -1395,7 +1402,7 @@ class ASTPreProcessor(ast.NodeTransformer):
                 ret = self.visit_method(node)
                 if ret is not None:
                     return ret
-            except:
+            except Exception:
                 pass
         # TODO
         return node

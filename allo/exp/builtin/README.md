@@ -1,3 +1,5 @@
+<!--- Copyright Allo authors. All Rights Reserved. -->
+<!--- SPDX-License-Identifier: Apache-2.0  -->
 # Allo Builtin Library Extensions
 
 This directory serves as an extensible library for handling builtin functions and operations within the Allo compiler.

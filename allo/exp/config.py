@@ -1,5 +1,6 @@
 # Copyright Allo authors. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
+# pylint: disable=global-statement
 
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -13,7 +14,7 @@ class Interface:
     builtin: str = "__allo__"
 
 
-_TYPING_RULE_CONFIG = "default"  # Global configuration for typing rules
+_TYPING_RULE_CONFIG = "hls"  # Global configuration for typing rules
 _INTERFACE_CONFIG = Interface(meta="allo.template", spmw="allo.spmw", lib="allo.dsl")
 
 

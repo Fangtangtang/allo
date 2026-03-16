@@ -1,3 +1,5 @@
+<!--- Copyright Allo authors. All Rights Reserved. -->
+<!--- SPDX-License-Identifier: Apache-2.0  -->
 # Allo IR Generation
 
 This directory contains the core logic for converting Python AST into Allo Intermediate Representation (IR), which relies on MLIR.

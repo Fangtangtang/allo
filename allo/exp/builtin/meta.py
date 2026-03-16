@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ast
-from .handler import BuiltinHandler, register_builtin_handler
 import allo._mlir.extras.types as mlir_types
-from allo._mlir.dialects import func as func_d, memref as memref_d
-from allo._mlir.ir import FlatSymbolRefAttr, UnitAttr
-import allo._mlir.extras.dialects.func as func
+from allo._mlir.dialects import func as func_d
+from allo._mlir.ir import FlatSymbolRefAttr
+from allo._mlir.extras.dialects import func
+from .handler import BuiltinHandler, register_builtin_handler
 
 
 @register_builtin_handler("get_wid")
