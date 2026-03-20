@@ -153,7 +153,6 @@ def replace_stream_arrays(module):
                     stream_sym = op.attributes["global"].value
                     if stream_sym not in stream_arrays:
                         continue
-                    allo_d.simplify_stream_affine_map(op)
                     aff_map = AffineMapAttr(op.map).value
                     assert aff_map.n_inputs == 0, "fail to resolve for now"
                     indices = [AffineConstantExpr(exp).value for exp in aff_map.results]
