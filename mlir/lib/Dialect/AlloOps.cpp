@@ -16,6 +16,8 @@
 #include "allo/Dialect/AlloDialect.h"
 #include "allo/Dialect/AlloTypes.h"
 
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -243,13 +245,15 @@ template <typename OpTy>
 static LogicalResult canonicalizeStreamAffineMap(OpTy op,
                                                  PatternRewriter &rewriter) {
   AffineMap oldMap = op.getMap();
-  SmallVector<Value, 4> operands(op.getIndices().begin(), op.getIndices().end());
+  SmallVector<Value, 4> operands(op.getIndices().begin(),
+                                 op.getIndices().end());
   AffineMap map = oldMap;
   mlir::affine::fullyComposeAffineMapAndOperands(&map, &operands);
   map = mlir::simplifyAffineMap(map);
   mlir::affine::canonicalizeMapAndOperands(&map, &operands);
 
-  if (map == oldMap && llvm::to_vector(op.getIndices()) ==
+  if (map == oldMap &&
+      llvm::to_vector(op.getIndices()) ==
           SmallVector<Value, 4>(operands.begin(), operands.end()))
     return failure(); // nothing changed
 
