@@ -17,8 +17,8 @@
 #include "allo/Dialect/AlloTypes.h"
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
-#include "mlir/IR/Builders.h"
 #include "mlir/IR/AffineMap.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OpImplementation.h"
