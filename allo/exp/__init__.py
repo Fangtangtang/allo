@@ -5,10 +5,12 @@ from typing import Union
 from collections.abc import Callable
 from allo.ir.utils import get_global_vars
 from allo.backend.llvm import LLVMModule
+from allo.backend.hls import HLSModule
 from .config import ir_builder_config_context
 from .utils import SymbolTable
 from .ast_preprocessor import ASTPreProcessor
 from .ir_builder import IRBuilder
+from .passes.instantiate import instantiate_for_hls
 
 
 def build(
@@ -44,3 +46,26 @@ def process(fn: Union[Callable, str], instantiate: list = None, typing: str = No
     """
     module, top_name = build(fn, instantiate, typing)
     return LLVMModule(module, top_name)
+
+
+def to_hls(
+    fn: Union[Callable, str], instantiate: list = None, project=None, mode="sw_emu"
+):
+    symbol_table = SymbolTable()
+    ast_processor = ASTPreProcessor(symbol_table, global_symbols=get_global_vars(fn))
+    # process the top function
+    node, top_name = ast_processor.process(fn, instantiate=instantiate)
+    builder = IRBuilder(symbol_table)
+    module = builder.build()
+    parsed = instantiate_for_hls(module, top_name)
+    mod = HLSModule(
+        parsed,
+        top_func_name=top_name,
+        platform="vitis_hls",
+        mode=mode,
+        project=project if project else "top.prj",
+        ext_libs=[],
+        func_args={},
+        wrap_io=True,
+    )
+    return mod
