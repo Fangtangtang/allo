@@ -17,7 +17,6 @@
 #include "allo/Dialect/AlloTypes.h"
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
-#include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -25,7 +24,6 @@
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Interfaces/FunctionImplementation.h"
 
 namespace mlir {
