@@ -1,10 +1,13 @@
 # Copyright Allo authors. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-from allo.exp import build
+import numpy as np
+import tempfile
+from allo.exp import build, to_hls
 import allo
 from allo.ir.types import int32, float32, ConstExpr
 from allo import spmw
+from allo.backend import hls
 
 
 def test_basic():

@@ -79,7 +79,6 @@ def parse_namespace(unit_module):
         for op in func_block.operations:
             if isinstance(op, allo_d.GridMapOp):
                 grid = list(op.grid)
-                is_input = op.interfaces
                 for block in op.body:
                     for sub_op in block.operations:
                         if isinstance(sub_op, func_d.CallOp):
@@ -96,7 +95,6 @@ def parse_namespace(unit_module):
                         shape=tuple(arg.type.shape),
                         dtype=arg.type.element_type,
                         spec_list=[Layout(sharding)],
-                        tile_shape=tuple(sub_op.operands_[i].type.shape),
                         id_=arg.arg_number,
                     )
                     dtensors[sub_op.callee.value].append(dtensor)
@@ -108,7 +106,6 @@ def parse_namespace(unit_module):
                         shape=shape,
                         dtype=arg.type.element_type,
                         spec_list=[Layout([Layout.Replicate] * len(shape))],
-                        tile_shape=shape,
                         id_=arg.arg_number,
                     )
                     dtensors[sub_op.callee.value].append(dtensor)
