@@ -1,10 +1,13 @@
 # Copyright Allo authors. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import numpy as np
+import tempfile
 import allo
-from allo.exp import build
+from allo.exp import build, to_hls
 from allo.ir.types import int32, ConstExpr, index, Stream
 from allo import spmw
+from allo.backend import hls
 
 
 def test_shard_1D():
@@ -76,6 +79,13 @@ def test_get_wid_1D_1():
                 B[i] = A[i] + 1
 
     mod = build(top)
+    if hls.is_available("vitis_hls"):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mod = to_hls(top, project=tmpdir)
+            np_A = np.random.randint(-100, 100, (1024,), dtype=np.int32)
+            np_B = np.zeros((1024,), dtype=np.int32)
+            mod(np_A, np_B)
+            assert np.array_equal(np_A + 1, np_B)
 
 
 def test_get_wid_1D_2():
@@ -93,6 +103,13 @@ def test_get_wid_1D_2():
                 B[i] = A[i] + 1
 
     mod = build(top)
+    if hls.is_available("vitis_hls"):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mod = to_hls(top, project=tmpdir)
+            np_A = np.random.randint(-100, 100, (1024,), dtype=np.int32)
+            np_B = np.zeros((1024,), dtype=np.int32)
+            mod(np_A, np_B)
+            assert np.array_equal(np_A + 1, np_B)
 
     @spmw.unit()
     def top(A: int32[vlen], B: int32[vlen]):
@@ -104,6 +121,13 @@ def test_get_wid_1D_2():
                 B[i] = A[i] + 1
 
     mod = build(top)
+    if hls.is_available("vitis_hls"):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mod = to_hls(top, project=tmpdir)
+            np_A = np.random.randint(-100, 100, (1024,), dtype=np.int32)
+            np_B = np.zeros((1024,), dtype=np.int32)
+            mod(np_A, np_B)
+            assert np.array_equal(np_A + 1, np_B)
 
     @spmw.unit()
     def top(A: int32[vlen], B: int32[vlen]):
@@ -114,6 +138,13 @@ def test_get_wid_1D_2():
                 B[i] = A[i] + 1
 
     mod = build(top)
+    if hls.is_available("vitis_hls"):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mod = to_hls(top, project=tmpdir)
+            np_A = np.random.randint(-100, 100, (1024,), dtype=np.int32)
+            np_B = np.zeros((1024,), dtype=np.int32)
+            mod(np_A, np_B)
+            assert np.array_equal(np_A + 1, np_B)
 
 
 def test_scalar_stream_1():
@@ -130,6 +161,13 @@ def test_scalar_stream_1():
             B[0, 0] = pipe.get()
 
     build(top1)
+    if hls.is_available("vitis_hls"):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            s = to_hls(top1, project=tmpdir)
+            np_A = np.random.randint(0, 100, (16, 16), dtype=np.int32)
+            np_B = np.zeros((16, 16), dtype=np.int32)
+            s(np_A, np_B)
+            assert np_A[0][0] == np_B[0][0]
 
 
 def test_scalar_stream_2():
@@ -148,6 +186,13 @@ def test_scalar_stream_2():
                 B[i, j] = pipe.get()
 
     build(top2)
+    if hls.is_available("vitis_hls"):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            s = to_hls(top2, project=tmpdir)
+            np_A = np.random.randint(0, 100, (16, 16), dtype=np.int32)
+            np_B = np.zeros((16, 16), dtype=np.int32)
+            s(np_A, np_B)
+            assert np.array_equal(np_A, np_B)
 
 
 def test_tensor_stream():
@@ -168,6 +213,13 @@ def test_tensor_stream():
                     B[i, j] = pipe[i, j].get()
 
     build(top)
+    if hls.is_available("vitis_hls"):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            s = to_hls(top, project=tmpdir)
+            np_A = np.random.randint(0, 100, (16, 16), dtype=np.int32)
+            np_B = np.zeros((16, 16), dtype=np.int32)
+            s(np_A, np_B)
+            assert np.array_equal(np_A, np_B)
 
 
 if __name__ == "__main__":

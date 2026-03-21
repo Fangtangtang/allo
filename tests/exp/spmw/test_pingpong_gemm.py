@@ -1,9 +1,12 @@
 # Copyright Allo authors. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import tempfile
+import numpy as np
 from allo.ir.types import float32, Stream
 from allo import spmw
-from allo.exp import build
+from allo.exp import build, to_hls
+import allo.backend.hls as hls
 
 
 def test_cooperative_gemm():
@@ -42,6 +45,16 @@ def test_cooperative_gemm():
                     C[i, j] = C_out[i - pi * Mt, j - pj * Nt] + c
 
     build(top)
+    A = np.random.rand(M, K).astype(np.float32)
+    B = np.random.rand(K, N).astype(np.float32)
+    C = np.zeros((M, N), dtype=np.float32)
+    if hls.is_available("vitis_hls"):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mod = to_hls(top, project=tmpdir)
+            C = np.zeros((M, N), dtype=np.float32)
+            mod(A, B, C)
+            np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
+            print("Passed!")
 
 
 if __name__ == "__main__":
