@@ -61,6 +61,7 @@ def test_multi_instance_v1():
             np.testing.assert_allclose(A + 1, C)
             np.testing.assert_allclose(A + 1, B)
 
+
 def test_multi_instance_v2():
     M, N, K = 32, 32, 32
     P0, P1 = 2, 2
@@ -100,6 +101,7 @@ def test_multi_instance_v2():
             np.testing.assert_allclose(C1, np.dot(A, B), rtol=1e-5, atol=1e-5)
             np.testing.assert_allclose(C2, np.dot(A, B), rtol=1e-5, atol=1e-5)
             print("Success!")
+
 
 def test_template_v1():
     @spmw.unit()

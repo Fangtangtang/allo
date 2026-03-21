@@ -54,7 +54,7 @@ def to_hls(
     symbol_table = SymbolTable()
     ast_processor = ASTPreProcessor(symbol_table, global_symbols=get_global_vars(fn))
     # process the top function
-    node, top_name = ast_processor.process(fn, instantiate=instantiate)
+    _, top_name = ast_processor.process(fn, instantiate=instantiate)
     builder = IRBuilder(symbol_table)
     module = builder.build()
     parsed = instantiate_for_hls(module, top_name)
