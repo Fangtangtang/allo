@@ -1071,9 +1071,7 @@ def GlobalStreamGetOp : Allo_Op<"get_stream_global"> {
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
   let hasCustomAssemblyFormat = 1;
-  let extraClassDeclaration = [{
-    void simplifyAffineMap();
-  }];
+  let hasCanonicalizeMethod = 1;
 }
 
 def GlobalStreamPutOp : Allo_Op<"put_stream_global"> {
@@ -1092,9 +1090,7 @@ def GlobalStreamPutOp : Allo_Op<"put_stream_global"> {
   let results = (outs);
   let hasVerifier = 1;
   let hasCustomAssemblyFormat = 1;
-  let extraClassDeclaration = [{
-    void simplifyAffineMap();
-  }];
+  let hasCanonicalizeMethod = 1;
 }
 
 
@@ -1155,7 +1151,7 @@ def GridMapOp : Allo_Op<"grid_map",
   let description = [{
     The grid_map operation distributes a computation over a logical grid.
     It takes a list of memrefs with static shape (`tensors`) as input arguments.
-    It shuns isolation from above and contains a single block whose arguments are the sharded memrefs.
+    It contains a single block whose arguments are the sharded memrefs. The operations in the block can access variables in parent regions.
   }];
 
   let arguments = (ins
