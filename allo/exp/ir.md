@@ -231,7 +231,7 @@ module {
 }
 ```
 
-### 2D Sharding
+#### 2D Sharding
 
 2D tensors sharded along first axis only (`shard([x, None])`), 1D grid:
 
