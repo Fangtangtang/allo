@@ -27,7 +27,7 @@ def top(A: int32[1024], B: int32[1024]):
         local_B[:] = local_A + 1
 ```
 
-```llvm
+```mlir
 #map = affine_map<(d0) -> (d0)>
 module {
   func.func @top(%arg0: memref<1024xi32>, %arg1: memref<1024xi32>) attributes {itypes = "ss", otypes = ""} {
@@ -419,3 +419,191 @@ module {
 ```
 
 ### Hierarchical Design
+
+A `spmw.unit` can be invoked from inside another unit's worker. The callee becomes a `func.func` with its own `allo.grid_map`, and the caller's worker issues a plain `func.call` to it.
+
+```python
+@spmw.unit()
+def vadd(A: int32[1024], B: int32[1024]):
+    @spmw.work(grid=[1])
+    def core():
+        for i in allo.grid(1024):
+            B[i] = A[i] + 1
+
+@spmw.unit()
+def top(A: int32[1024], B: int32[1024]):
+    @spmw.work(grid=[1])
+    def core():
+        vadd(A, B)
+```
+
+```mlir
+module {
+  func.func @top(%arg0: memref<1024xi32>, %arg1: memref<1024xi32>) attributes {itypes = "ss", otypes = ""} {
+    allo.grid_map() sharding = [] grid = [1] {
+      func.call @top.core(%arg0, %arg1) : (memref<1024xi32>, memref<1024xi32>) -> ()
+    } : 
+    return
+  }
+  func.func private @top.core.mesh.get_wid() -> index
+  func.func @top.core(%arg0: memref<1024xi32>, %arg1: memref<1024xi32>) attributes {itypes = "ss", otypes = ""} {
+    %0 = call @top.core.mesh.get_wid() : () -> index
+    call @vadd(%arg0, %arg1) : (memref<1024xi32>, memref<1024xi32>) -> ()  // nested unit call, lowered to a plain func.call
+    return
+  }
+  // The callee unit
+  func.func @vadd(%arg0: memref<1024xi32>, %arg1: memref<1024xi32>) attributes {itypes = "ss", otypes = ""} {
+    allo.grid_map() sharding = [] grid = [1] {  // callee unit keeps its own grid_map
+      func.call @vadd.core(%arg0, %arg1) : (memref<1024xi32>, memref<1024xi32>) -> ()
+    } : 
+    return
+  }
+  func.func private @vadd.core.mesh.get_wid() -> index
+  func.func @vadd.core(%arg0: memref<1024xi32>, %arg1: memref<1024xi32>) attributes {itypes = "ss", otypes = ""} {
+    %0 = call @vadd.core.mesh.get_wid() : () -> index
+    affine.for %arg2 = 0 to 1024 {
+      %1 = affine.load %arg0[%arg2] : memref<1024xi32>
+      %2 = arith.extsi %1 {signed} : i32 to i33
+      %c1_i33 = arith.constant 1 : i33
+      %3 = arith.addi %2, %c1_i33 {signed} : i33
+      %4 = arith.trunci %3 {signed} : i33 to i32
+      affine.store %4, %arg1[%arg2] : memref<1024xi32>
+    } {loop_type = "grid"}
+    return
+  }
+}
+```
+
+The same callee can be invoked multiple times from one worker. Only one `@vadd` definition is emitted; the two call sites differ only in their argument bindings.
+
+```python
+@spmw.unit()
+def vadd(A: int32[1024], B: int32[1024]):
+    @spmw.work(grid=[1])
+    def core():
+        for i in allo.grid(1024):
+            B[i] = A[i] + 1
+
+@spmw.unit()
+def top(A0: int32[1024], A1: int32[1024], B: int32[1024], C: int32[1024]):
+    @spmw.work(grid=[1])
+    def core():
+        vadd(A0, B)
+        vadd(A1, C)
+```
+
+```mlir
+module {
+  func.func @top(%arg0: memref<1024xi32>, %arg1: memref<1024xi32>, %arg2: memref<1024xi32>, %arg3: memref<1024xi32>) attributes {itypes = "ssss", otypes = ""} {
+    allo.grid_map() sharding = [] grid = [1] {
+      func.call @top.core(%arg0, %arg2, %arg1, %arg3) : (memref<1024xi32>, memref<1024xi32>, memref<1024xi32>, memref<1024xi32>) -> ()
+    } : 
+    return
+  }
+  func.func private @top.core.mesh.get_wid() -> index
+  func.func @top.core(%arg0: memref<1024xi32>, %arg1: memref<1024xi32>, %arg2: memref<1024xi32>, %arg3: memref<1024xi32>) attributes {itypes = "ssss", otypes = ""} {
+    %0 = call @top.core.mesh.get_wid() : () -> index
+    call @vadd(%arg0, %arg1) : (memref<1024xi32>, memref<1024xi32>) -> ()  // two call sites share one @vadd
+    call @vadd(%arg2, %arg3) : (memref<1024xi32>, memref<1024xi32>) -> ()
+    return
+  }
+  func.func @vadd(%arg0: memref<1024xi32>, %arg1: memref<1024xi32>) attributes {itypes = "ss", otypes = ""} {
+    allo.grid_map() sharding = [] grid = [1] {
+      func.call @vadd.core(%arg0, %arg1) : (memref<1024xi32>, memref<1024xi32>) -> ()
+    } : 
+    return
+  }
+  func.func private @vadd.core.mesh.get_wid() -> index
+  func.func @vadd.core(%arg0: memref<1024xi32>, %arg1: memref<1024xi32>) attributes {itypes = "ss", otypes = ""} {
+    %0 = call @vadd.core.mesh.get_wid() : () -> index
+    affine.for %arg2 = 0 to 1024 {
+      %1 = affine.load %arg0[%arg2] : memref<1024xi32>
+      %2 = arith.extsi %1 {signed} : i32 to i33
+      %c1_i33 = arith.constant 1 : i33
+      %3 = arith.addi %2, %c1_i33 {signed} : i33
+      %4 = arith.trunci %3 {signed} : i33 to i32
+      affine.store %4, %arg1[%arg2] : memref<1024xi32>
+    } {loop_type = "grid"}
+    return
+  }
+}
+```
+
+A wrapper worker can dispatch different hierarchical calls based on its worker ID. The `x.id == 0` branch lowers to an `scf.if` over the `get_wid` result, and each branch calls the same `@inner` unit with a different output buffer:
+
+```python
+M, N, K = 32, 32, 32
+P0, P1 = 2, 2
+
+@spmw.unit()
+def inner(A: float32[M, K], B: float32[K, N], C: float32[M, N]):
+    @spmw.work(grid=[P0, P1])
+    def gemm():
+        x, y = spmw.axes()
+        pi, pj = x.id, y.id
+        Mt: ConstExpr[int32] = M // P0
+        Nt: ConstExpr[int32] = N // P1
+        for i in range(pi * Mt, (pi + 1) * Mt):
+            for j in range(pj * Nt, (pj + 1) * Nt):
+                for k in range(K):
+                    C[i, j] += A[i, k] * B[k, j]
+
+@spmw.unit()
+def top(A: float32[M, K], B: float32[K, N], C1: float32[M, N], C2: float32[M, N]):
+    @spmw.work(grid=[2])
+    def wrapper():
+        x = spmw.axes()
+        if x.id == 0:
+            inner(A, B, C1)
+        else:
+            inner(A, B, C2)
+```
+
+```mlir
+#map = affine_map<()[s0] -> (s0 * 16)>
+#map1 = affine_map<()[s0] -> ((s0 + 1) * 16)>
+module {
+  func.func @top(%arg0: memref<32x32xf32>, %arg1: memref<32x32xf32>, %arg2: memref<32x32xf32>, %arg3: memref<32x32xf32>) attributes {itypes = "____", otypes = ""} {
+    allo.grid_map() sharding = [] grid = [2] {
+      func.call @top.wrapper(%arg0, %arg1, %arg2, %arg3) : (memref<32x32xf32>, memref<32x32xf32>, memref<32x32xf32>, memref<32x32xf32>) -> ()
+    } : 
+    return
+  }
+  func.func private @top.wrapper.mesh.get_wid() -> index
+  func.func @top.wrapper(%arg0: memref<32x32xf32>, %arg1: memref<32x32xf32>, %arg2: memref<32x32xf32>, %arg3: memref<32x32xf32>) attributes {itypes = "____", otypes = ""} {
+    %0 = call @top.wrapper.mesh.get_wid() : () -> index
+    %1 = arith.index_cast %0 {unsigned} : index to i32  // x.id == 0 branch, lowered to scf.if
+    %c0_i32 = arith.constant 0 : i32
+    %2 = arith.cmpi eq, %1, %c0_i32 : i32
+    scf.if %2 {
+      func.call @inner(%arg0, %arg1, %arg2) : (memref<32x32xf32>, memref<32x32xf32>, memref<32x32xf32>) -> ()
+    } else {
+      func.call @inner(%arg0, %arg1, %arg3) : (memref<32x32xf32>, memref<32x32xf32>, memref<32x32xf32>) -> ()
+    }
+    return
+  }
+  func.func @inner(%arg0: memref<32x32xf32>, %arg1: memref<32x32xf32>, %arg2: memref<32x32xf32>) attributes {itypes = "___", otypes = ""} {
+    allo.grid_map() sharding = [] grid = [2, 2] {
+      func.call @inner.gemm(%arg0, %arg1, %arg2) : (memref<32x32xf32>, memref<32x32xf32>, memref<32x32xf32>) -> ()
+    } : 
+    return
+  }
+  func.func private @inner.gemm.mesh.get_wid() -> (index, index)
+  func.func @inner.gemm(%arg0: memref<32x32xf32>, %arg1: memref<32x32xf32>, %arg2: memref<32x32xf32>) attributes {itypes = "___", otypes = ""} {
+    %0:2 = call @inner.gemm.mesh.get_wid() : () -> (index, index)
+    affine.for %arg3 = #map()[%0#0] to #map1()[%0#0] {
+      affine.for %arg4 = #map()[%0#1] to #map1()[%0#1] {
+        affine.for %arg5 = 0 to 32 {
+          %1 = affine.load %arg2[%arg3, %arg4] : memref<32x32xf32>
+          %2 = affine.load %arg0[%arg3, %arg5] : memref<32x32xf32>
+          %3 = affine.load %arg1[%arg5, %arg4] : memref<32x32xf32>
+          %4 = arith.mulf %2, %3 {_float} : f32
+          %5 = arith.addf %1, %4 {_float} : f32
+          affine.store %5, %arg2[%arg3, %arg4] : memref<32x32xf32>
+        }
+      }
+    }
+    return
+  }
+}
+```
