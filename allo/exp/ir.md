@@ -7,6 +7,73 @@ Each MLIR `module` compiles from a top-level funtion decorated with`spmw.unit`. 
 
 ## SPMW MLIR Operations
 
+SPMW IR introduces some new ops in the `allo` dialect.
+
+### `allo.grid_map`
+
+Distributes a computation over a logical work grid. It takes a variadic list of statically-shaped memrefs (`tensors`), a `sharding` array-attr describing how each tensor is split across grid dimensions, and a `grid` dense-i64-array attr giving the grid shape. The op holds a single-block region whose block arguments are the *sharded* (per-worker) memrefs; operations inside the block may also capture values from parent regions.
+
+```
+allo.grid_map(<tensors>) sharding = <sharding> grid = <grid> {
+  <body>
+} : <tensor-types>
+```
+
+- `sharding` is a list of per-tensor axis lists. Entry `i` has one integer per rank of `tensors[i]`: a non-negative value `g` means that tensor axis is sharded along grid dimension `g`, and `-1` means the axis is replicated. 
+- `grid` gives the grid shape; its length is the grid rank.
+- The region's single block `<body>` has one argument per entry in `tensors`, typed as the sharded sub-memref.
+
+See the [Sharding](#sharding) examples for 1D/2D worker grids and mixed shard/replicate patterns.
+
+### `allo.stream_global`
+
+Declares a global stream object as a module-level symbol, similar to `memref.global`. Arguments:
+
+- `sym_name` — symbol name of the stream.
+- `element_type` — element type carried by the stream (e.g. `i32`, `f32`, or a memref type).
+- `shape` — dense-i64-array giving the shape of the stream array; `[]` for a scalar stream.
+
+```
+allo.stream_global @<name> : <element-type> <shape> attr-dict
+```
+
+A depth attribute on the stream type (`!allo.stream<i32, 2>`) specifies the FIFO depth. See the [Stream](#stream) section for scalar and 2D stream-array examples.
+
+### `allo.put_stream_global`
+
+Pushes a value into a global stream. Arguments:
+
+- `global` — flat symbol ref to the target `allo.stream_global`.
+- `indices` — variadic `index` operands used together with `map` to compute the slot (the accessed stream array index must be an affine function of work id or loop iterator); empty for a scalar stream.
+- `data` — the value to push; its type must match the stream's element type.
+- `map` — affine map applied to `indices` to produce the final slot coordinates.
+
+```
+allo.put_stream_global <data>, @<name>[<indices>] : <data-type>
+```
+
+### `allo.get_stream_global`
+
+Pops a value from a global stream. Arguments mirror `put_stream_global` minus `data`; the result is the value read from the stream.
+
+- `global` — flat symbol ref to the source `allo.stream_global`.
+- `indices` — variadic `index` operands feeding `map` (the accessed stream array index must be an affine function of work id or loop iterator).
+- `map` — affine map applied to `indices` to produce the slot coordinates.
+- result — the value popped, typed as the stream's element type.
+
+```
+%v = allo.get_stream_global @<name>[<indices>] : <element-type>
+```
+
+Both `put_stream_global` and `get_stream_global` expose a `simplifyAffineMap()` helper used by `canonicalize` to fold the affine map when operands are constants or identity.
+
+### `@xxx.mesh.get_wid()` functions
+
+A *meta function* that is invoked at the entry of each work function to get the work ID. The number of return values equals the grid rank.
+
+This function is called exactly once at the beginning of the work function body.
+All subsequent uses of the work ID within the function body use the values returned by this call.
+
 ## Examples
 Please refer to [syntax document](./syntax.md) for the programming interface.
 
