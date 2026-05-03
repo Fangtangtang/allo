@@ -342,7 +342,7 @@ NB_MODULE(_allo, m) {
 
   // Loop transform APIs.
   allo_m.def("loop_transformation", &loopTransformation);
-  allo_m.def("unroll", &unroll);
+  allo_m.def("unroll", &unrollLoop);
 
   // Codegen APIs.
   allo_m.def("emit_vhls", &emitVivadoHls, nb::arg("module"),
