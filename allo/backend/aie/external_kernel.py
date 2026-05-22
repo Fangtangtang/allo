@@ -19,6 +19,7 @@ class ExternalModuleBase:
         top: str,
         input_idx: list[int],
         output_idx: list[int],
+        impl_path: str | Path,
         kernel_code: str = "",
         kernel_header: str = "",
         arg_layout=None,
@@ -26,6 +27,7 @@ class ExternalModuleBase:
         self.top = top
         self.input_idx = input_idx
         self.output_idx = output_idx
+        self.impl_path = Path(impl_path)
         self.kernel_code = kernel_code
         self.kernel_header = kernel_header
         # TODO: data layout at transfer time?
@@ -65,11 +67,8 @@ class ExternalModule(ExternalModuleBase):
         self, top: str, impl_path: str, input_idx: list[int], output_idx: list[int]
     ):
         super().__init__(
-            top=top,
-            input_idx=input_idx,
-            output_idx=output_idx,
+            top=top, input_idx=input_idx, output_idx=output_idx, impl_path=impl_path
         )
-        self.impl_path = Path(impl_path)
         self.filename = self.impl_path.name
         assert self.filename.endswith(
             ".cc"

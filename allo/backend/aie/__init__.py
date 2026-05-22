@@ -7,6 +7,7 @@ import re
 import subprocess
 import shutil
 from pathlib import Path
+from collections import defaultdict
 import numpy as np
 
 try:
@@ -430,6 +431,7 @@ class AIE_MLIRModule:
                                 call_matmul_op.attributes["lib"].value
                             ]
                         )
+                        print(scalar_kernel.top, scalar_kernel.impl_path)
                         kernel_code = scalar_kernel.kernel_code.replace(
                             "matmul_scalar_", "matmul_vectorized_"
                         )
@@ -438,19 +440,20 @@ class AIE_MLIRModule:
                                 vectorized_kernel_name,
                                 scalar_kernel.input_idx,
                                 scalar_kernel.output_idx,
-                                kernel_code,
-                                scalar_kernel.kernel_header,
+                                impl_path=scalar_kernel.impl_path,
+                                kernel_code=kernel_code,
+                                kernel_header=scalar_kernel.kernel_header,
                             )
                         )
                         self.include_src[vectorized_kernel_name] = self.include_src[
                             scalar_kernel.top
                         ]
                         operand_types = [x.type for x in call_matmul_op.operands]
-                        allo_d.LibKernel.declare(
+                        k = allo_d.LibKernel.declare(
                             vectorized_kernel_name,
                             operand_types,
                             [],
-                            allo_d.LibKernel.get_link(call_matmul_op),
+                            scalar_kernel.impl_path,
                             ip=InsertionPoint(function),
                         )
                     call_matmul_op.erase()
@@ -713,7 +716,7 @@ class AIE_MLIRModule:
         build_dir = self.project_dir / "build"
         if build_dir.exists():
             shutil.rmtree(build_dir)
-        build_dir.mkdir()
+        build_dir.mkdir(parents=True, exist_ok=True)
         # record original allo mlir
         with (self.project_dir / "raw.mlir").open("w", encoding="utf-8") as f:
             f.write(str(self.allo_module))
@@ -795,18 +798,18 @@ class AIE_MLIRModule:
         external_cc_list: list[set[str]] = []
         linked_external_cc: dict[str, int] = {}
 
-        for func in core_funcs:
-            func_name = func.attributes["sym_name"].value
-            used_external_kernel = self.virtual_computation_graph.nodes[
-                func_name
-            ].meta_data.used_external_kernel
-            try:
-                linked_external_cc[func_name] = external_cc_list.index(
-                    used_external_kernel
-                )
-            except ValueError:
-                linked_external_cc[func_name] = len(external_cc_list)
-                external_cc_list.append(used_external_kernel)
+        # for func in core_funcs:
+        #     func_name = func.attributes["sym_name"].value
+        #     used_external_kernel = self.virtual_computation_graph.nodes[
+        #         func_name
+        #     ].meta_data.used_external_kernel
+        #     try:
+        #         linked_external_cc[func_name] = external_cc_list.index(
+        #             used_external_kernel
+        #         )
+        #     except ValueError:
+        #         linked_external_cc[func_name] = len(external_cc_list)
+        #         external_cc_list.append(used_external_kernel)
 
         code_generator = CodeGenerator(
             device_type,
@@ -836,22 +839,24 @@ class AIE_MLIRModule:
             aie_pass_manager.PassManager.parse(pipeline).run(self.aie_module.operation)
 
         # ------------------------- build project -------------------------
-        self.post_codegen_build(external_cc_list)
+        self.post_codegen_build()
         return self
 
-    def post_codegen_build(self, external_cc_list: list[set[str]]):
-        external_funcs: list[aie_func_d.FuncOp] = []
+    def post_codegen_build(self):
+        # link_file -> list of kernels
+        external_kernels: defaultdict[list[aie_func_d.FuncOp]] = defaultdict(list)
         for func in self.aie_module.body.operations[0].body_region.blocks[0].operations:
             if isinstance(func, aie_func_d.FuncOp):
                 if (
                     "sym_visibility" in func.attributes
                     and func.attributes["sym_visibility"].value == "private"
                 ):
-                    external_funcs.append(func)
-        for external_func in external_funcs:
+                    external_kernels[allo_d.LibKernel.get_link(func)].append(func)
+        for link_file, external_funcs in external_kernels.items():
             name = codegen_external_kernel(
-                self.injected_external_kernels[external_func.name.value],
-                allo_d.LibKernel.get_link(external_func),
+                self.injected_external_kernels,
+                [func.name.value for func in external_funcs],
+                link_file,
                 self.project_dir,
             )
             cmd = f"cd {self.project_dir} && $PEANO_INSTALL_DIR/bin/clang++ -O2 -v -std=c++20 --target=aie2{"p" if self.device == "npu2" else ""}-none-unknown-elf -Wno-parentheses -Wno-attributes -Wno-macro-redefined -DNDEBUG -I $MLIR_AIE_INSTALL_DIR/include -I $MLIR_AIE_EXTERNAL_KERNEL_DIR/ -I. -c {name}.cc -o {name}.o"
@@ -859,7 +864,8 @@ class AIE_MLIRModule:
                 process.wait()
             if process.returncode != 0:
                 raise RuntimeError("Failed to compile external kernels.")
-            aie_d.Microkernel.set_link(external_func, f"{name}.o")
+            for func in external_funcs:
+                aie_d.Microkernel.set_link(func, f"{name}.o")
 
         with (self.project_dir / "top.mlir").open("w", encoding="utf-8") as f:
             f.write(str(self.aie_module))
