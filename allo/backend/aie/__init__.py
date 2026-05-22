@@ -209,7 +209,7 @@ class AIE_MLIRModule:
     # ############################################################
     # Build
     # ############################################################
-    def init_virtual_graph(self, used_external_kernels: dict[str, set[str]]):
+    def init_virtual_graph(self):
         assert (
             self.core_func_args is not None and self.global_tensors is not None
         ), "Analysis of kernel parameters should be done before initializing virtual graph"
@@ -218,7 +218,6 @@ class AIE_MLIRModule:
             self.top_func_name,
             self.streams,
             self.core_func_args,
-            used_external_kernels,
             self.func_instances,
         )
 
@@ -421,9 +420,6 @@ class AIE_MLIRModule:
                     allo_memref_d.copy(
                         matmul_output, output, ip=InsertionPoint(call_matmul_op)
                     )
-                    self.virtual_computation_graph.nodes[
-                        function.attributes["sym_name"].value
-                    ].meta_data.used_external_kernel.add(vectorized_kernel_name)
 
                     if vectorized_kernel_name not in self.injected_external_kernels:
                         scalar_kernel: ExternalModuleBase = (
@@ -431,7 +427,6 @@ class AIE_MLIRModule:
                                 call_matmul_op.attributes["lib"].value
                             ]
                         )
-                        print(scalar_kernel.top, scalar_kernel.impl_path)
                         kernel_code = scalar_kernel.kernel_code.replace(
                             "matmul_scalar_", "matmul_vectorized_"
                         )
@@ -445,9 +440,6 @@ class AIE_MLIRModule:
                                 kernel_header=scalar_kernel.kernel_header,
                             )
                         )
-                        self.include_src[vectorized_kernel_name] = self.include_src[
-                            scalar_kernel.top
-                        ]
                         operand_types = [x.type for x in call_matmul_op.operands]
                         k = allo_d.LibKernel.declare(
                             vectorized_kernel_name,
@@ -722,19 +714,18 @@ class AIE_MLIRModule:
             f.write(str(self.allo_module))
         # inject external kernels
         # (inject before virtual mapping since using external kernel may require layout transformation when transferring data)
-        used_external_kernels, self.injected_external_kernels, self.include_src = (
-            inject_external_kernels(
-                self.allo_module,
-                self.top_func_name,
-                self.external_kernel_lib,
-                "aie2" if self.device == "npu1" else "aie2p",
-            )
+        self.injected_external_kernels = inject_external_kernels(
+            self.allo_module,
+            self.top_func_name,
+            self.external_kernel_lib,
+            "aie2" if self.device == "npu1" else "aie2p",
         )
+
         self.analyze_kernel_parameters(
             get_df_kernels(self.allo_module), self.injected_external_kernels
         )
         # ------------------------- virtual mapping -------------------------
-        self.init_virtual_graph(used_external_kernels)
+        self.init_virtual_graph()
         if os.getenv("DEBUG") == "1":
             self.virtual_computation_graph.dump(self.project_dir)
 
@@ -795,22 +786,6 @@ class AIE_MLIRModule:
             self.allo_module, self.top_func_name
         )
 
-        external_cc_list: list[set[str]] = []
-        linked_external_cc: dict[str, int] = {}
-
-        # for func in core_funcs:
-        #     func_name = func.attributes["sym_name"].value
-        #     used_external_kernel = self.virtual_computation_graph.nodes[
-        #         func_name
-        #     ].meta_data.used_external_kernel
-        #     try:
-        #         linked_external_cc[func_name] = external_cc_list.index(
-        #             used_external_kernel
-        #         )
-        #     except ValueError:
-        #         linked_external_cc[func_name] = len(external_cc_list)
-        #         external_cc_list.append(used_external_kernel)
-
         code_generator = CodeGenerator(
             device_type,
             self.global_tensors,
@@ -825,7 +800,6 @@ class AIE_MLIRModule:
         ) = code_generator.aie_codegen(
             core_funcs,
             external_funcs,
-            linked_external_cc,
             trace,
             trace_size,
         )

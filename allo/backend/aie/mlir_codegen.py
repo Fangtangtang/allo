@@ -1708,7 +1708,6 @@ class CodeGenerator:
         self,
         core_funcs: list[allo_func_d.FuncOp],
         external_funcs: list[allo_func_d.FuncOp],
-        linked_external_cc: dict[str, int],
         trace: list[tuple[str, tuple[int, ...]]],
         trace_size: int,
     ) -> aie_ir.Module:
