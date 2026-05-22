@@ -852,6 +852,7 @@ class AIE_MLIRModule:
             os.path.join(self.project_dir, "top.mlir"), "w", encoding="utf-8"
         ) as f:
             f.write(str(self.aie_module))
+        use_chess = False
         if len(self.injected_external_kernels) > 0:
             paths = set()
             # user defined external kernels
@@ -886,13 +887,19 @@ class AIE_MLIRModule:
                     encoding="utf-8",
                 ) as f:
                     f.write(kernel_code)
-                cmd = f"cd {self.project_dir} && $PEANO_INSTALL_DIR/bin/clang++ -O2 -v -std=c++20 --target=aie2{"p" if self.device == "npu2" else ""}-none-unknown-elf -Wno-parentheses -Wno-attributes -Wno-macro-redefined -DNDEBUG -I $MLIR_AIE_INSTALL_DIR/include -I $MLIR_AIE_EXTERNAL_KERNEL_DIR/ -I. -c external{idx}.cc -o external{idx}.o"
+                if use_chess:
+                    cmd = f"cd {self.project_dir} && xchesscc_wrapper aie2{"p" if self.device == "npu2" else ""} -I $AIETOOLS_DIR/include -I $MLIR_AIE_EXTERNAL_KERNEL_DIR/ -I. -DOPT_PERF_ENABLED -c external{idx}.cc -o external{idx}.o"
+                else:
+                    cmd = f"cd {self.project_dir} && $PEANO_INSTALL_DIR/bin/clang++ -O2 -v -std=c++20 --target=aie2{"p" if self.device == "npu2" else ""}-none-unknown-elf -Wno-parentheses -Wno-attributes -Wno-macro-redefined -DNDEBUG -I $MLIR_AIE_INSTALL_DIR/include -I $MLIR_AIE_EXTERNAL_KERNEL_DIR/ -I. -c external{idx}.cc -o external{idx}.o"
                 with subprocess.Popen(cmd, shell=True) as process:
                     process.wait()
                 if process.returncode != 0:
                     raise RuntimeError("Failed to compile external kernels.")
         # build mlir-aie
-        cmd = f"cd {self.project_dir} && aiecc.py --alloc-scheme=basic-sequential --aie-generate-xclbin --no-compile-host --xclbin-name=build/final.xclbin --no-xchesscc --no-xbridge --peano ${{PEANO_INSTALL_DIR}} --aie-generate-npu-insts --npu-insts-name=insts.txt top.mlir"
+        if use_chess:
+            cmd = f"cd {self.project_dir} && aiecc.py --alloc-scheme=basic-sequential --aie-generate-xclbin --no-compile-host --xclbin-name=build/final.xclbin --aie-generate-npu-insts --npu-insts-name=insts.txt top.mlir"
+        else:
+            cmd = f"cd {self.project_dir} && aiecc.py --alloc-scheme=basic-sequential --aie-generate-xclbin --no-compile-host --xclbin-name=build/final.xclbin --no-xchesscc --no-xbridge --peano ${{PEANO_INSTALL_DIR}} --aie-generate-npu-insts --npu-insts-name=insts.txt top.mlir"
         with subprocess.Popen(cmd, shell=True) as process:
             process.wait()
         if process.returncode != 0:

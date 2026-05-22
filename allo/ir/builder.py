@@ -3042,8 +3042,8 @@ class ASTTransformer(ASTBuilder):
                     else:
                         memref = ele_type
                     input_types.append(memref)
-                    operand = new_args[idx]
-                    if ASTTransformer.get_mlir_op_result(ctx, operand).type != memref:
+                    operand = ASTTransformer.get_mlir_op_result(ctx, new_args[idx])
+                    if operand.type != memref:
                         assert (
                             input_idx is not None
                         ), "IPModule is not well supported yet."
@@ -3052,9 +3052,7 @@ class ASTTransformer(ASTBuilder):
                         if idx in input_idx:
                             memref_d.CopyOp(operand, alloc_op.result, ip=ctx.get_ip())
                     else:
-                        call_operands.append(
-                            ASTTransformer.get_mlir_op_result(ctx, operand)
-                        )
+                        call_operands.append(operand)
                 # Add HLS IP as external library
                 if obj not in ctx.ext_libs:
                     ctx.ext_libs.append(obj)
