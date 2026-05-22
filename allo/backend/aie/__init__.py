@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import shutil
+from pathlib import Path
 import numpy as np
 
 try:
@@ -46,7 +47,6 @@ from .utils import (
     get_df_kernels,
     classify_aie_functions,
     codegen_external_kernel,
-    codegen_external_kernels,
     simplify_matmul_accumulate,
     collect_lib_func_call,
     pack_int4,
@@ -85,7 +85,7 @@ class AIE_MLIRModule:
         """
         # module metadata
         self.trace_size = 0
-        self.project_dir: str = project_dir
+        self.project_dir: Path = Path(project_dir)
         self.allo_module: allo_ir.ir.Module = module
         self.top_func_name: str = top_func_name
         self.func_instances = func_instances
@@ -679,9 +679,7 @@ class AIE_MLIRModule:
             mlir_pass_manager.parse(pipeline).run(self.allo_module.operation)
 
         # record optimized allo mlir
-        with open(
-            os.path.join(self.project_dir, "original_opt.mlir"), "w", encoding="utf-8"
-        ) as f:
+        with (self.project_dir / "original_opt.mlir").open("w", encoding="utf-8") as f:
             f.write(str(self.allo_module))
 
     def build(
@@ -712,14 +710,12 @@ class AIE_MLIRModule:
         self.num_iters = num_iters
         if trace is not None:
             self.trace_size = trace_size
-        build_dir = os.path.join(self.project_dir, "build")
-        if os.path.exists(build_dir):
+        build_dir = self.project_dir / "build"
+        if build_dir.exists():
             shutil.rmtree(build_dir)
-        os.makedirs(build_dir)
+        build_dir.mkdir()
         # record original allo mlir
-        with open(
-            os.path.join(self.project_dir, "raw.mlir"), "w", encoding="utf-8"
-        ) as f:
+        with (self.project_dir / "raw.mlir").open("w", encoding="utf-8") as f:
             f.write(str(self.allo_module))
         # inject external kernels
         # (inject before virtual mapping since using external kernel may require layout transformation when transferring data)
@@ -756,9 +752,7 @@ class AIE_MLIRModule:
         self.virtual_computation_graph.refactor()
 
         # record original allo mlir
-        with open(
-            os.path.join(self.project_dir, "original.mlir"), "w", encoding="utf-8"
-        ) as f:
+        with (self.project_dir / "original.mlir").open("w", encoding="utf-8") as f:
             f.write(str(self.allo_module))
 
         # mapping guard
@@ -867,9 +861,7 @@ class AIE_MLIRModule:
                 raise RuntimeError("Failed to compile external kernels.")
             aie_d.Microkernel.set_link(external_func, f"{name}.o")
 
-        with open(
-            os.path.join(self.project_dir, "top.mlir"), "w", encoding="utf-8"
-        ) as f:
+        with (self.project_dir / "top.mlir").open("w", encoding="utf-8") as f:
             f.write(str(self.aie_module))
 
         # build mlir-aie
@@ -892,8 +884,7 @@ class AIE_MLIRModule:
                 "     Consider adjusting the tiling strategy or using smaller tile sizes.\n"
             )
         # generate host code
-        path = os.path.dirname(__file__)
-        path = os.path.join(path, "../../harness/aie")
+        path = Path(__file__).resolve().parent.parent.parent / "harness" / "aie"
         os.system(f"cp -r {path}/* {self.project_dir}")
         if self.module_runtime_args is None:
             self.module_runtime_args = []
@@ -905,9 +896,7 @@ class AIE_MLIRModule:
                 runtime_arg.current_size += np.prod(dtensor.shape)
                 self.module_runtime_args.append(runtime_arg)
         host_code = codegen_host(self.global_tensors, self.module_runtime_args)
-        with open(
-            os.path.join(self.project_dir, "test.cpp"), "w", encoding="utf-8"
-        ) as f:
+        with (self.project_dir / "test.cpp").open("w", encoding="utf-8") as f:
             f.write(host_code)
         cmd = f"cd {self.project_dir}/build && cmake .. -DTARGET_NAME=top -DMLIR_AIE_DIR=$RUNTIME_LIB_DIR/.. && cmake --build . --config Release"
         with subprocess.Popen(cmd, shell=True) as process:
@@ -921,9 +910,7 @@ class AIE_MLIRModule:
                 arg = args[idx]
                 if str(dtensor.dtype) == "i4":
                     arg = pack_int4(arg)
-                with open(
-                    os.path.join(self.project_dir, f"input{idx}.data"), "wb"
-                ) as f:
+                with (self.project_dir / f"input{idx}.data").open("wb") as f:
                     f.write(arg.tobytes())
 
         cmd = f"cd {self.project_dir} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE --trace_sz {self.trace_size} {f'-p true --warmup {self.warmup} --iters {self.num_iters}' if self.profile else ''}"
@@ -936,7 +923,7 @@ class AIE_MLIRModule:
                 result = read_tensor_from_file(
                     dtensor.dtype,
                     args[idx].shape,
-                    f"{self.project_dir}/output{idx}.data",
+                    self.project_dir / f"output{idx}.data",
                 )
                 args[idx][:] = result
 
@@ -968,12 +955,13 @@ def _call_prj(
         process.wait()
     if process.returncode != 0:
         raise RuntimeError("Failed to build AIE project.")
+    projec_dir = Path(project)
     # suppose the last argument is output
     for idx in input_idx:
         arg = args[idx]
         if str(dtype_list[idx]) == "i4":
             arg = pack_int4(arg)
-        with open(os.path.join(project, f"input{idx}.data"), "wb") as f:
+        with (projec_dir / f"input{idx}.data").open("wb") as f:
             f.write(arg.tobytes())
     if trace_size > 0:
         cmd = f"cd {project} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE --trace_sz {trace_size}"
@@ -987,6 +975,6 @@ def _call_prj(
         result = read_tensor_from_file(
             dtype_list[idx],
             args[idx].shape,
-            f"{project}/output{idx}.data",
+            projec_dir / f"output{idx}.data",
         )
         args[idx][:] = result

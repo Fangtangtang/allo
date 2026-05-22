@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import re
-import os
+from pathlib import Path
 from pyparsing import Keyword, Literal, nested_expr, original_text_for
 from ..ip import parse_cpp_function
 
@@ -69,15 +69,15 @@ class ExternalModule(ExternalModuleBase):
             input_idx=input_idx,
             output_idx=output_idx,
         )
-        self.impl_path = impl_path
-        self.filename = os.path.basename(impl_path)
+        self.impl_path = Path(impl_path)
+        self.filename = self.impl_path.name
         assert self.filename.endswith(
             ".cc"
         ), f"Expected a .cc file, but got: {self.filename}"
 
         # avoid naming conflict with builtin library
         self.filename = self.filename.removesuffix(".cc") + "_.cc"
-        with open(self.impl_path, "r", encoding="utf-8") as f:
+        with self.impl_path.open("r", encoding="utf-8") as f:
             code = f.read()
             extern_C_blocks = extract_extern_C_blocks(code)
             all_functions = []

@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # pylint: disable=no-name-in-module
 
-import os
 import io
+from pathlib import Path
 from ..._mlir.dialects import allo as allo_d
 from ..._mlir.ir import (
     Context,
@@ -224,10 +224,11 @@ class VLIWModule:
         # Save code to file if requested
         self.code_file_path = None
         if save_code:
-            os.makedirs(self.project, exist_ok=True)
-            self.code_file_path = os.path.join(self.project, f"{top_func_name}_aie.cc")
+            project_dir = Path(self.project)
+            project_dir.mkdir(parents=True, exist_ok=True)
+            self.code_file_path = project_dir / f"{top_func_name}_aie.cc"
 
-            with open(self.code_file_path, "w", encoding="utf-8") as f:
+            with self.code_file_path.open("w", encoding="utf-8") as f:
                 f.write(self._postprocess_c_code())
 
         # Create ExternalModule wrapper
