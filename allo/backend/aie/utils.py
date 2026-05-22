@@ -912,7 +912,8 @@ int main(int argc, const char *argv[]) {
     ("profile,p", "enable profiling", cxxopts::value<bool>()->default_value("false"))
     ("warmup", "number of warmup iterations", cxxopts::value<int>()->default_value("2"))
     ("iters", "number of test iterations", cxxopts::value<int>()->default_value("10"))
-    ("trace_sz,t", "trace size", cxxopts::value<int>()->default_value("0"));
+    ("trace_sz,t", "trace size", cxxopts::value<int>()->default_value("0"))
+    ("trace_file", "where to store trace output", cxxopts::value<std::string>()->default_value("trace.txt"));
   auto vm = options.parse(argc, argv);
   
   int verbosity = vm["verbosity"].as<int>();

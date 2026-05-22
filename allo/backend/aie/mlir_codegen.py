@@ -1949,11 +1949,13 @@ class CodeGenerator:
                         aie_d.packetflow(
                             packet_id,
                             compute_tile,
-                            9,  # WireBundle: Trace = 9
+                            aie_d.WireBundle.Trace,
                             0,
-                            trace_transfer_shim_tile,
-                            1,  # WireBundle: DMA = 1
-                            1,
+                            {
+                                "dest": trace_transfer_shim_tile,
+                                "port": aie_d.WireBundle.DMA,
+                                "channel": 1,
+                            },
                             True,
                         )
                         enabled_trace.append(
