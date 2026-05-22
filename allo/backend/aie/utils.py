@@ -4,8 +4,10 @@
 
 import re
 import os
+import shutil
 from collections import defaultdict
 from dataclasses import dataclass
+from pathlib import Path
 import numpy as np
 
 import aie.ir as aie_ir
@@ -401,6 +403,7 @@ def inject_external_kernels(
                     ctype = external_kernel_aie2c_type[dtype]
                     kernel_name = f"fill_zeros_{dtype}_{M}_{N}_vector"
                     include_src[kernel_name] = f'#include "{lib_dir}/zero.cc"\n'
+                    link_file = f"{lib_dir}/zero.cc"
                     kernel_code += f"void {kernel_name}({ctype} *A)"
                     kernel_code += " {\n"
                     kernel_code += f"  zero_vectorized<{ctype}, {M}, {N}>(A);\n"
@@ -428,6 +431,7 @@ def inject_external_kernels(
                         op.outputs[0],
                     ]
                     include_src[kernel_name] = f'#include "aie2/{op_name}.cc"\n'
+                    link_file = f"aie2/{op_name}.cc"
             # matmul
             elif getattr(op, "name", None) == "linalg.matmul":
                 M, K = MemRefType(op.inputs[0].type).shape
@@ -474,6 +478,7 @@ def inject_external_kernels(
                             # scalar version
                             kernel_code += f"matmul_scalar_c_func({ctype[0]}, {dtype_a}, {ctype[1]}, {out_dtype}, {m}, {k}, {n}, {M}, {K}, {N})\n\n"
                         include_src[kernel_name] = '#include "mm.cc"\n'
+                        link_file = "mm.cc"
                         call_builtin = True
                         if not replace_casting:
                             operands = [
@@ -497,6 +502,7 @@ def inject_external_kernels(
                             include_src[init_kernel_name] = (
                                 f'#include "{lib_dir}/zero.cc"\n'
                             )
+                            link_file = f"{lib_dir}/zero.cc"
                             init_kernel_code = f"void {init_kernel_name}({ctype} *A)"
                             init_kernel_code += " {\n"
                             init_kernel_code += (
@@ -514,17 +520,12 @@ def inject_external_kernels(
                                         "",
                                     )
                                 )
-                                func_type = allo_func_d.FunctionType.get(
+                                allo_d.LibKernel.declare(
+                                    init_kernel_name,
                                     [cast_op.outputs[0].type],
                                     [],
-                                )
-                                kernel = allo_func_d.FuncOp(
-                                    init_kernel_name,
-                                    func_type,
+                                    link_file,
                                     ip=InsertionPoint(func),
-                                )
-                                kernel.attributes["sym_visibility"] = StringAttr.get(
-                                    "private"
                                 )
                             operand_types, call_operands = fix_arg_type(
                                 operands, [0, 1], InsertionPoint(cast_op)
@@ -558,6 +559,7 @@ def inject_external_kernels(
                     output_idx.append(2)
                     kernel_name = f"matmul_scalar_{dtype_a}x{dtype_b}_{out_dtype}"
                     include_src[kernel_name] = '#include "mixed_mm.cc"\n'
+                    link_file = "mixed_mm.cc"
                     call_builtin = True
                     operands = [
                         op.inputs[0],
@@ -597,16 +599,9 @@ def inject_external_kernels(
                     kernel_code,
                     kernel_header,
                 )
-                func_type = allo_func_d.FunctionType.get(
-                    operand_types,
-                    [],
+                allo_d.LibKernel.declare(
+                    kernel_name, operand_types, [], link_file, ip=InsertionPoint(func)
                 )
-                kernel = allo_func_d.FuncOp(
-                    kernel_name,
-                    func_type,
-                    ip=InsertionPoint(func),
-                )
-                kernel.attributes["sym_visibility"] = StringAttr.get("private")
             else:
                 for region in op.regions:
                     for block in region.blocks:
@@ -687,6 +682,76 @@ def get_aie_mlir_dtype_from_str(dtype_str: str):
     if dtype_str == "bf16":
         return aie_ir.BF16Type.get()
     raise ValueError(f"Unsupported dtype: {dtype_str}")
+
+
+def codegen_external_kernel(
+    kernel: ExternalModuleBase, link_file: str, project_dir: str
+) -> str:
+    """
+    Generate the C++ code for external kernels to be used by the AIE compute cores.
+    """
+    link_file_path = Path(link_file)
+    dst_dir = Path(project_dir)
+
+    if isinstance(kernel, ExternalModule):
+        dst = dst_dir / link_file_path.name
+        shutil.copy(link_file_path, dst)
+        return link_file_path.stem
+    elif link_file_path.name == "mixed_mm.cc":
+        with open(
+            os.path.expandvars("$ALLO_EXTERNAL_KERNEL_DIR/mixed_mm.cc"),
+            "r",
+            encoding="utf-8",
+        ) as f:
+            mm_kernel = f.read()
+    elif link_file_path.name == "mm.cc":
+        kernel_dir = os.environ.get("ALLO_EXTERNAL_KERNEL_DIR")
+        use_external_kernel = (
+            kernel_dir is not None and link_file_path.parent.name == "aie2"
+        )
+        if use_external_kernel:
+            mm_path = Path(kernel_dir) / "mm.cc"
+        else:
+            mm_path = Path(
+                os.path.expandvars(f"$MLIR_AIE_EXTERNAL_KERNEL_DIR/{link_file}")
+            )
+        with open(mm_path, "r", encoding="utf-8") as f:
+            mm_kernel = f.read()
+        if not use_external_kernel:
+            mm_kernel = re.sub(
+                r'#include\s+"zero\.cc"',
+                f'#include "{link_file_path.parent}/zero.cc"',
+                mm_kernel,
+            )
+    else:
+        mm_path = Path(os.path.expandvars(f"$MLIR_AIE_EXTERNAL_KERNEL_DIR/{link_file}"))
+        with open(mm_path, "r", encoding="utf-8") as f:
+            mm_kernel = f.read()
+        mm_kernel = re.sub(
+            r'#include\s+"\.\./aie_kernel_utils\.h"',
+            '#include "aie_kernel_utils.h"',
+            mm_kernel,
+        )
+
+    code = """
+// External kernels generated by Allo
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <type_traits>
+#include <aie_api/aie.hpp>
+"""
+    code += kernel.kernel_header + mm_kernel
+    code += '\nextern "C" {\n\n'
+    code += kernel.kernel_code
+    code += '} // extern "C"\n\n'
+    with open(
+        os.path.join(project_dir, f"{kernel.top}.cc"),
+        "w",
+        encoding="utf-8",
+    ) as f:
+        f.write(code)
+    return kernel.top
 
 
 def codegen_external_kernels(
@@ -891,7 +956,6 @@ host_header = """
 //=============================================================================
 // Auto generated by Allo
 //=============================================================================
-#include <boost/program_options.hpp>
 #include <bits/stdc++.h>
 #include <cstdint>
 #include <cstdlib>
@@ -906,29 +970,31 @@ host_header = """
 #include "xrt/xrt_device.h"
 #include "xrt/xrt_kernel.h"
 
+#include "cxxopts.hpp"
 #include "test_utils.h"
 
-namespace po = boost::program_options;
 
 int main(int argc, const char *argv[]) {
   // ------------------------------------------------------
   // Parse program arguments
   // ------------------------------------------------------
-  po::options_description options("Allowed options");
-  po::variables_map vm;
-  test_utils::add_default_options(options);
+  cxxopts::Options options("CPP Host Code");
   options.add_options()
-    ("profile,p", po::value<bool>()->default_value(false), "enable profiling")
-    ("test_iter,t", po::value<int>()->default_value(100), "number of test iterations");
-
-  test_utils::parse_options(argc, argv, options, vm);
+    ("xclbin,x", "the input xclbin path", cxxopts::value<std::string>())
+    ("instr,i", "path of file containing userspace instructions to be sent to the LX6", cxxopts::value<std::string>())
+    ("kernel,k", "the kernel name in the XCLBIN (for instance PP_PRE_FD)", cxxopts::value<std::string>())
+    ("verbosity,v", "the verbosity of the output", cxxopts::value<int>()->default_value("0"))
+    ("profile,p", "enable profiling", cxxopts::value<bool>()->default_value("false"))
+    ("warmup", "number of warmup iterations", cxxopts::value<int>()->default_value("2"))
+    ("iters", "number of test iterations", cxxopts::value<int>()->default_value("10"))
+    ("trace_sz,t", "trace size", cxxopts::value<int>()->default_value("0"));
+  auto vm = options.parse(argc, argv);
+  
   int verbosity = vm["verbosity"].as<int>();
-  int do_verify = vm["verify"].as<bool>();
-  int n_iterations = vm["iters"].as<int>();
   int n_warmup_iterations = vm["warmup"].as<int>();
   int trace_size = vm["trace_sz"].as<int>();
   bool do_profile = vm["profile"].as<bool>();
-  int n_test_iterations = vm["test_iter"].as<int>();
+  int n_test_iterations = vm["iters"].as<int>();
 
   // Load instruction sequence
   std::vector<uint32_t> instr_v =

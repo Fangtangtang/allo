@@ -4,6 +4,7 @@
 from ._allo_ops_gen import *
 from ._allo_ops_gen import _Dialect
 from .._mlir_libs._allo.allo import *
+from .func import FuncOp
 
 try:
     from ..ir import (
@@ -13,6 +14,7 @@ try:
         MemRefType,
         InsertionPoint,
         StringAttr,
+        FunctionType,
     )
     from ._ods_common import _cext as _ods_cext
     from ..extras.types import i64
@@ -81,3 +83,25 @@ class GridMapOp(GridMapOp):
             attr = self.attributes[GridMapOp.interface_attr].value
             return [i == "i" for i in attr]
         return [None] * len(self.tensors)
+
+
+class LibKernel:
+    link_attr = "link_with"
+
+    def declare(
+        kernel_name,
+        itypes,
+        otypes,
+        link_file=None,  # FIXME
+        ip=None,
+    ):
+        func_type = FunctionType.get(itypes, otypes)
+        func_op = FuncOp(name=kernel_name, type=func_type, ip=ip)
+        func_op.attributes["sym_visibility"] = StringAttr.get("private")
+        # file to be linked for this kernel implementation
+        func_op.attributes[LibKernel.link_attr] = StringAttr.get(str(link_file))
+        return func_op
+
+    def get_link(func_op):
+        assert LibKernel.link_attr in func_op.attributes
+        return func_op.attributes[LibKernel.link_attr].value

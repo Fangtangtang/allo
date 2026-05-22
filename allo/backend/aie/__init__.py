@@ -11,6 +11,7 @@ import numpy as np
 try:
     import aie.ir as aie_ir
     import aie.passmanager as aie_pass_manager
+    import aie.dialects.func as aie_func_d
 except ImportError:
     pass
 
@@ -21,6 +22,7 @@ from ..._mlir.dialects import (
     func as allo_func_d,
     _memref_ops_gen as allo_memref_d,
 )
+from ..._mlir.extras.dialects import aie as aie_d
 from ..._mlir.ir import (
     Type,
     StringAttr,
@@ -43,6 +45,7 @@ from .utils import (
     device_config_map,
     get_df_kernels,
     classify_aie_functions,
+    codegen_external_kernel,
     codegen_external_kernels,
     simplify_matmul_accumulate,
     collect_lib_func_call,
@@ -443,17 +446,12 @@ class AIE_MLIRModule:
                             scalar_kernel.top
                         ]
                         operand_types = [x.type for x in call_matmul_op.operands]
-                        func_type = allo_func_d.FunctionType.get(
+                        allo_d.LibKernel.declare(
+                            vectorized_kernel_name,
                             operand_types,
                             [],
-                        )
-                        vectorized_kernel = allo_func_d.FuncOp(
-                            vectorized_kernel_name,
-                            func_type,
+                            allo_d.LibKernel.get_link(call_matmul_op),
                             ip=InsertionPoint(function),
-                        )
-                        vectorized_kernel.attributes["sym_visibility"] = StringAttr.get(
-                            "private"
                         )
                     call_matmul_op.erase()
 
@@ -848,51 +846,34 @@ class AIE_MLIRModule:
         return self
 
     def post_codegen_build(self, external_cc_list: list[set[str]]):
+        external_funcs: list[aie_func_d.FuncOp] = []
+        for func in self.aie_module.body.operations[0].body_region.blocks[0].operations:
+            if isinstance(func, aie_func_d.FuncOp):
+                if (
+                    "sym_visibility" in func.attributes
+                    and func.attributes["sym_visibility"].value == "private"
+                ):
+                    external_funcs.append(func)
+        for external_func in external_funcs:
+            name = codegen_external_kernel(
+                self.injected_external_kernels[external_func.name.value],
+                allo_d.LibKernel.get_link(external_func),
+                self.project_dir,
+            )
+            cmd = f"cd {self.project_dir} && $PEANO_INSTALL_DIR/bin/clang++ -O2 -v -std=c++20 --target=aie2{"p" if self.device == "npu2" else ""}-none-unknown-elf -Wno-parentheses -Wno-attributes -Wno-macro-redefined -DNDEBUG -I $MLIR_AIE_INSTALL_DIR/include -I $MLIR_AIE_EXTERNAL_KERNEL_DIR/ -I. -c {name}.cc -o {name}.o"
+            with subprocess.Popen(cmd, shell=True) as process:
+                process.wait()
+            if process.returncode != 0:
+                raise RuntimeError("Failed to compile external kernels.")
+            aie_d.Microkernel.set_link(external_func, f"{name}.o")
+
         with open(
             os.path.join(self.project_dir, "top.mlir"), "w", encoding="utf-8"
         ) as f:
             f.write(str(self.aie_module))
-        if len(self.injected_external_kernels) > 0:
-            paths = set()
-            # user defined external kernels
-            for ext_module in self.external_kernel_lib.values():
-                paths.add((ext_module.impl_path, ext_module.filename))
-            for src_path, dst_file in paths:
-                target_path = os.path.join(self.project_dir, dst_file)
-                if os.path.exists(target_path) and os.path.samefile(
-                    src_path, target_path
-                ):
-                    continue
-                shutil.copy(src_path, target_path)
-            for idx, kernel_info in enumerate(external_cc_list):
-                if len(kernel_info) == 0:
-                    continue
-                injected_kernels_ = {
-                    k: v
-                    for k, v in self.injected_external_kernels.items()
-                    if k in kernel_info
-                }
-                include_src_ = set()
-                for kernel in kernel_info:
-                    include_src_.add(self.include_src[kernel])
-                kernel_code = codegen_external_kernels(
-                    injected_kernels_,
-                    include_src_,
-                    "aie2" if self.device == "npu1" else "aie2p",
-                )
-                with open(
-                    os.path.join(self.project_dir, f"external{idx}.cc"),
-                    "w",
-                    encoding="utf-8",
-                ) as f:
-                    f.write(kernel_code)
-                cmd = f"cd {self.project_dir} && $PEANO_INSTALL_DIR/bin/clang++ -O2 -v -std=c++20 --target=aie2{"p" if self.device == "npu2" else ""}-none-unknown-elf -Wno-parentheses -Wno-attributes -Wno-macro-redefined -DNDEBUG -I $MLIR_AIE_INSTALL_DIR/include -I $MLIR_AIE_EXTERNAL_KERNEL_DIR/ -I. -c external{idx}.cc -o external{idx}.o"
-                with subprocess.Popen(cmd, shell=True) as process:
-                    process.wait()
-                if process.returncode != 0:
-                    raise RuntimeError("Failed to compile external kernels.")
+
         # build mlir-aie
-        cmd = f"cd {self.project_dir} && aiecc.py --alloc-scheme=basic-sequential --aie-generate-xclbin --no-compile-host --xclbin-name=build/final.xclbin --no-xchesscc --no-xbridge --peano ${{PEANO_INSTALL_DIR}} --aie-generate-npu-insts --npu-insts-name=insts.txt top.mlir"
+        cmd = f"cd {self.project_dir} && aiecc --alloc-scheme=basic-sequential --aie-generate-xclbin --no-compile-host --xclbin-name=build/final.xclbin --no-xchesscc --no-xbridge --peano $PEANO_INSTALL_DIR --aie-generate-npu-insts --npu-insts-name=insts.txt top.mlir"
         with subprocess.Popen(cmd, shell=True) as process:
             process.wait()
         if process.returncode != 0:
@@ -945,7 +926,7 @@ class AIE_MLIRModule:
                 ) as f:
                     f.write(arg.tobytes())
 
-        cmd = f"cd {self.project_dir} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE --trace_sz {self.trace_size} {f'-p true --warmup {self.warmup} --test_iter {self.num_iters}' if self.profile else ''}"
+        cmd = f"cd {self.project_dir} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE --trace_sz {self.trace_size} {f'-p true --warmup {self.warmup} --iters {self.num_iters}' if self.profile else ''}"
         with subprocess.Popen(cmd, shell=True) as process:
             process.wait()
         if process.returncode != 0:
@@ -997,7 +978,7 @@ def _call_prj(
     if trace_size > 0:
         cmd = f"cd {project} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE --trace_sz {trace_size}"
     else:
-        cmd = f"cd {project} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE -p false --warmup 20 --test_iter 100"
+        cmd = f"cd {project} && ./build/top -x build/final.xclbin -i insts.txt -k MLIR_AIE -p false --warmup 20 --iters 100"
     with subprocess.Popen(cmd, shell=True) as process:
         process.wait()
     if process.returncode != 0:
