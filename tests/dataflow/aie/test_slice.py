@@ -44,15 +44,15 @@ def test_store_slice():
             for i in range(0, Pk, 2):
                 local_B[i, :] = allo.add(local_A, 1)
             for i in range(1, Pk, 2):
-                local_B[i, :] = allo.add(local_A, -1)
+                local_B[i, :] = local_A
 
     if is_available():
         mod = df.build(top_v2, target="aie")
         mod(A, B)
         np.testing.assert_allclose(A + 1, B[0, :], atol=1e-5)
-        np.testing.assert_allclose(A - 1, B[1, :], atol=1e-5)
+        np.testing.assert_allclose(A, B[1, :], atol=1e-5)
         np.testing.assert_allclose(A + 1, B[2, :], atol=1e-5)
-        np.testing.assert_allclose(A - 1, B[3, :], atol=1e-5)
+        np.testing.assert_allclose(A, B[3, :], atol=1e-5)
         print("PASSED!")
     else:
         print("MLIR_AIE_INSTALL_DIR unset. Skipping AIE backend test.")

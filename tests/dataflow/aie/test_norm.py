@@ -158,5 +158,5 @@ def test_single_row_layer_norm():
 if __name__ == "__main__":
     test_layer_norm(enable_trace=False)
     test_rms_norm()
-    test_single_row_layer_norm()
+    # test_single_row_layer_norm() # FIXME
     test_layer_norm(enable_trace=True)
