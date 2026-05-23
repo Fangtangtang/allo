@@ -709,12 +709,12 @@ def codegen_external_kernel(
         mm_path = Path(os.path.expandvars(f"$MLIR_AIE_EXTERNAL_KERNEL_DIR/{link_file}"))
         with open(mm_path, "r", encoding="utf-8") as f:
             mm_kernel = f.read()
-        mm_kernel = re.sub(
-            r'#include\s+"\.\./aie_kernel_utils\.h"',
-            '#include "aie_kernel_utils.h"',
-            mm_kernel,
-        )
 
+    mm_kernel = re.sub(
+        r'#include\s+"\.\./aie_kernel_utils\.h"',
+        '#include "aie_kernel_utils.h"',
+        mm_kernel,
+    )
     kernel_header, kernel_code = "", ""
     for name in kernel_names:
         kernel_ = external_kernels[name]
