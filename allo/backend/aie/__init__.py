@@ -686,6 +686,7 @@ class AIE_MLIRModule:
         num_iters: int = 100,
         trace: list[tuple[str, tuple[int, ...]]] = None,
         trace_size: int = 4096,
+        use_chess=False,
     ):
         # virtual mapping can only be applied to DAG
         if not self.computation_is_dag:
@@ -813,10 +814,10 @@ class AIE_MLIRModule:
             aie_pass_manager.PassManager.parse(pipeline).run(self.aie_module.operation)
 
         # ------------------------- build project -------------------------
-        self.post_codegen_build()
+        self.post_codegen_build(use_chess)
         return self
 
-    def post_codegen_build(self):
+    def post_codegen_build(self, use_chess: bool):
         # link_file -> list of kernels
         external_kernels: defaultdict[list[aie_func_d.FuncOp]] = defaultdict(list)
         for func in self.aie_module.body.operations[0].body_region.blocks[0].operations:
@@ -833,7 +834,10 @@ class AIE_MLIRModule:
                 link_file,
                 self.project_dir,
             )
-            cmd = f"cd {self.project_dir} && $PEANO_INSTALL_DIR/bin/clang++ -O2 -v -std=c++20 --target=aie2{"p" if self.device == "npu2" else ""}-none-unknown-elf -Wno-parentheses -Wno-attributes -Wno-macro-redefined -DNDEBUG -I $MLIR_AIE_INSTALL_DIR/include -I $MLIR_AIE_EXTERNAL_KERNEL_DIR/ -I. -c {name}.cc -o {name}.o"
+            if use_chess:
+                cmd = f"cd {self.project_dir} && xchesscc_wrapper aie2{"p" if self.device == "npu2" else ""} -DOPT_PERF_ENABLED -I $AIETOOLS_DIR/include -I $MLIR_AIE_EXTERNAL_KERNEL_DIR/ -I. -DOPT_PERF_ENABLED -c {name}.cc -o {name}.o"
+            else:
+                cmd = f"cd {self.project_dir} && $PEANO_INSTALL_DIR/bin/clang++ -O2 -v -std=c++20 --target=aie2{"p" if self.device == "npu2" else ""}-none-unknown-elf -Wno-parentheses -Wno-attributes -Wno-macro-redefined -DNDEBUG -I $MLIR_AIE_INSTALL_DIR/include -I $MLIR_AIE_EXTERNAL_KERNEL_DIR/ -I. -c {name}.cc -o {name}.o"
             with subprocess.Popen(cmd, shell=True) as process:
                 process.wait()
             if process.returncode != 0:
@@ -845,7 +849,10 @@ class AIE_MLIRModule:
             f.write(str(self.aie_module))
 
         # build mlir-aie
-        cmd = f"cd {self.project_dir} && aiecc --alloc-scheme=basic-sequential --aie-generate-xclbin --no-compile-host --xclbin-name=build/final.xclbin --no-xchesscc --no-xbridge --peano $PEANO_INSTALL_DIR --aie-generate-npu-insts --npu-insts-name=insts.txt top.mlir"
+        if use_chess:
+            cmd = f"cd {self.project_dir} && aiecc --alloc-scheme=basic-sequential --aie-generate-xclbin --no-compile-host --xclbin-name=build/final.xclbin --unified --aie-generate-npu-insts --npu-insts-name=insts.txt top.mlir"
+        else:
+            cmd = f"cd {self.project_dir} && aiecc --alloc-scheme=basic-sequential --aie-generate-xclbin --no-compile-host --xclbin-name=build/final.xclbin --no-xchesscc --no-xbridge --peano $PEANO_INSTALL_DIR --aie-generate-npu-insts --npu-insts-name=insts.txt top.mlir"
         with subprocess.Popen(cmd, shell=True) as process:
             process.wait()
         if process.returncode != 0:
@@ -915,6 +922,7 @@ def _call_prj(
     input_idx: list[int],
     output_idx: list[int],
     *args,
+    use_chess=False,
 ):
     """
     This function allows you to manually adjust files under the project
@@ -925,7 +933,10 @@ def _call_prj(
     Note (Shihan): currently intended for internal debugging use only.
     """
     # generate insts.txt
-    cmd = f"cd {project} && aiecc.py --alloc-scheme=basic-sequential --aie-generate-xclbin --no-compile-host --xclbin-name=build/final.xclbin --no-xchesscc --no-xbridge --peano ${{PEANO_INSTALL_DIR}} --aie-generate-npu-insts --npu-insts-name=insts.txt top.mlir"
+    if use_chess:
+        cmd = f"cd {project} && aiecc --alloc-scheme=basic-sequential --aie-generate-xclbin --no-compile-host --xclbin-name=build/final.xclbin --unified --aie-generate-npu-insts --npu-insts-name=insts.txt top.mlir"
+    else:
+        cmd = f"cd {project} && aiecc --alloc-scheme=basic-sequential --aie-generate-xclbin --no-compile-host --xclbin-name=build/final.xclbin --no-xchesscc --no-xbridge --peano $PEANO_INSTALL_DIR --aie-generate-npu-insts --npu-insts-name=insts.txt top.mlir"
     with subprocess.Popen(cmd, shell=True) as process:
         process.wait()
     if process.returncode != 0:

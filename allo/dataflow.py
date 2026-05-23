@@ -660,6 +660,7 @@ def build(
             num_iters=num_iters,
             trace=trace,
             trace_size=trace_size,
+            use_chess=os.getenv("AIE_KERNEL_COMPILER") == "CHESS",
         )
         return aie_mod
 
