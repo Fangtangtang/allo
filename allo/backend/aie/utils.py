@@ -276,8 +276,8 @@ external_kernel_aie2c_type = {
 
 
 # aie::mmul size for different data type and different architectures used in library MatMul kernels
-#   - aie2 kernel: https://github.com/Xilinx/mlir-aie/blob/v1.0/aie_kernels/aie2/mm.cc
-#   - aie2p kernel: https://github.com/Xilinx/mlir-aie/blob/v1.0/aie_kernels/aie2p/mm.cc
+#   - aie2 kernel: https://github.com/Xilinx/mlir-aie/blob/v1.3.1/aie_kernels/aie2/mm.cc
+#   - aie2p kernel: https://github.com/Xilinx/mlir-aie/blob/v1.3.1/aie_kernels/aie2p/mm.cc
 matmul_external_kernel_config_map = {
     ("i4", "i8"): {"ctype": ("int8", "int8"), "aie2": (4, 16, 8)},
     ("i8", "i4", "i8"): {"aie2": (4, 16, 8)},  # i8xi4 -> i8
@@ -297,12 +297,12 @@ matmul_external_kernel_config_map = {
     ("bf16", "bf16"): {
         "ctype": ("bfloat16", "bfloat16"),
         "aie2": (4, 8, 4),
-        "aie2p": (8, 8, 8),
+        "aie2p": (4, 8, 8),
     },
     ("bf16", "f32"): {
         "ctype": ("bfloat16", "bfloat"),
         "aie2": (4, 8, 4),
-        "aie2p": (8, 8, 8),
+        "aie2p": (4, 8, 8),
     },
 }
 
@@ -449,7 +449,7 @@ def inject_external_kernels(
                         input_idx.extend([0, 1])
                         output_idx.append(2)
                         path = os.environ.get("ALLO_EXTERNAL_KERNEL_DIR")
-                        if path is None or lib_dir != "aie2":
+                        if path is None:
                             kernel_header += f"#define DIM_M {M}\n"
                             kernel_header += f"#define DIM_N {N}\n"
                             kernel_header += f"#define DIM_K {K}\n"
@@ -688,14 +688,14 @@ def codegen_external_kernel(
             mm_kernel = f.read()
     elif link_file_path.name == "mm.cc":
         kernel_dir = os.environ.get("ALLO_EXTERNAL_KERNEL_DIR")
-        use_external_kernel = (
-            kernel_dir is not None and link_file_path.parent.name == "aie2"
-        )
+        use_external_kernel = kernel_dir is not None
         if use_external_kernel:
-            mm_path = Path(kernel_dir) / "mm.cc"
+            mm_path = Path(kernel_dir) / f"mm_{link_file_path.parent.name}.cc"
         else:
             mm_path = Path(
-                os.path.expandvars(f"$MLIR_AIE_EXTERNAL_KERNEL_DIR/{link_file}")
+                os.path.expandvars(
+                    f"$MLIR_AIE_EXTERNAL_KERNEL_DIR/mm_{link_file_path.parent.name}.cc"
+                )
             )
         with open(mm_path, "r", encoding="utf-8") as f:
             mm_kernel = f.read()

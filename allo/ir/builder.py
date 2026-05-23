@@ -3054,9 +3054,14 @@ class ASTTransformer(ASTBuilder):
                 # Add HLS IP as external library
                 if obj not in ctx.ext_libs:
                     ctx.ext_libs.append(obj)
+                    file = obj.filename if isinstance(obj, ExternalModule) else None
                     # Suppose it does not have any return values
                     func_op = allo_d.LibKernel.declare(
-                        obj.top, input_types, [], ip=InsertionPoint(ctx.top_func)
+                        obj.top,
+                        input_types,
+                        [],
+                        link_file=file,
+                        ip=InsertionPoint(ctx.top_func),
                     )
                 call_op = func_d.CallOp(
                     [],
