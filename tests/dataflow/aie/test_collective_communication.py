@@ -137,7 +137,7 @@ def test_gather_matmul():
 def test_split_k_explicit_gather_gemm_1x1x4():
 
     Ty = int16
-    M, N, K = 16, 16, 64
+    M, N, K = 32, 32, 128
     Pk = 4
 
     LyA = [R, S(0)]
