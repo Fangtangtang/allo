@@ -693,9 +693,7 @@ def codegen_external_kernel(
             mm_path = Path(kernel_dir) / f"mm_{link_file_path.parent.name}.cc"
         else:
             mm_path = Path(
-                os.path.expandvars(
-                    f"$MLIR_AIE_EXTERNAL_KERNEL_DIR/mm_{link_file_path.parent.name}.cc"
-                )
+                os.path.expandvars(f"$MLIR_AIE_EXTERNAL_KERNEL_DIR/{link_file}")
             )
         with open(mm_path, "r", encoding="utf-8") as f:
             mm_kernel = f.read()
