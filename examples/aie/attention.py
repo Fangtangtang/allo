@@ -118,9 +118,9 @@ if __name__ == "__main__":
     os.environ["COALESCE_MORE"] = "1"
     os.environ["FORCE_UNROLL_INDEX"] = "0"
 
-    seq_len_list = [64, 128, 256, 512, 1024, 2048]
+    seq_len_list = [128, 256, 512, 1024, 2048, 4096, 8192]
     for seq_len in seq_len_list:
-        _test_flash_attention(seq_len, 64, seq_len, q_chunk_size=32, kv_chunk_size=32)
+        _test_flash_attention(seq_len, 64, seq_len, q_chunk_size=64, kv_chunk_size=64)
 
     del os.environ["ALLO_EXTERNAL_KERNEL_DIR"]
     del os.environ["ENABLE_AGGRESSIVE_PORT_UTILIZATION_PATCH"]

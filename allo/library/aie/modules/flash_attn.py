@@ -30,7 +30,7 @@ def FA(SEQ_LEN, HEAD_DIM, Q_tile_size, q_chunk_size, kv_chunk_size):
         top="online_softmax",
         impl_path=KERNEL_LIB_PATH + softmax_microkernel,
         input_idx=[0, 1, 2],
-        output_idx=[3, 4, 5, 6],
+        output_idx=[3, 4],
     )
 
     rescale_attn_output = ExternalModule(
@@ -106,8 +106,6 @@ def FA(SEQ_LEN, HEAD_DIM, Q_tile_size, q_chunk_size, kv_chunk_size):
                     sum_exp,
                     attn_weight,
                     scale_exp,
-                    max_logit,
-                    sum_exp,
                 )
                 exp_scale_pipe[po].put(scale_exp)
                 weight_pipe[po, i].put(attn_weight)
