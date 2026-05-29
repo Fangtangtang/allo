@@ -1,0 +1,46 @@
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+import ast
+from typing import Union
+from collections.abc import Callable
+from allo.ir.utils import get_global_vars
+from allo.backend.llvm import LLVMModule
+from .config import ir_builder_config_context
+from .utils import SymbolTable
+from .ast_preprocessor import ASTPreProcessor
+from .ir_builder import IRBuilder
+
+
+def build(
+    fn: Union[Callable, str],
+    instantiate: list = None,
+    typing: str = None,
+    verbose: bool = False,
+):
+    typing = "hls" if typing is None else typing
+    with ir_builder_config_context(typing):
+        symbol_table = SymbolTable()
+        ast_processor = ASTPreProcessor(
+            symbol_table, global_symbols=get_global_vars(fn)
+        )
+        # process the top function
+        node, top_name = ast_processor.process(fn, instantiate=instantiate)
+        if verbose:
+            for name, constant in symbol_table.constants.items():
+                print(name, "=", constant.value)
+            for op in symbol_table.global_ops:
+                print(ast.unparse(op))
+            for node in symbol_table.functions.values():
+                print(ast.unparse(node), "\n")
+            print()
+        builder = IRBuilder(symbol_table)
+        module = builder.build()
+        return module, top_name
+
+
+def process(fn: Union[Callable, str], instantiate: list = None, typing: str = None):
+    """
+    Compile the input function.
+    """
+    module, top_name = build(fn, instantiate, typing)
+    return LLVMModule(module, top_name)
