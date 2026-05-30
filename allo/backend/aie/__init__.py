@@ -85,6 +85,7 @@ class AIE_MLIRModule:
             For example, launching the kernels in topological order.
         """
         # module metadata
+        self.hierarchy = 1 if ".prj" not in str(module) else 2 # Dummy check
         self.trace_size = 0
         self.project_dir: Path = Path(project_dir)
         self.allo_module: allo_ir.ir.Module = module

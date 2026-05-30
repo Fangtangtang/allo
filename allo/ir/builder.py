@@ -2664,8 +2664,7 @@ class ASTTransformer(ASTBuilder):
 
             # It is a dataflow region/kernel
             # We need to build it first
-            src = inspect.getsource(obj)
-            tree = parse_ast(src)
+            tree = parse_ast(obj)
             # Find the function definition
             # The structure should be Module -> FunctionDef
             assert isinstance(tree, ast.Module)
@@ -2686,47 +2685,88 @@ class ASTTransformer(ASTBuilder):
             tree = TypeInferer()(type_inf_ctx, tree)
             func_def = tree.body[0]
 
-            if not isinstance(node.func, ast.Attribute) or node.func.attr != "kernel":
-                # Mark as region so we can insert calls later
-                func_def.is_region = True
-                # Resolve naming collision by appending suffix
-                # Use type parameters as part of the suffix for uniqueness
+            import os
+
+            AIE = os.environ.get("AIE")
+            if AIE is not None:
+                input_types_ = []
+                for i, arg in enumerate(func_def.args.args):
+                    input_types_.append(
+                        ASTTransformer.build_shaped_type(
+                            ctx,
+                            arg.dtype,
+                            arg.shape,
+                        )
+                    )
+                subdir = f"{func_def.name}.prj"
+                func_op = allo_d.LibKernel.declare(
+                    func_def.name,
+                    input_types_,
+                    [],
+                    link_file=subdir,
+                    ip=InsertionPoint(ctx.top_func),
+                )
+                # build the kernel as a standalone AIE sub-project
+                # (os.environ["AIE"] is already set here; the helper leaves it
+                # untouched so later region calls still take the AIE branch)
+                from .. import dataflow as _df
+
+                mp = ctx.global_vars.get("mapping_primitives")
+                sub_mp = mp.get(func_def.name) if isinstance(mp, dict) else None
+                sub_project = ctx.global_vars["project"] / subdir
+                aie_mod = _df._build_aie_project(obj, str(sub_project), sub_mp)
+                if os.getenv("NPU2") == "1":
+                    device_type = "npu2"
+                else:
+                    device_type = "npu1"
+                aie_mod.build(
+                    device_type=device_type, mapping_primitives=sub_mp
+                )
+            else:
+                if (
+                    not isinstance(node.func, ast.Attribute)
+                    or node.func.attr != "kernel"
+                ):
+                    # Mark as region so we can insert calls later
+                    func_def.is_region = True
+                    # Resolve naming collision by appending suffix
+                    # Use type parameters as part of the suffix for uniqueness
+                    if ctx.inst is not None:
+                        # Create suffix from type parameters (e.g., "2_2" for inner[2, 2])
+                        inst_suffix = "_".join(str(x) for x in ctx.inst)
+                        if hasattr(ctx, "func_suffix"):
+                            func_def.name = (
+                                f"{original_name}_{inst_suffix}_{ctx.func_suffix}"
+                            )
+                        else:
+                            func_def.name = f"{original_name}_{inst_suffix}"
+                    elif hasattr(ctx, "func_suffix"):
+                        func_def.name = f"{original_name}_{ctx.func_suffix}"
+
+                # Create a new context
+                new_ctx = ctx.copy()
+                # Clear top_func to avoid nested definition behavior which assumes context sharing
+                # recursive build should start fresh but share globals/module
+                new_ctx.top_func = None
+                # Clear func_id since we already handle uniqueness via func_suffix and type parameters
+                # Otherwise func_id would append another suffix in build_FunctionDef
+                new_ctx.func_id = None
+                # We need to set the insertion point to the module body
+                # because the function op should be at the top level
+                # The first IP in the stack should be the module body
+                new_ctx.ip_stack = [ctx.ip_stack[0]]
+                # Propagate type parameters from subscript call (e.g., inner[2, 2])
                 if ctx.inst is not None:
-                    # Create suffix from type parameters (e.g., "2_2" for inner[2, 2])
+                    new_ctx.inst = ctx.inst
+                    # Set func_suffix for kernels inside the region based on type parameters
                     inst_suffix = "_".join(str(x) for x in ctx.inst)
                     if hasattr(ctx, "func_suffix"):
-                        func_def.name = (
-                            f"{original_name}_{inst_suffix}_{ctx.func_suffix}"
-                        )
+                        new_ctx.func_suffix = f"{inst_suffix}_{ctx.func_suffix}"
                     else:
-                        func_def.name = f"{original_name}_{inst_suffix}"
-                elif hasattr(ctx, "func_suffix"):
-                    func_def.name = f"{original_name}_{ctx.func_suffix}"
+                        new_ctx.func_suffix = inst_suffix
 
-            # Create a new context
-            new_ctx = ctx.copy()
-            # Clear top_func to avoid nested definition behavior which assumes context sharing
-            # recursive build should start fresh but share globals/module
-            new_ctx.top_func = None
-            # Clear func_id since we already handle uniqueness via func_suffix and type parameters
-            # Otherwise func_id would append another suffix in build_FunctionDef
-            new_ctx.func_id = None
-            # We need to set the insertion point to the module body
-            # because the function op should be at the top level
-            # The first IP in the stack should be the module body
-            new_ctx.ip_stack = [ctx.ip_stack[0]]
-            # Propagate type parameters from subscript call (e.g., inner[2, 2])
-            if ctx.inst is not None:
-                new_ctx.inst = ctx.inst
-                # Set func_suffix for kernels inside the region based on type parameters
-                inst_suffix = "_".join(str(x) for x in ctx.inst)
-                if hasattr(ctx, "func_suffix"):
-                    new_ctx.func_suffix = f"{inst_suffix}_{ctx.func_suffix}"
-                else:
-                    new_ctx.func_suffix = inst_suffix
-
-            func_op = ASTTransformer.build_FunctionDef(new_ctx, func_def)
-            func_op.attributes["dataflow"] = UnitAttr.get()
+                func_op = ASTTransformer.build_FunctionDef(new_ctx, func_def)
+                func_op.attributes["dataflow"] = UnitAttr.get()
 
             # Now insert the call
             # Parse arguments

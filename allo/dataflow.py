@@ -5,6 +5,7 @@
 import functools
 import itertools
 import os
+from pathlib import Path
 from typing import Union
 from ._mlir.ir import (
     InsertionPoint,
@@ -600,6 +601,46 @@ def customize(func, enable_tensor=False, opt_default=False):
 
 
 # pylint: disable=too-many-arguments
+def _build_aie_project(
+    func,
+    project,
+    mapping_primitives=None,
+):
+    """Build a standalone AIE project for `func`.
+
+    Assumes ``os.environ['AIE']`` is already set by the caller; this helper does
+    not touch it so it can be reused while building nested regions.
+    """
+    global_vars = get_global_vars(func)
+    global_vars["project"] = Path(project)
+    global_vars["mapping_primitives"] = mapping_primitives
+    # [NOTE]: set unroll = False to improve compilation efficiency
+    s: Schedule = _customize(
+        func,
+        global_vars=global_vars,
+        enable_tensor=False,
+        unroll=False,
+        typing_rule_set="cpp-style",
+    )
+    stream_info, stream_types_dict, extra_stream_info = move_stream_to_interface(
+        s, with_stream_type=True, with_extra_info=True, unroll=False
+    )
+    s = _build_top(s, stream_info, True)
+    aie_mod = AIE_MLIRModule(
+        s.module,
+        s.top_func_name,
+        s.func_args,
+        project,
+        stream_info,
+        stream_types_dict,
+        s.ext_libs,
+        s.func_instances,
+        extra_stream_info=extra_stream_info,
+    )
+    return aie_mod
+
+
+# pylint: disable=too-many-arguments
 def build(
     func,
     target="vitis_hls",
@@ -623,44 +664,33 @@ def build(
     ), "Trace profiling is only supported for AIE target"
 
     if target == "aie":
-        global_vars = get_global_vars(func)
-        # [NOTE]: set unroll = False to improve compilation efficiency
-        s: Schedule = _customize(
-            func,
-            global_vars=global_vars,
-            enable_tensor=False,
-            unroll=False,
-            typing_rule_set="cpp-style",
-        )
-        stream_info, stream_types_dict, extra_stream_info = move_stream_to_interface(
-            s, with_stream_type=True, with_extra_info=True, unroll=False
-        )
-        s = _build_top(s, stream_info, True)
-        aie_mod = AIE_MLIRModule(
-            s.module,
-            s.top_func_name,
-            s.func_args,
-            project,
-            stream_info,
-            stream_types_dict,
-            s.ext_libs,
-            s.func_instances,
-            extra_stream_info=extra_stream_info,
-        )
-        if device_type is None:
-            if os.getenv("NPU2") == "1":
-                device_type = "npu2"
+        os.environ["AIE"] = "1"
+        try:
+            aie_mod = _build_aie_project(
+                func,
+                project,
+                mapping_primitives,
+            )
+            if aie_mod.hierarchy == 1:
+                if device_type is None:
+                    if os.getenv("NPU2") == "1":
+                        device_type = "npu2"
+                    else:
+                        device_type = "npu1"
+                aie_mod.build(
+                    device_type=device_type,
+                    mapping_primitives=mapping_primitives,
+                    profile=profile,
+                    warmup=warmup,
+                    num_iters=num_iters,
+                    trace=trace,
+                    trace_size=trace_size,
+                )
             else:
-                device_type = "npu1"
-        aie_mod.build(
-            device_type=device_type,
-            mapping_primitives=mapping_primitives,
-            profile=profile,
-            warmup=warmup,
-            num_iters=num_iters,
-            trace=trace,
-            trace_size=trace_size,
-        )
+                # TODO: generate host code
+                pass
+        finally:
+            del os.environ["AIE"]
         return aie_mod
 
     if target == "simulator":

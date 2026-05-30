@@ -6,7 +6,6 @@
 aiecc --xclbin-kernel-name=VADD  --xclbin-kernel-id=0x901 --alloc-scheme=basic-sequential --aie-generate-xclbin --no-compile-host --xclbin-name=../test_runlist/vadd.xclbin --no-xchesscc --no-xbridge --peano $PEANO_INSTALL_DIR --aie-generate-npu-insts --npu-insts-name=insts.txt top.mlir
 
 aiecc --xclbin-kernel-name=VSUB  --xclbin-kernel-id=0x902 --alloc-scheme=basic-sequential --aie-generate-xclbin --no-compile-host --xclbin-input=../test_runlist/vadd.xclbin --xclbin-name=../test_runlist/final.xclbin --no-xchesscc --no-xbridge --peano $PEANO_INSTALL_DIR --aie-generate-npu-insts --npu-insts-name=insts.txt top.mlir
-
 """
 
 from pathlib import Path
@@ -20,7 +19,7 @@ with subprocess.Popen(cmd, shell=True) as process:
     process.wait()
 if process.returncode != 0:
     raise RuntimeError("Failed to build the MLIR-AIE project")
-    
+
 input0 = np.random.randint(0, 100, 256).astype(np.int32)
 with (Path("input0.data")).open("wb") as f:
     f.write(input0.tobytes())
