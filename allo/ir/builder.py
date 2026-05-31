@@ -2719,9 +2719,7 @@ class ASTTransformer(ASTBuilder):
                     device_type = "npu2"
                 else:
                     device_type = "npu1"
-                aie_mod.build(
-                    device_type=device_type, mapping_primitives=sub_mp
-                )
+                aie_mod.build(device_type=device_type, mapping_primitives=sub_mp)
             else:
                 if (
                     not isinstance(node.func, ast.Attribute)

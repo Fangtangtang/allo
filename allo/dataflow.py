@@ -687,8 +687,11 @@ def build(
                     trace_size=trace_size,
                 )
             else:
-                # TODO: generate host code
-                pass
+                aie_mod.build_level2(
+                    profile=profile,
+                    warmup=warmup,
+                    num_iters=num_iters,
+                )
         finally:
             del os.environ["AIE"]
         return aie_mod

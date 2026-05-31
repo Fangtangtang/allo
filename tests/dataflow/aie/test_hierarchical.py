@@ -1,6 +1,6 @@
 # Copyright Allo authors. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-
+import numpy as np
 import allo
 from allo.ir.types import int32, Stream
 import allo.dataflow as df
@@ -56,6 +56,11 @@ def test_sequential_vadds():
 
     if is_available():
         mod = df.build(top, target="aie")
+        A = np.random.randint(0, 100, M).astype(np.int32)
+        B = np.zeros(M).astype(np.int32)
+        mod(A, B)
+        print(A)
+        print(B)
 
 
 if __name__ == "__main__":
