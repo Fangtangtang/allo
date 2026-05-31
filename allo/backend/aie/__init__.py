@@ -31,6 +31,7 @@ from ..._mlir.ir import (
     InsertionPoint,
     FlatSymbolRefAttr,
     MemRefType,
+    BlockArgument,
 )
 from ..._mlir.passmanager import PassManager as mlir_pass_manager
 from ...passes import analyze_read_write_patterns
@@ -53,6 +54,7 @@ from .utils import (
     pack_int4,
     read_tensor_from_file,
     codegen_host,
+    codegen_host_runlist,
     RuntimeArgs,
     is_inverse_transform_layout,
 )
@@ -85,6 +87,7 @@ class AIE_MLIRModule:
             For example, launching the kernels in topological order.
         """
         # module metadata
+        self.hierarchy = 1 if ".prj" not in str(module) else 2  # Dummy check
         self.trace_size = 0
         self.project_dir: Path = Path(project_dir)
         self.allo_module: allo_ir.ir.Module = module
@@ -883,6 +886,228 @@ class AIE_MLIRModule:
             process.wait()
         if process.returncode != 0:
             raise RuntimeError("Failed to build AIE project.")
+
+    def _topological_kernel_order(
+        self, kernel_funcs: dict[str, allo_func_d.FuncOp]
+    ) -> list[str]:
+        """
+        Order the df.kernel functions so that producers run before consumers,
+        using the stream src -> dst edges (Kahn's algorithm).
+        """
+        assert (
+            self.computation_is_dag
+        ), "Level-2 host codegen requires a DAG of kernels."
+        names = list(kernel_funcs.keys())
+        edges: dict[str, set[str]] = {name: set() for name in names}
+        in_degree: dict[str, int] = {name: 0 for name in names}
+        for stream in self.streams.values():
+            if stream.src in edges and stream.dst in in_degree:
+                if stream.dst not in edges[stream.src]:
+                    edges[stream.src].add(stream.dst)
+                    in_degree[stream.dst] += 1
+        queue = [name for name in names if in_degree[name] == 0]
+        ordered: list[str] = []
+        while queue:
+            node = queue.pop(0)
+            ordered.append(node)
+            for nxt in edges[node]:
+                in_degree[nxt] -= 1
+                if in_degree[nxt] == 0:
+                    queue.append(nxt)
+        assert len(ordered) == len(names), "Failed to topologically order kernels."
+        return ordered
+
+    def build_level2(
+        self, profile: bool = False, warmup: int = 20, num_iters: int = 100
+    ):
+        assert self.hierarchy >= 2
+        self.profile = profile
+        self.warmup = warmup
+        self.num_iters = num_iters
+        self.trace_size = 0
+
+        build_dir = self.project_dir / "build"
+        if build_dir.exists():
+            shutil.rmtree(build_dir)
+        build_dir.mkdir(parents=True, exist_ok=True)
+        # record the level-2 module
+        with (self.project_dir / "raw.mlir").open("w", encoding="utf-8") as f:
+            f.write(str(self.allo_module))
+
+        # ------------------------- collect kernels -------------------------
+        # df.kernel functions + the private (link_with) declarations they call
+        kernel_funcs: dict[str, allo_func_d.FuncOp] = {}
+        link_with_map: dict[str, str] = {}  # private func name -> link file
+        for func in self.allo_module.body.operations:
+            if not isinstance(func, allo_func_d.FuncOp):
+                continue
+            if "df.kernel" in func.attributes:
+                kernel_funcs[func.attributes["sym_name"].value] = func
+            elif "link_with" in func.attributes:
+                link_with_map[func.attributes["sym_name"].value] = func.attributes[
+                    "link_with"
+                ].value
+
+        order = self._topological_kernel_order(kernel_funcs)
+
+        # ------------------------- analyze each kernel -------------------------
+        top_func_args = [arg.dtensor.name for arg in self.func_args[self.top_func_name]]
+        self.global_tensors = {}
+        # buffers keyed by ("tensor", global_idx) or ("stream", stream_name)
+        buffer_registry: dict[tuple, dict] = {}
+        ordered_buffers: list[dict] = []
+        kernels_codegen: list[dict] = []
+
+        def get_buffer(key: str, maker, alloc_handle: str, alloc_pos: int) -> str:
+            if key not in buffer_registry:
+                buf = maker()
+                buf["alloc_handle"] = alloc_handle
+                buf["alloc_pos"] = alloc_pos
+                buffer_registry[key] = buf
+                ordered_buffers.append(buf)
+            return buffer_registry[key]["var"]
+
+        for inst_idx, kernel_name in enumerate(order):
+            func = kernel_funcs[kernel_name]
+            block = func.regions[0].blocks[0]
+            handle = f"kernel_{inst_idx}"
+            # locate the call to the linked private function
+            call_op = None
+            for op in block.operations:
+                if (
+                    isinstance(op, allo_func_d.CallOp)
+                    and op.callee.value in link_with_map
+                ):
+                    call_op = op
+                    break
+            assert (
+                call_op is not None
+            ), f"No linked sub-kernel call found in {kernel_name}"
+            xclbin_name = link_with_map[call_op.callee.value]
+            if xclbin_name.endswith(".prj"):
+                xclbin_name = xclbin_name[: -len(".prj")]
+            # kernel role: producer (has stream_put) vs consumer (has stream_get)
+            has_put = any(
+                o.operation.name == "allo.stream_put" for o in block.operations
+            )
+            has_get = any(
+                o.operation.name == "allo.stream_get" for o in block.operations
+            )
+            is_producer = has_put and not has_get
+
+            operand_vars: list[str] = []
+            for pos, operand in enumerate(call_op.operands):
+                if BlockArgument.isinstance(operand):
+                    # top-level tensor argument
+                    arg_idx = BlockArgument(operand).arg_number
+                    dtensor = self.func_args[kernel_name][arg_idx].dtensor
+                    global_idx = top_func_args.index(dtensor.top_name)
+                    is_input = is_producer
+                    dtensor.set_global_info(global_idx, is_input)
+                    self.global_tensors[global_idx] = dtensor
+
+                    def make_tensor(dtensor=dtensor, is_input=is_input):
+                        size = int(np.prod(dtensor.shape))
+                        dtype = str(dtensor.dtype)
+                        if dtype == "i4":
+                            dtype = "i8"
+                            size //= 2
+                        return {
+                            "var": f"bo_{'in' if is_input else 'out'}{global_idx}",
+                            "role": "input" if is_input else "output",
+                            "dtype": dtype,
+                            "size": size,
+                            "file_idx": global_idx,
+                        }
+
+                    var = get_buffer(("tensor", global_idx), make_tensor, handle, pos)
+                else:
+                    defining = operand.owner
+                    if getattr(defining, "name", None) == "allo.stream_get":
+                        stream_arg = defining.operands[0]
+                    else:
+                        # an alloc consumed by a stream_put -> stream output
+                        stream_arg = None
+                        for use in operand.uses:
+                            if getattr(use.owner, "name", None) == "allo.stream_put":
+                                stream_arg = use.owner.operands[0]
+                                break
+                        assert (
+                            stream_arg is not None
+                        ), f"Cannot resolve buffer for operand {pos} of {kernel_name}"
+                    s_idx = BlockArgument(stream_arg).arg_number
+                    stream = self.func_args[kernel_name][s_idx].stream
+
+                    def make_stream(stream=stream):
+                        size = (
+                            int(np.prod(stream.type.shape)) if stream.type.shape else 1
+                        )
+                        return {
+                            "var": f"bo_s_{re.sub(r'[^0-9a-zA-Z_]', '_', stream.name)}",
+                            "role": "stream",
+                            "dtype": stream.type.dtype,
+                            "size": size,
+                            "file_idx": None,
+                        }
+
+                    var = get_buffer(("stream", stream.name), make_stream, handle, pos)
+                operand_vars.append(var)
+
+            kernels_codegen.append(
+                {
+                    "handle": handle,
+                    "xclbin_name": xclbin_name,
+                    "inst_idx": inst_idx,
+                    "operand_vars": operand_vars,
+                }
+            )
+
+        # ------------------------- compile merged xclbin -------------------------
+        prev_xclbin = None
+        for inst_idx, kernel_name in enumerate(order):
+            xclbin_name = kernels_codegen[inst_idx]["xclbin_name"]
+            prj_dir = self.project_dir / f"{xclbin_name}.prj"
+            cur_xclbin = build_dir / f"{inst_idx}.xclbin"
+            insts_file = self.project_dir / f"insts_{inst_idx}.txt"
+            kernel_id = 0x901 + inst_idx
+            # the first kernel starts a fresh xclbin; each subsequent kernel is
+            # appended to the previous incremental xclbin via --xclbin-input
+            xclbin_input = (
+                "" if prev_xclbin is None else f"--xclbin-input={prev_xclbin} "
+            )
+            cmd = (
+                f"cd {prj_dir} && aiecc --xclbin-kernel-name={xclbin_name} "
+                f"--xclbin-kernel-id={hex(kernel_id)} --alloc-scheme=basic-sequential "
+                f"--aie-generate-xclbin --no-compile-host {xclbin_input}"
+                f"--xclbin-name={cur_xclbin} "
+                f"--no-xchesscc --no-xbridge --peano $PEANO_INSTALL_DIR "
+                f"--aie-generate-npu-insts --npu-insts-name={insts_file} top.mlir"
+            )
+            with subprocess.Popen(cmd, shell=True) as process:
+                process.wait()
+            if process.returncode != 0:
+                raise RuntimeError(
+                    f"Failed to compile the MLIR-AIE code for sub-kernel '{xclbin_name}'."
+                )
+            prev_xclbin = cur_xclbin
+        # the last incremental xclbin contains all kernels
+        shutil.copy(prev_xclbin, build_dir / "final.xclbin")
+
+        # ------------------------- generate host & build -------------------------
+        path = Path(__file__).resolve().parent.parent.parent / "harness" / "aie"
+        os.system(f"cp -r {path}/* {self.project_dir}")
+        host_code = codegen_host_runlist(kernels_codegen, ordered_buffers, self.profile)
+        with (self.project_dir / "test.cpp").open("w", encoding="utf-8") as f:
+            f.write(host_code)
+        cmd = (
+            f"cd {self.project_dir}/build && cmake .. -DTARGET_NAME=top "
+            f"-DMLIR_AIE_DIR=$RUNTIME_LIB_DIR/.. && cmake --build . --config Release"
+        )
+        with subprocess.Popen(cmd, shell=True) as process:
+            process.wait()
+        if process.returncode != 0:
+            raise RuntimeError("Failed to build AIE project.")
+        return self
 
     def __call__(self, *args):
         for idx, dtensor in self.global_tensors.items():
