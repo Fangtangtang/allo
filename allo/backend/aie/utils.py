@@ -402,8 +402,8 @@ def inject_external_kernels(
                     call_builtin = True
                     output_idx.append(0)
                     operands = [op.outputs[0]]
-            # vec add/mul
-            elif getattr(op, "name", None) in {"linalg.add", "linalg.mul"}:
+            # vec add/mul # [FIXME]: unexpected error in vmul kernel
+            elif getattr(op, "name", None) in {"linalg.add"}:
                 op_name = op.name.split(".")[1]
                 dtype = str(op.inputs[0].type.element_type)
                 if dtype in external_kernel_aie2c_type:

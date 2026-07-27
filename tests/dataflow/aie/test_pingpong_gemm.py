@@ -15,7 +15,7 @@ R = Layout.Replicate
 
 @pytest.mark.parametrize("Ty", [int8, int16, int32, float32])
 def test_cooperative_gemm(Ty):
-    M, N, K = 32, 32, 32
+    M, N, K = 64, 64, 64
     Pm, Pn, Pk = 2, 2, 2
     Mt, Nt = M // Pm, N // Pn
 
