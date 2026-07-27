@@ -461,11 +461,10 @@ class CodeGenerator:
                                     .blocks[0]
                                     .arguments[0],
                                     cases[1:],
-                                    len(cases[1:]),
                                 )
                                 cnt = 0
-                                for region in switch_op.caseRegions:
-                                    block = region.blocks.append()
+                                for region in switch_op.regions:
+                                    block = region.blocks[0]
                                     with aie_ir.InsertionPoint(block):
                                         acquired = case_val[cnt].acquire(
                                             0 if is_put else 1, 1
@@ -488,11 +487,10 @@ class CodeGenerator:
                                     .blocks[0]
                                     .arguments[0],
                                     cases[1:],
-                                    len(cases[1:]),
                                 )
                                 cnt = 0
-                                for region in switch_op.caseRegions:
-                                    block = region.blocks.append()
+                                for region in switch_op.regions:
+                                    block = region.blocks[0]
                                     with aie_ir.InsertionPoint(block):
                                         case_val[cnt].release(0 if is_put else 1, 1)
                                         aie_scf_d.YieldOp([])
@@ -1708,7 +1706,6 @@ class CodeGenerator:
         self,
         core_funcs: list[allo_func_d.FuncOp],
         external_funcs: list[allo_func_d.FuncOp],
-        linked_external_cc: dict[str, int],
         trace: list[tuple[str, tuple[int, ...]]],
         trace_size: int,
     ) -> aie_ir.Module:
@@ -1906,17 +1903,7 @@ class CodeGenerator:
                 # compute logic on each compute tile
                 for func in core_funcs:
                     func_name = func.attributes["sym_name"].value
-                    used_external_kernel = self.virtual_computation_graph.nodes[
-                        func_name
-                    ].meta_data.used_external_kernel
-                    func_core = aie_d.Core(
-                        tile=self.tile_map[func_name],
-                        link_with=(
-                            f"external{linked_external_cc[func_name]}.o"
-                            if len(used_external_kernel) > 0
-                            else None
-                        ),
-                    )
+                    func_core = aie_d.Core(tile=self.tile_map[func_name])
                     if self.global_ip is None:
                         self.global_ip = aie_ir.InsertionPoint(func_core)
                     self.build_core_function(
@@ -1960,11 +1947,13 @@ class CodeGenerator:
                         aie_d.packetflow(
                             packet_id,
                             compute_tile,
-                            9,  # WireBundle: Trace = 9
+                            aie_d.WireBundle.Trace,
                             0,
-                            trace_transfer_shim_tile,
-                            1,  # WireBundle: DMA = 1
-                            1,
+                            {
+                                "dest": trace_transfer_shim_tile,
+                                "port": aie_d.WireBundle.DMA,
+                                "channel": 1,
+                            },
                             True,
                         )
                         enabled_trace.append(
