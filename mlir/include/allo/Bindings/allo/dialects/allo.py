@@ -13,7 +13,7 @@ class LibKernel:
         kernel_name,
         itypes,
         otypes,
-        link_file=None, # FIXME
+        link_file,
         ip=None,
     ):
         func_type = FunctionType.get(itypes, otypes)

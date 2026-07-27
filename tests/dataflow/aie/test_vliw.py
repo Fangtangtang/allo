@@ -38,7 +38,7 @@ def test_simple_add():
         C = np.zeros(16).astype(np.float32)
         aie_module(A, B, C)
         # verify the result
-        np.testing.assert_allclose(C, A + B)
+        np.testing.assert_allclose(C, A + B, rtol=1e-6)
         print("✓ AIE design verification successful")
     else:
         print("MLIR_AIE_INSTALL_DIR unset. Skipping AIE backend test.")

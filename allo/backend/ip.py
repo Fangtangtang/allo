@@ -131,6 +131,7 @@ class IPModule:
             self.args = parse_cpp_function(code, self.top)
         assert self.args is not None, f"Failed to parse {self.impl}"
         self.lib_name = f"py{self.top}_{hash(time.time_ns())}"
+        self.filename = f"{self.lib_name}.cpp"
         self.c_wrapper_file = os.path.join(self.temp_path, f"{self.lib_name}.cpp")
 
     def generate_nanobind_wrapper(self):
