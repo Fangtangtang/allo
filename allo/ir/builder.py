@@ -2768,13 +2768,13 @@ class ASTTransformer(ASTBuilder):
                     else:
                         memref = ele_type
                     input_types.append(memref)
-                func_type = FunctionType.get(input_types, [])
-                func_op = func_d.FuncOp(
-                    name=external_module.top,
-                    type=func_type,
+                func_op = allo_d.LibKernel.declare(
+                    external_module.top,
+                    input_types,
+                    [],
+                    link_file=obj.vliw_module.code_file_path,
                     ip=InsertionPoint(ctx.top_func),
                 )
-                func_op.attributes["sym_visibility"] = StringAttr.get("private")
             # Build arguments and create call
             new_args = build_stmts(ctx, node.args)
             call_op = func_d.CallOp(
@@ -3059,11 +3059,13 @@ class ASTTransformer(ASTBuilder):
                 if obj not in ctx.ext_libs:
                     ctx.ext_libs.append(obj)
                     # Suppose it does not have any return values
-                    func_type = FunctionType.get(input_types, [])
-                    func_op = func_d.FuncOp(
-                        name=obj.top, type=func_type, ip=InsertionPoint(ctx.top_func)
+                    func_op = allo_d.LibKernel.declare(
+                        obj.top,
+                        input_types,
+                        [],
+                        link_file=getattr(obj, "filename", None),
+                        ip=InsertionPoint(ctx.top_func),
                     )
-                    func_op.attributes["sym_visibility"] = StringAttr.get("private")
                 call_op = func_d.CallOp(
                     [],
                     FlatSymbolRefAttr.get(obj.top),
@@ -3194,15 +3196,17 @@ class ASTTransformer(ASTBuilder):
                 ]
                 input_types = [arg.type for arg in arg_results]
                 output_types = [input_types[0]]
-                func_op = func_d.FuncOp(
-                    name=f"{fn_name}_{abs(hash(node))}",
-                    type=FunctionType.get(input_types, output_types),
+                kernel_name = f"{fn_name}_{abs(hash(node))}"
+                func_op = allo_d.LibKernel.declare(
+                    kernel_name,
+                    input_types,
+                    output_types,
+                    link_file="lib_kernel", # [FIXME]: this is a placeholder
                     ip=InsertionPoint(ctx.top_func),
                 )
-                func_op.attributes["sym_visibility"] = StringAttr.get("private")
                 call_op = func_d.CallOp(
                     [arg_results[0].type],
-                    FlatSymbolRefAttr.get(f"{fn_name}_{abs(hash(node))}"),
+                    FlatSymbolRefAttr.get(kernel_name),
                     arg_results,
                     ip=ctx.get_ip(),
                 )

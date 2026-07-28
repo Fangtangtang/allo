@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+from pathlib import Path
 import allo
 from allo.ir.types import bfloat16, Stream
 import allo.dataflow as df
@@ -13,33 +14,33 @@ R = Layout.Replicate
 
 
 def FA(SEQ_LEN, HEAD_DIM, Q_tile_size, q_chunk_size, kv_chunk_size):
-    KERNEL_LIB_PATH = os.getenv("ALLO_EXTERNAL_KERNEL_DIR")
+    KERNEL_LIB_PATH = Path(os.getenv("ALLO_EXTERNAL_KERNEL_DIR"))
     iteration = Q_tile_size // q_chunk_size
 
     init_softmax = ExternalModule(
         top="init_softmax",
-        impl_path=KERNEL_LIB_PATH + "softmax_bf16.cc",
+        impl_path=str(KERNEL_LIB_PATH / "softmax_bf16.cc"),
         input_idx=[],
         output_idx=[0, 1],
     )
 
     online_softmax = ExternalModule(
         top="online_softmax",
-        impl_path=KERNEL_LIB_PATH + "softmax_bf16.cc",
+        impl_path=str(KERNEL_LIB_PATH / "softmax_bf16.cc"),
         input_idx=[0, 1, 2],
         output_idx=[3, 4, 5, 6],
     )
 
     rescale_attn_output = ExternalModule(
         top="rescale_attn_output",
-        impl_path=KERNEL_LIB_PATH + "attn_out.cc",
+        impl_path=str(KERNEL_LIB_PATH / "attn_out.cc"),
         input_idx=[0, 1],
         output_idx=[2],
     )
 
     scale_attn_output = ExternalModule(
         top="scale_attn_output",
-        impl_path=KERNEL_LIB_PATH + "attn_out.cc",
+        impl_path=str(KERNEL_LIB_PATH / "attn_out.cc"),
         input_idx=[0, 1],
         output_idx=[2],
     )
