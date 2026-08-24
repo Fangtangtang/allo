@@ -171,12 +171,13 @@ def test_complete_summary_generates_three_plots_with_two_curves(tmp_path):
         figure = plot.create_figure(points, dtype)
         try:
             assert [line.get_label() for line in figure.axes[0].lines] == [
-                "Allo",
-                "MLIR-AIE",
+                plot.FLOW_LABELS[flow] for flow in plot.FLOW_ORDER
             ]
             assert len(figure.axes[0].collections) == 2
             assert figure.axes[0].get_xlabel() == "Arithmetic Intensity (OPs/byte)"
             assert figure.axes[0].get_ylabel() == "Performance (TOP/s)"
+            legend_state = vars(figure.axes[0].get_legend())
+            assert legend_state.get("_loc_real", legend_state.get("_loc")) == 4
         finally:
             plt.close(figure)
 
@@ -204,8 +205,7 @@ def test_marked_allo_bf16_failures_are_plotted_normally(tmp_path):
     figure = plot.create_figure(points, "bf16")
     try:
         assert [line.get_label() for line in figure.axes[0].lines] == [
-            "Allo",
-            "MLIR-AIE",
+            plot.FLOW_LABELS[flow] for flow in plot.FLOW_ORDER
         ]
         assert len(figure.axes[0].collections) == 2
     finally:

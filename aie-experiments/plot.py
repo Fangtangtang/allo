@@ -30,7 +30,7 @@ DEFAULT_SIZES = (256, 512, 1024, 2048)
 DTYPE_ORDER = ("int16", "int8", "bf16")
 DTYPE_BYTES = {"int16": 2, "int8": 1, "bf16": 2}
 FLOW_ORDER = ("allo", "mlir-aie")
-FLOW_LABELS = {"allo": "Allo", "mlir-aie": "MLIR-AIE"}
+FLOW_LABELS = {"allo": "Compiled", "mlir-aie": "Manual Template"}
 FLOW_COLORS = {"allo": "#ef476f", "mlir-aie": "#008cd8"}
 SUMMARY_FIELDS = {
     "flow",
@@ -287,7 +287,7 @@ def performance_envelope(
 
 def create_figure(points: Sequence[ResultPoint], dtype: str):
     """Create one datatype performance-envelope figure."""
-    figure, axis = plt.subplots(figsize=(7.0, 4.5))
+    figure, axis = plt.subplots(figsize=(4.0, 3))
     for flow in FLOW_ORDER:
         intensities, tops, lower_tops, upper_tops = performance_envelope(
             points, flow, dtype
@@ -315,7 +315,7 @@ def create_figure(points: Sequence[ResultPoint], dtype: str):
     axis.set_ylim(bottom=0)
     axis.set_axisbelow(True)
     axis.grid(True, color="lightgray", linestyle="--", alpha=0.7)
-    axis.legend(loc="best")
+    axis.legend(loc="lower right")
     figure.tight_layout()
     return figure
 
