@@ -310,3 +310,84 @@ No raw timing is discarded or overwritten. If `IQR` is zero, values equal to
 the quartiles are retained and different values fall outside the zero-width
 fence. Run the `process` command at any time to reproduce the filtered and
 summary tables from the JSON records.
+
+## Partial-NPU bf16 GEMM experiment
+
+[`gemm_partial_npu.py`](gemm_partial_npu.py) runs the same 64-shape bf16
+Cartesian sweep with 1x4, 2x4, and 4x4 logical compute-tile configurations.
+The three logical variants are:
+
+| Variant | Mapping shape | Device width |
+| --- | ---: | ---: |
+| `manual` (Manual Template) | mlir-aie `n_aie_cols=1/2/4` | 1/2/4 columns |
+| `compiled` (Compiled) | Allo 2x2 / 4x2 / 4x4 | `npu1_1col` / `npu1_2col` / `npu1_4col` |
+| `compiled-full-io` (Compiled (Full I/O)) | Allo 4x1 / 4x2 / 4x4 | `npu1_4col` |
+
+Inspect the default expansion without accessing hardware:
+
+```bash
+python3 aie-experiments/gemm_partial_npu.py list
+```
+
+The default expansion contains 512 physical runs and 576 logical plot points.
+At 4x4, the two Allo configurations have the same mapping and device, so the
+runner executes one canonical `compiled` case and records that it supplies both
+Allo plot series.
+
+The 1x4 logical `compiled` configuration is intentionally generated with
+`row_num=2` and `col_num=2` in the Allo mapping primitives while retaining
+`device_type=npu1_1col`. The other configurations use four mapping rows.
+
+Run and process the complete experiment:
+
+```bash
+python3 aie-experiments/gemm_partial_npu.py run
+python3 aie-experiments/gemm_partial_npu.py process
+```
+
+Results default to `aie-experiments/results/gemm-partial-npu`. The runner
+supports `--variant`, `--columns`, `--M`, `--N`, and `--K` selections,
+plus `--warmup`, `--iterations`, `--output-dir`, `--mlir-aie-root`,
+`--rerun`, `--keep-builds`, `--fail-fast`, and `--dry-run`. For example,
+preview the two-column commands for one shape with:
+
+```bash
+python3 aie-experiments/gemm_partial_npu.py run \
+  --columns 2 \
+  --M 256 --N 256 --K 256 \
+  --dry-run
+```
+
+All Allo cases automatically continue through warmup and timing if the bf16
+output comparison fails. The JSON and CSV rows retain `status: "failed"`,
+`validation: "failed"`, the validation traceback in the case log, all timing
+samples, and `timed_validation_failure: true`. These marked cases are
+filterable, resumable with matching timing settings and sample counts, cleaned
+up unless `--keep-builds` is used, and do not cause a nonzero exit status.
+Compilation, runtime, device, or timing failures remain hard failures. The
+manual-template validation path remains strict.
+
+The Full I/O variant restricts the Allo mapping to the requested logical
+compute width but targets `npu1_4col`, exposing all four memory and interface
+tiles. The existing placer may distribute the logical compute nodes across that
+physical four-column mesh.
+
+After the selected complete sweep is processed, generate the three plots:
+
+```bash
+python3 aie-experiments/plot_partial_npu.py
+```
+
+The plotter reads
+`aie-experiments/results/gemm-partial-npu/summary.csv` by default and writes
+`gemm_bf16_1x4.png`, `gemm_bf16_2x4.png`, and `gemm_bf16_4x4.png` to
+`aie-experiments/plots`. Each plot contains the three logical series, uses
+OPs/byte and TOP/s units, and includes Tukey-filtered best-performance
+envelopes with min/max shaded ranges. At 4x4, the green dashed Full I/O curve
+and band reuse the canonical red Compiled data and therefore overlap it.
+
+Completeness is validated independently for each compute width. A width with a
+missing, duplicate, hard-failed, or invalid row is skipped without blocking
+complete widths; no PNGs are written when no width is complete. Marked timed
+Allo validation failures with complete filtered metrics are accepted as normal
+performance data.

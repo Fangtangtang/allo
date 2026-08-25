@@ -542,6 +542,8 @@ def allo_worker_command(
     iterations: int,
     project: Path,
     benchmark_on_validation_failure: bool = False,
+    device_columns: int | None = None,
+    mapping_rows: int | None = None,
 ) -> list[str]:
     """Build the internal Allo worker command."""
     command = [
@@ -574,6 +576,10 @@ def allo_worker_command(
 
     if benchmark_on_validation_failure:
         command.append("--benchmark-on-validation-failure")
+    if device_columns is not None:
+        command.extend(["--device-columns", str(device_columns)])
+    if mapping_rows is not None:
+        command.extend(["--rows", str(mapping_rows)])
     return command
 
 
@@ -736,11 +742,19 @@ def run_allo_case(
     log_file: Path,
     env: dict[str, str],
     benchmark_on_validation_failure: bool = False,
+    device_columns: int | None = None,
+    mapping_rows: int | None = None,
 ) -> tuple[list[float], list[str], str]:
     """Run one Allo build, validation, and benchmark in a child process."""
     project = case_work / "allo.prj"
     command = allo_worker_command(
-        case, warmup, iterations, project, benchmark_on_validation_failure
+        case,
+        warmup,
+        iterations,
+        project,
+        benchmark_on_validation_failure,
+        device_columns,
+        mapping_rows,
     )
     commands = [render_command(command)]
     return_code, output = run_command(command, REPO_ROOT, log_file, env)
@@ -1193,6 +1207,8 @@ def build_allo_worker_parser() -> argparse.ArgumentParser:
     for name in ("M", "N", "K", "m", "n", "k"):
         parser.add_argument(f"--{name}", type=int, required=True)
     parser.add_argument("--columns", type=int, choices=(1, 2, 4), required=True)
+    parser.add_argument("--device-columns", type=int, choices=(1, 2, 4))
+    parser.add_argument("--rows", type=int, choices=(1, 2, 4), default=4)
     parser.add_argument("--warmup", type=int, required=True)
     parser.add_argument("--iterations", type=int, required=True)
     parser.add_argument("--project", type=Path, required=True)
@@ -1228,7 +1244,7 @@ def allo_worker_main(argv: Sequence[str]) -> int:
         Ty,
         Ty,
         col_num=args.columns,
-        row_num=4,
+        row_num=args.rows,
     )
     os.environ["ENABLE_AGGRESSIVE_PORT_UTILIZATION_PATCH"] = "1"
     module = df.build(
@@ -1239,7 +1255,7 @@ def allo_worker_main(argv: Sequence[str]) -> int:
         profile=True,
         warmup=args.warmup,
         num_iters=args.iterations,
-        device_type=f"npu1_{args.columns}col",
+        device_type=f"npu1_{args.device_columns or args.columns}col",
     )
 
     host_source = args.project / "test.cpp"

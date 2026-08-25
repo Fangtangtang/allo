@@ -443,3 +443,23 @@ def test_process_results_filters_only_marked_failed_timings(tmp_path):
     assert ordinary_summary["timed_validation_failure"] == "False"
     assert ordinary_summary["filtered_count"] == "0"
     assert ordinary_summary["filtered_mean_us"] == ""
+
+
+def test_allo_worker_device_column_override_is_optional(tmp_path):
+    case = one_case(dtype="bf16")
+    default_command = gemm.allo_worker_command(case, 1, 2, tmp_path / "default.prj")
+    assert "--device-columns" not in default_command
+    assert "--rows" not in default_command
+
+    overridden_command = gemm.allo_worker_command(
+        case,
+        1,
+        2,
+        tmp_path / "overridden.prj",
+        benchmark_on_validation_failure=True,
+        device_columns=4,
+        mapping_rows=2,
+    )
+    assert overridden_command[overridden_command.index("--device-columns") + 1] == "4"
+    assert overridden_command[overridden_command.index("--rows") + 1] == "2"
+    assert "--benchmark-on-validation-failure" in overridden_command
