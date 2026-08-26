@@ -2043,11 +2043,14 @@ class ASTTransformer(ASTBuilder):
                 and arg.dtensor.memory is not None
             ):
                 memory_space = arg.dtensor.memory.get_memory_space()
-            input_types.append(
-                ASTTransformer.build_shaped_type(
-                    ctx, arg.dtype, arg.shape, layout=layout, memory_space=memory_space
+            if isinstance(arg.dtype, Stream):
+                input_types.append(allo_d.StreamType.get(arg.dtype.build(), depth=arg.dtype.depth))
+            else:
+                input_types.append(
+                    ASTTransformer.build_shaped_type(
+                        ctx, arg.dtype, arg.shape, layout=layout, memory_space=memory_space
+                    )
                 )
-            )
             input_typehints.append(get_extra_type_hints(arg.dtype))
             dtensors.append(arg.dtensor)
 
@@ -2067,11 +2070,14 @@ class ASTTransformer(ASTBuilder):
                     output_typehints.append(get_extra_type_hints(ret.dtype))
             else:
                 # Single return
-                output_types.append(
-                    ASTTransformer.build_shaped_type(
-                        ctx, node.returns.dtype, node.returns.shape
+                if isinstance(arg.dtype, Stream):
+                    output_types.append(allo_d.StreamType.get(arg.dtype.build(), depth=arg.dtype.depth))
+                else:
+                    output_types.append(
+                        ASTTransformer.build_shaped_type(
+                            ctx, node.returns.dtype, node.returns.shape
+                        )
                     )
-                )
                 output_typehints.append(get_extra_type_hints(node.returns.dtype))
 
         # Build function
@@ -2418,16 +2424,21 @@ class ASTTransformer(ASTBuilder):
                     new_name, symbolic_slice, iterator_infos = (
                         ASTTransformer.get_stream_name(ctx, node.func.value)
                     )
-                    stream = ctx.get_symbol(new_name).clone(
-                        ip=ctx.get_stream_construct_ip()
-                    )
-                    if symbolic_slice is not None:
-                        stream.attributes["symbolic_slice"] = StringAttr.get(
-                            symbolic_slice
+                    stream = ctx.get_symbol(new_name)
+                    if isinstance(stream, MockArg):
+                        stream = stream.val
+                    else:
+                        stream = ctx.get_symbol(new_name).clone(
+                            ip=ctx.get_stream_construct_ip()
                         )
-                        stream.attributes["iterators"] = DictAttr.get(iterator_infos)
+                        if symbolic_slice is not None:
+                            stream.attributes["symbolic_slice"] = StringAttr.get(
+                                symbolic_slice
+                            )
+                            stream.attributes["iterators"] = DictAttr.get(iterator_infos)
+                        stream = stream.result
                     put_op = allo_d.StreamPutOp(
-                        stream.result,
+                        stream,
                         [],
                         ASTTransformer.get_mlir_op_result(ctx, stmts[0]),
                         ip=ctx.get_ip(),
@@ -2440,17 +2451,22 @@ class ASTTransformer(ASTBuilder):
                         ASTTransformer.get_stream_name(ctx, node.func.value)
                     )
                     # insert after the last stream construct op to preserve ordering
-                    stream = ctx.get_symbol(new_name).clone(
-                        ip=ctx.get_stream_construct_ip()
-                    )
-                    if symbolic_slice is not None:
-                        stream.attributes["symbolic_slice"] = StringAttr.get(
-                            symbolic_slice
+                    stream = ctx.get_symbol(new_name)
+                    if isinstance(stream, MockArg):
+                        stream = stream.val
+                    else:
+                        stream = stream.clone(
+                            ip=ctx.get_stream_construct_ip()
                         )
-                        stream.attributes["iterators"] = DictAttr.get(iterator_infos)
+                        if symbolic_slice is not None:
+                            stream.attributes["symbolic_slice"] = StringAttr.get(
+                                symbolic_slice
+                            )
+                            stream.attributes["iterators"] = DictAttr.get(iterator_infos)
+                        stream = stream.result
                     get_op = allo_d.StreamGetOp(
                         node.func.value.dtype.build(),
-                        stream.result,
+                        stream,
                         [],
                         ip=ctx.get_ip(),
                     )

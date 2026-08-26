@@ -721,6 +721,7 @@ class TypeInferer(ASTVisitor):
                                 assert (
                                     top_arg.dtype == dtype and top_arg.shape == shape
                                 ), f"df.kernel argument {arg.arg} do not match {top_arg_name.id}."
+                                # arg.dtype = Stream(dtype=dtype, shape = shape, depth=2)
                                 arg.top_arg = top_arg_name.id
                             orig_name = node.name
                             old_ctx.func_predicate_tags[orig_name] = {}
@@ -824,11 +825,14 @@ class TypeInferer(ASTVisitor):
                     top_name=arg.arg if not hasattr(arg, "top_arg") else arg.top_arg,
                 )
                 # update shape
-                arg.shape = arg.dtensor.get_local_shape()
                 assert ctx.get_symbol(name=arg.arg, allow_missing=True) is None, (
                     f"Argument name '{arg.arg}' conflicts with an existing symbol. "
                     f"Please choose a different name to avoid the conflict."
                 )
+                if ctx.mapping is not None: # kernel ports
+                    arg.dtype = Stream(dtype=arg.dtype, shape=arg.dtensor.get_local_shape(), depth=2)
+                else:
+                    arg.shape = arg.dtensor.get_local_shape()
                 ctx.put_symbol(name=arg.arg, val=arg)
 
             func_name = (

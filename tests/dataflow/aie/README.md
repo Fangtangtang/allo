@@ -2,6 +2,9 @@
 
 > **Status: Design proposal — not yet implemented.**
 >
+> This document specifies a proposed dataflow programming interface. The
+> [host-driven temporal-reduction test](test_gemm_temporal_reduction.py) is the
+> current baseline and prior motivation, not the final interface.
 
 ## Motivation
 
@@ -12,14 +15,15 @@ and values that are local to a processing element (PE):
 
 - Kernel tensor annotations always retain the complete global tensor shape.
 - Every `@df.kernel` tensor argument is a port handle, not a local tensor.
-- Only `get()`, `put(value)`, and inferred allocations such as `zeros()` expose
-  compiler-derived local tensors.
+- `get()` and `put(value)` cross the port boundary using compiler-derived
+  transfer-tile types. Scratch and accumulation buffers are ordinary local Allo
+  tensors with programmer-written shapes.
 - Spatial ownership and temporal transfer order are logical sharding concepts.
   Packing and vector width remain independent backend optimizations.
 
-This separation lets the compiler infer local types, generate DMA offsets, and
-check transfer counts while keeping shapes such as `Mt`, `Nt`, and `Kt` out of
-the source program.
+This separation lets the compiler infer port transfer types, generate DMA
+offsets, and check transfer counts while local computation storage remains
+explicit and uses existing Allo tensor declarations.
 
 ### Alternatives considered
 
@@ -119,7 +123,10 @@ The compiler maintains three distinct views of every port tensor:
    factor.
 
 The kernel argument itself always has the first view and acts as a port handle.
-The programmer never declares the second or third view as a separate type.
+The compiler derives the transfer-tile type at each port operation. A local
+scratch or accumulation buffer is not another port view: it is declared as an
+ordinary Allo tensor with an explicit local shape, and `put()` validates that
+shape against the inferred transfer tile.
 
 ## Port semantics
 
@@ -127,8 +134,8 @@ The programmer never declares the second or third view as a separate type.
   port's cursor.
 - `port.put(value)` requires `value` to have the inferred transfer-tile type and
   advances that output port's cursor.
-- `port.zeros()` creates a zero-initialized transfer-tile value without
-  performing a transfer or advancing a cursor.
+- Ports do not allocate computation buffers. Local buffers use ordinary Allo
+  declarations such as `acc: TyO[M // Pm, N // Pn] = 0`.
 - Every port has an independent cursor. The first accesses to two different
   ports therefore select temporal coordinate zero on both ports.
 - The required transfer count for a port is the product of the extents of the
@@ -190,7 +197,7 @@ def top(A: TyI[M, K], B: TyI[K, N], C: TyO[M, N]):
         B_port: TyI[K, N] @ LyB,
         C_port: TyO[M, N] @ LyC,
     ):
-        acc = C_port.zeros()
+        acc: TyO[M // Pm, N // Pn] = 0
 
         with allo.meta_for(Tk) as _k:
             acc[:, :] = allo.add(
@@ -201,13 +208,15 @@ def top(A: TyI[M, K], B: TyI[K, N], C: TyO[M, N]):
         C_port.put(acc)
 ```
 
-No local dimension names appear in the program. The inferred leaf shapes are:
+No local dimension aliases such as `Mt`, `Nt`, or `Kt` appear in the program.
+The input transfer types are inferred, while the accumulator shape is written
+explicitly and checked at the output port boundary:
 
 ```text
-A_port.get()   -> TyI[M / Pm, K / Pk]
-B_port.get()   -> TyI[K / Pk, N / Pn]
-C_port.zeros() -> TyO[M / Pm, N / Pn]
-C_port.put()   <- TyO[M / Pm, N / Pn]
+A_port.get()       -> inferred TyI[M / Pm, K / Pk]
+B_port.get()       -> inferred TyI[K / Pk, N / Pn]
+acc                -> explicitly declared TyO[M / Pm, N / Pn]
+C_port.put(value)  expects TyO[M / Pm, N / Pn]
 ```
 
 At spatial coordinates `(pm, pn)` and temporal coordinate `k`, the global
@@ -306,8 +315,8 @@ than preserving two meanings for kernel tensor arguments:
    infer leaf shapes, and represent mixed-radix origins symbolically until both
    spatial and temporal coordinates are known.
 3. Preserve global shapes on kernel arguments and introduce an internal tensor
-   port type whose `get()`, `put()`, and `zeros()` operations expose inferred
-   leaf types.
+   port type whose `get()` and `put()` operations expose or validate inferred
+   leaf types. Keep local allocation in ordinary typed Allo declarations.
 4. Extend `allo.meta_for` to accept temporal axis objects. Add static traversal,
    cursor-count, access-scope, and invariant-reuse validation.
 5. Instantiate functions and AIE cores only over the spatial mesh. Enumerate
@@ -321,7 +330,8 @@ than preserving two meanings for kernel tensor arguments:
 
 Positive coverage should include:
 
-- Split-K GEMM with no user-written local dimensions.
+- Split-K GEMM with an explicit local accumulator shape and no local dimension
+  aliases.
 - The four-device, two-dimensional temporal traversal above.
 - Identical values and DMA order for explicit loops and manual unrolling.
 - Different origins for `S(0) * S(2)` and `S(2) * S(0)`.

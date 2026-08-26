@@ -152,10 +152,6 @@ class CodeGenerator:
                     if sample_stream is not None:
                         new_func_inputs.append(sample_stream.allo_element_type)
                         func_inputs[idx] = sample_stream.allo_element_type
-                        continue
-                    if func_args[idx][0].dtensor is not None:
-                        new_func_inputs.append(func_inputs[idx])
-                        continue
                 else:
                     # fixme: this is a fake placeholder, we'd better remove the useless argument, but doing so leads to crash
                     #           "Cannot destroy a value that still has uses!"

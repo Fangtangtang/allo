@@ -29,7 +29,6 @@ from ..._mlir.ir import (
     MemRefType,
 )
 from ..._mlir.passmanager import PassManager as mlir_pass_manager
-from ...passes import analyze_read_write_patterns
 from ...memory import DTensor
 from ...utils import construct_kernel_name
 from .external_kernel import ExternalModule, ExternalModuleBase
@@ -131,7 +130,12 @@ class AIE_MLIRModule:
                 elif arg in tmp_map:
                     self.func_args[func_name].append(tmp_map[arg])
                 elif isinstance(arg, DTensor):
-                    argument = Argument(arg, None)
+                    stream = Stream(arg.name)
+                    arg.type_as_param = arg.get_local_shape()
+                    stream.is_tensor = len(arg.type_as_param) > 0
+                    with self.allo_module.context, allo_ir.ir.Location.unknown():
+                        stream.allo_element_type = MemRefType.get(arg.type_as_param, arg.dtype.build())
+                    argument = Argument(arg, stream)
                     self.func_args[func_name].append(argument)
                     tmp_map[arg] = argument
                 elif isinstance(arg, str):
@@ -221,7 +225,6 @@ class AIE_MLIRModule:
     def analyze_kernel_parameters(
         self,
         df_kernels: list[allo_func_d.FuncOp],
-        injected_external_kernels: dict[str:ExternalModuleBase],
     ):
         """
         Analyze the parameters of each df.kernel.
@@ -241,9 +244,22 @@ class AIE_MLIRModule:
             tag = func.attributes["tag"].value
             if tag not in tag_to_func:
                 tag_to_func[tag] = func
-                in_idx_list, out_idx_list = analyze_read_write_patterns(
-                    func, injected_external_kernels
-                )
+                in_idx_list, out_idx_list = [], []
+                for arg in func.arguments:
+                    is_put = None
+                    for use in arg.uses:
+                        use_op = getattr(use.owner, "name", None)
+                        if use_op == "allo.stream_put":
+                            assert (is_put is None or is_put)
+                            is_put = True
+                        else:
+                            assert use_op == "allo.stream_get"
+                            assert (is_put is None or not is_put)
+                            is_put = False
+                    if is_put:
+                        out_idx_list.append(arg.arg_number)
+                    else:
+                        in_idx_list.append(arg.arg_number)
                 tag_to_read_write_pattern[tag] = (in_idx_list, out_idx_list)
 
         for orig_name, kernel_instance_info in self.func_instances.items():
@@ -267,9 +283,6 @@ class AIE_MLIRModule:
                             and not argument.dtensor is None
                         ):
                             argument.dtensor.set_access_pattern()
-                            argument.dtensor.type_as_param = kernel.arguments[
-                                io_idx
-                            ].type.shape
                             global_idx = top_func_args.index(argument.dtensor.top_name)
                             argument.dtensor.set_global_info(
                                 global_idx, io_type == "in"
@@ -733,9 +746,7 @@ class AIE_MLIRModule:
                 "aie2" if self.device == "npu1" else "aie2p",
             )
         )
-        self.analyze_kernel_parameters(
-            get_df_kernels(self.allo_module), self.injected_external_kernels
-        )
+        self.analyze_kernel_parameters(get_df_kernels(self.allo_module))
         # ------------------------- virtual mapping -------------------------
         self.init_virtual_graph(used_external_kernels)
         if os.getenv("DEBUG") == "1":
