@@ -256,6 +256,8 @@ class AIE_MLIRModule:
                             assert use_op == "allo.stream_get"
                             assert (is_put is None or not is_put)
                             is_put = False
+                    if is_put is None:
+                        continue
                     if is_put:
                         out_idx_list.append(arg.arg_number)
                     else:
@@ -301,10 +303,11 @@ class AIE_MLIRModule:
                     else:
                         assert len(func_arg) > 0 and func_arg[0].stream is not None
                         sample_stream = func_arg[0].stream
-                    self.core_func_args[kernel_name][i] = (
-                        func_arg,
-                        self.stream_info[kernel_name][sample_stream.name],
-                    )
+                    if sample_stream.name in self.stream_info[kernel_name]:
+                        self.core_func_args[kernel_name][i] = (
+                            func_arg,
+                            self.stream_info[kernel_name][sample_stream.name],
+                        )
 
     def allo_opt(self):
         """
