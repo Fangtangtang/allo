@@ -303,7 +303,6 @@ class CodeGenerator:
                 if not i in func_args:
                     continue
                 arg_info: tuple[Argument, bool] = func_args[i]
-                # TODO: support reuse and treat them all as streams
                 if isinstance(arg_info[0], Argument):
                     if arg_info[0].dtensor is None:
                         fifo_name = arg_info[0].stream.name
