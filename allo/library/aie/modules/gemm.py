@@ -100,10 +100,10 @@ def GEMM(M, N, K, Pm, Pn, Pk, TyI, TyO, col_num=4, row_num=4):
                 C_in[:, :] = pipe[pk - 1, pm, pn].get()
             with allo.meta_else():
                 C_in[:, :] = 0
-            C_out: TyO[Mt, Nt] = allo.add(allo.matmul(local_A, local_B), C_in)
+            C_out: TyO[Mt, Nt] = allo.add(allo.matmul(local_A.get(), local_B.get()), C_in)
             with allo.meta_if(pk < Pk - 1):
                 pipe[pk, pm, pn].put(C_out)
             with allo.meta_elif(pk == Pk - 1):
-                local_C[:, :] = C_out
+                local_C.put(C_out)
 
     return top, gen_gemm_mapping_primitive(Pm, Pn, Pk, col_num, row_num)

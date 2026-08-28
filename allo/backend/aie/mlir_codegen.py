@@ -298,65 +298,28 @@ class CodeGenerator:
             loop = aie_scf_d.ForOp(lower_bound=c0, upper_bound=cmax, step=c1)
             reused_fifo_info: dict[str, tuple[bool, Any]] = {}
             # fifo name -> argument placeholders
-            inter_ct_fifo: dict[str, list] = defaultdict(list)
+            fifo_to_args: dict[str, list] = defaultdict(list)
             for i, argument in enumerate(parsed_function.arguments):
                 if not i in func_args:
                     continue
                 arg_info: tuple[Argument, bool] = func_args[i]
-                if (
-                    isinstance(arg_info[0], Argument)
-                    and arg_info[0].dtensor is not None
-                ):
-                    nest_depth = (
-                        input_arg_depth[i] if input_arg_depth is not None else 0
-                    )
-                    # fixme: argument.uses is unordered??
-                    arg_use = list(argument.uses)
-                    first_use = arg_use[-1] if len(arg_use) > 0 else None
-                    if first_use is not None:
-                        first_use_op = first_use.owner
-                        # find parenting nest
-                        while nest_depth > 0:
-                            while "task_nest" not in first_use_op.parent.attributes:
-                                first_use_op = first_use_op.parent
-                            nest_depth -= 1
-                            first_use_op = first_use_op.parent
-                        while (
-                            getattr(first_use_op.parent, "name", None) != "func.func"
-                            and "task_nest" not in first_use_op.parent.attributes
-                        ):
-                            first_use_op = first_use_op.parent
-                        fifo = self.fifo_map[arg_to_fifo[i].name]
-                        block = first_use_op.parent.regions[0].blocks[0]
-                        with aie_ir.InsertionPoint(first_use_op):
-                            if arg_to_fifo[i].name in reused_fifo_info:
-                                assert block == reused_fifo_info[arg_to_fifo[i].name][1]
-                                fifo.release(
-                                    1 if arg_info[0].dtensor.is_input else 0, 1
-                                )
-                            else:
-                                reused_fifo_info[arg_to_fifo[i].name] = (
-                                    arg_info[0].dtensor.is_input,
-                                    block,
-                                )
-                            acquired = fifo.acquire(
-                                1 if arg_info[0].dtensor.is_input else 0, 1
-                            )
-                            # incorrect
-                            argument.replace_all_uses_with(acquired)
+                # TODO: support reuse and treat them all as streams
+                if isinstance(arg_info[0], Argument):
+                    if arg_info[0].dtensor is None:
+                        fifo_name = arg_info[0].stream.name
+                    else:
+                        fifo_name = arg_to_fifo[i].name
+                    fifo_to_args[fifo_name].append(argument)
+                    continue
                 else:
                     fifo_list = []
-                    if isinstance(arg_info[0], Argument):
-                        stream = arg_info[0].stream
-                        fifo_list.append(self.fifo_map[arg_info[0].stream.name])
-                    else:
-                        stream = arg_info[0][0].stream
-                        for stream_arg in arg_info[0]:
-                            fifo_list.append(self.fifo_map[stream_arg.stream.name])
+                    stream = arg_info[0][0].stream
+                    for stream_arg in arg_info[0]:
+                        fifo_list.append(self.fifo_map[stream_arg.stream.name])
                     if (
                         len(fifo_list) == 1 or len(set(fifo_list)) == 1
                     ):  # no need to use 'switch'
-                        inter_ct_fifo[stream.name].append(argument)
+                        fifo_to_args[stream.name].append(argument)
                         continue
                     # TODO: add guard to ensure that in this case fifo won't be reused
                     for use_ in argument.uses:
@@ -436,53 +399,55 @@ class CodeGenerator:
                                     cnt += 1
                             op.erase()
 
-            for fifo_name, args in inter_ct_fifo.items():
+            for fifo_name, args in fifo_to_args.items():
                 fifo = self.fifo_map[fifo_name]
                 uses = []
                 for arg in args:
                     uses_ = list(arg.uses)
                     is_put, is_tensor = check_stream_op_type(arg, uses_[0].owner)
+                    if isinstance(fifo, tuple):
+                        fifo = fifo[0 if is_put else 1]
+                    # optimization to reduce memcpy
+                    if len(uses_) == 1:
+                        op = uses_[0].owner
+                        if is_put:
+                            alloc_op = op.operands[0].owner
+                            if getattr(alloc_op, "name", None) == "memref.alloc":
+                                with aie_ir.InsertionPoint(alloc_op.operation):
+                                    acquired = fifo.acquire(0, 1)
+                                op.operands[0].replace_all_uses_with(acquired)
+                                with aie_ir.InsertionPoint(op.operation):
+                                    fifo.release(0, 1)
+                                op.erase()
+                                alloc_op.erase()
+                                continue
+                        # get tensor once
+                        elif is_tensor and len(list(op.operands[0].uses)) == 1:
+                            alloc_op = op.operands[1].owner
+                            if getattr(alloc_op, "name", None) == "memref.alloc":
+                                result_uses = [
+                                    use.owner
+                                    for use in op.operands[1].uses
+                                    if not use.owner == op
+                                ]
+                                # Due to MLIR Python binding limitations, the last use cannot be reliably determined. Restrict to the single-use case.
+                                if len(result_uses) == 1 and result_uses[0].parent == op.parent:
+                                    with aie_ir.InsertionPoint(op):
+                                        acquired = fifo.acquire(1, 1)
+                                    op.operands[1].replace_all_uses_with(acquired)
+                                    op.erase()
+                                    acquired_uses = list(acquired.uses)
+                                    use_op = acquired_uses[0].owner.operation
+                                    # ensure 'release' happens after use
+                                    with aie_ir.InsertionPoint(use_op):
+                                        cloned = use_op.clone()
+                                        for old, new in zip(use_op.results, cloned.results):
+                                            old.replace_all_uses_with(new)
+                                        fifo.release(1, 1)
+                                    use_op.erase()
+                                    alloc_op.erase()
+                                    continue
                     uses.extend(uses_)
-                if isinstance(fifo, tuple):
-                    fifo = fifo[0 if is_put else 1]
-
-                # optimization to reduce memcpy
-                if len(uses) == 1:
-                    op = uses[0].owner
-                    if is_put:
-                        alloc_op = op.operands[0].owner
-                        if getattr(alloc_op, "name", None) == "memref.alloc":
-                            with aie_ir.InsertionPoint(alloc_op.operation):
-                                acquired = fifo.acquire(0, 1)
-                            op.operands[0].replace_all_uses_with(acquired)
-                            with aie_ir.InsertionPoint(op.operation):
-                                fifo.release(0, 1)
-                            op.erase()
-                            alloc_op.erase()
-                            continue
-                    # get tensor once
-                    elif is_tensor and len(list(op.operands[0].uses)) == 1:
-                        result_uses = [
-                            use.owner
-                            for use in op.operands[1].uses
-                            if not use.owner == op
-                        ]
-                        # Due to MLIR Python binding limitations, the last use cannot be reliably determined. Restrict to the single-use case.
-                        if len(result_uses) == 1 and result_uses[0].parent == op.parent:
-                            with aie_ir.InsertionPoint(op):
-                                acquired = fifo.acquire(1, 1)
-                            op.operands[1].replace_all_uses_with(acquired)
-                            op.erase()
-                            acquired_uses = list(acquired.uses)
-                            use_op = acquired_uses[0].owner.operation
-                            # ensure 'release' happens after use
-                            with aie_ir.InsertionPoint(use_op):
-                                cloned = use_op.clone()
-                                for old, new in zip(use_op.results, cloned.results):
-                                    old.replace_all_uses_with(new)
-                                fifo.release(1, 1)
-                            use_op.erase()
-                            continue
 
                 for use_ in uses:
                     op = use_.owner
