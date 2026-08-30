@@ -6,7 +6,7 @@ import allo
 from allo.ir.types import int32, float32, bfloat16
 import allo.dataflow as df
 import numpy as np
-from allo.memory import Layout
+from allo.memory import Layout, Axis
 from allo.backend.aie import is_available
 
 S = Layout.Shard
@@ -166,7 +166,7 @@ def test_vector_scalar_add_p0():
     # shim tile <-> mem tile <-> comp tile0    comp tile1    comp tile2
     Ty = int32
     M = 1024
-    P0 = 4
+    P0 = Axis.Spatial(4, "x")
 
     @df.region()
     def top(A: Ty[M], B: Ty[M]):
@@ -192,7 +192,7 @@ def test_vector_vector_add_p0():
     #       ^-----> B mem tile 1 <-------^------------^-------------^
     Ty = int32
     M = 1024
-    P0 = 4
+    P0 = Axis.Spatial(4, "x")
 
     @df.region()
     def top(A: Ty[M], B: Ty[M], C: Ty[M]):

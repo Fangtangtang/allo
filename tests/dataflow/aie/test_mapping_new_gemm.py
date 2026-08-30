@@ -5,7 +5,7 @@ import allo
 from allo.ir.types import int16, int32, Stream
 import allo.dataflow as df
 import numpy as np
-from allo.memory import Layout
+from allo.memory import Layout, Axis
 from allo.backend.aie import is_available
 
 S = Layout.Shard
@@ -23,7 +23,7 @@ def test_gemm_2D_v1():
 
     @df.region()
     def top(A: TyI[M, K], B: TyI[K, N], C: TyO[M, N]):
-        @df.kernel(mapping=[P0, P1], args=[A, B, C])
+        @df.kernel(mapping=[Axis.Spatial(P0, "x"), P1], args=[A, B, C])
         def gemm(
             local_A: TyI[M, K] @ LyA, local_B: TyI[K, N] @ LyB, local_C: TyO[M, N] @ LyC
         ):
@@ -71,7 +71,7 @@ def test_gemm_2D_v2():
 
     @df.region()
     def top(A: TyI[M, K], B: TyI[K, N], C: TyO[M, N]):
-        @df.kernel(mapping=[P0, P1], args=[A, B, C])
+        @df.kernel(mapping=[Axis.Spatial(P0, "x"), Axis.Spatial(P1, "y")], args=[A, B, C])
         def gemm(
             local_A: TyI[M, K] @ LyA, local_B: TyI[K, N] @ LyB, local_C: TyO[M, N] @ LyC
         ):

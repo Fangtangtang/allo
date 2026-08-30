@@ -74,7 +74,7 @@ from .types import (
     Stream,
     allo_type_from_mlir_type,
 )
-from ..memory import Memory
+from ..memory import Memory, Axis
 from .visitor import ASTVisitor, ASTContext, get_symbolic_expr
 from .symbol_resolver import ASTResolver
 from ..utils import (
@@ -1965,10 +1965,16 @@ class ASTTransformer(ASTBuilder):
                                 ast.unparse(decorator.keywords[0].value),
                                 ctx.global_vars,
                             )
+                            spatial_mapping = []
+                            for axis in mapping:
+                                if isinstance(axis, Axis.Spatial):
+                                    spatial_mapping.append(axis.size)
+                                elif isinstance(axis, int):
+                                    spatial_mapping.append(axis)
                             orig_name = node.name
                             if orig_name not in ctx.func_tag2instance:
                                 ctx.func_tag2instance[orig_name] = {}
-                            for dim in np.ndindex(*mapping):
+                            for dim in np.ndindex(*spatial_mapping):
                                 if not ctx.unroll:
                                     # If not unrolled, assign tag to each instance.
                                     # Different tags indeicate different execution (control flow only)

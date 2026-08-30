@@ -7,6 +7,17 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 
+class Axis:
+    @dataclass(frozen=True)
+    class Spatial:
+        size: int
+        name: str
+        
+    @dataclass(frozen=True)
+    class Temporal:
+        size: int
+        name: str
+
 class Layout:
     """
       Example:

@@ -42,7 +42,7 @@ from ..utils import (
     np_supported_types,
     construct_kernel_name,
 )
-from ..memory import DTensor, Layout
+from ..memory import DTensor, Layout, Axis
 from ..logging import print_error_message
 from .utils import parse_ast, get_func_id_from_param_types, resolve_generic_types
 
@@ -696,13 +696,24 @@ class TypeInferer(ASTVisitor):
                 if isinstance(decorator, ast.Call):
                     if isinstance(decorator.func, ast.Attribute):
                         if decorator.func.attr == "kernel":
-                            mapping, kernel_args = None, []
+                            spatial_mapping, mapping, kernel_args = None, None, []
                             for kw in decorator.keywords:
                                 if kw.arg == "mapping":
-                                    mapping = eval(
+                                    spatial_mapping, mapping = [], []
+                                    mapping_axies = eval(
                                         ast.unparse(kw.value),
                                         ctx.global_vars,
                                     )
+                                    for axis in mapping_axies:
+                                        if isinstance(axis, Axis.Spatial):
+                                            spatial_mapping.append(axis.size)
+                                            mapping.append(axis.size)
+                                        elif isinstance(axis, Axis.Temporal):
+                                            mapping.append(axis.size)
+                                        else:
+                                            assert isinstance(axis, int)
+                                            spatial_mapping.append(axis)
+                                            mapping.append(axis)
                                 elif kw.arg == "args":
                                     assert isinstance(kw.value, ast.List)
                                     kernel_args = kw.value.elts
@@ -726,7 +737,7 @@ class TypeInferer(ASTVisitor):
                             orig_name = node.name
                             old_ctx.func_predicate_tags[orig_name] = {}
                             if ctx.unroll:
-                                for dim in np.ndindex(*mapping):
+                                for dim in np.ndindex(*spatial_mapping):
                                     new_ctx = old_ctx.copy()
                                     new_ctx.rank = dim
                                     new_ctx.scopes = old_ctx.scopes
@@ -766,7 +777,7 @@ class TypeInferer(ASTVisitor):
                                             results.append(None)
                                     return results
 
-                                sample_dim = (0,) * len(mapping)
+                                sample_dim = (0,) * len(spatial_mapping)
                                 new_ctx = old_ctx.copy()
                                 new_ctx.rank = sample_dim
                                 new_ctx.scopes = old_ctx.scopes
@@ -779,7 +790,7 @@ class TypeInferer(ASTVisitor):
                                 # check on a specific df.kernel instance
                                 TypeInferer.visit_FunctionDef(new_ctx, node)
                                 node.name = orig_name
-                                for dim in np.ndindex(*mapping):
+                                for dim in np.ndindex(*spatial_mapping):
                                     pid_map = {
                                         f"p{idx}": value
                                         for idx, value in enumerate(dim)
