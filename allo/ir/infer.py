@@ -709,7 +709,7 @@ class TypeInferer(ASTVisitor):
                                             spatial_mapping.append(axis.size)
                                             mapping.append(axis.size)
                                         elif isinstance(axis, Axis.Temporal):
-                                            mapping.append(axis.size)
+                                            mapping.append(axis)
                                         else:
                                             assert isinstance(axis, int)
                                             spatial_mapping.append(axis)

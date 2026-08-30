@@ -805,10 +805,9 @@ def simplify_matmul_accumulate(function: allo_func_d.FuncOp):
                     if acc_op.operands[0] != output
                     else acc_op.operands[1]
                 )
+                print(acc_op.operands[-1])
                 if (
-                    allo_d.get_last_use_in_function(acc_base, function) == acc_op
-                    and getattr(acc_op.operands[-1].owner, "name", None)
-                    == "memref.alloc"
+                    getattr(acc_op.operands[-1].owner, "name", None) == "memref.alloc"
                 ):
                     # accumulation is the last use
                     call_matmul_op.operands[-1] = acc_base

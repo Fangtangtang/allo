@@ -295,8 +295,14 @@ class LiveDTensorTileGroup:
             dtensor_groups.sort(key=lambda x: x.first_use)
             idx = 0
             while idx < len(dtensor_groups) - 1:
+                current = dtensor_groups[idx]
+                next_ = dtensor_groups[idx + 1]
+                same_lifetime = (
+                    current.first_use == next_.first_use
+                    and current.last_use == next_.last_use
+                )
                 assert (
-                    dtensor_groups[idx].last_use <= dtensor_groups[idx + 1].first_use
+                    same_lifetime or current.last_use <= next_.first_use
                 ), "liveness range overlapped."
                 idx = idx + 1
 
@@ -606,17 +612,20 @@ class ComputationGraph:
                         else:
                             node.meta_data.output_streams.append(argument.stream)
                     if argument.dtensor is not None:
-                        tensor_tile = DTensorTile(
-                            argument.dtensor.global_id,
-                            argument.dtensor.PE_tile_id_to_tensor_tile_id(indexes),
+                        tensor_tile_ids = argument.dtensor.PE_tile_id_to_tensor_tile_id(
+                            indexes
                         )
-                        live_dtensor_tile = LiveDTensorTile(
-                            tensor_tile, func_name, is_input
-                        )
-                        # TODO: determine first_use and last_use with liveness analysis
-                        live_dtensor_tile.first_use = 0
-                        live_dtensor_tile.last_use = 9
-                        node.global_interfaces[idx].append(live_dtensor_tile)
+                        for tensor_tile_id in tensor_tile_ids:
+                            tensor_tile = DTensorTile(
+                                argument.dtensor.global_id, tensor_tile_id
+                            )
+                            live_dtensor_tile = LiveDTensorTile(
+                                tensor_tile, func_name, is_input
+                            )
+                            # TODO: determine first_use and last_use with liveness analysis
+                            live_dtensor_tile.first_use = 0
+                            live_dtensor_tile.last_use = 9
+                            node.global_interfaces[idx].append(live_dtensor_tile)
                 self.nodes[func_name] = node
                 self.dependencies[func_name] = defaultdict(int)
         # initiate dependencies

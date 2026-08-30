@@ -12,11 +12,12 @@ class Axis:
     class Spatial:
         size: int
         name: str
-        
+
     @dataclass(frozen=True)
     class Temporal:
         size: int
         name: str
+
 
 class Layout:
     """
@@ -279,7 +280,13 @@ class DTensor:
 
     def __init__(self, rank, mapping, shape, dtype, spec, name=None, top_name=None):
         self.rank = rank
-        self.mapping = mapping  # mesh dims
+        self.axis: list[int | Axis.Temporal] = mapping
+        if mapping is not None:
+            self.mapping = [
+                axis if isinstance(axis, int) else axis.size for axis in mapping
+            ]
+        else:
+            self.mapping = mapping
         self.shape = shape  # tensor shape
         self.dtype = dtype
         self.name = name
@@ -304,7 +311,7 @@ class DTensor:
             # tensor tile ID -> PE tile IDs
             self.global_placement: dict[
                 tuple[int | str, ...], list[tuple[int, ...]]
-            ] = self.layout.get_placement(mapping)
+            ] = self.layout.get_placement(self.mapping)
         self.access_pattern_set = False
         self.global_id: int = None
         self.is_input: bool = None
@@ -419,13 +426,44 @@ class DTensor:
 
     def PE_tile_id_to_tensor_tile_id(
         self, pe_tile_id: tuple[int, ...]
-    ) -> tuple[int | str, ...]:
-        for tensor_tile_id, pe_tile_ids in self.global_placement.items():
-            if pe_tile_id in pe_tile_ids:
-                return tensor_tile_id
-        raise ValueError(
-            f"PE tile ID {pe_tile_id} not found in {self.global_placement}"
-        )
+    ) -> list[tuple[int | str, ...]]:
+        """Return tensor tiles accessed by a physical PE in temporal order.
+
+        ``pe_tile_id`` contains coordinates for spatial axes only. Temporal
+        coordinates are enumerated from ``self.axis`` in outer-to-inner order,
+        with the last temporal axis varying fastest. Duplicate tensor tile IDs
+        are retained because each entry represents a distinct temporal step.
+        """
+        pe_to_tensor_tile = {
+            pe_id: tensor_tile_id
+            for tensor_tile_id, pe_tile_ids in self.global_placement.items()
+            for pe_id in pe_tile_ids
+        }
+        temporal_ranges = [
+            range(axis.size) for axis in self.axis if isinstance(axis, Axis.Temporal)
+        ]
+        tensor_tile_ids = []
+        for temporal_tile_id in product(*temporal_ranges):
+            spatial_idx = 0
+            temporal_idx = 0
+            logical_pe_coords = []
+            for axis in self.axis:
+                if isinstance(axis, Axis.Temporal):
+                    logical_pe_coords.append(temporal_tile_id[temporal_idx])
+                    temporal_idx += 1
+                else:
+                    logical_pe_coords.append(pe_tile_id[spatial_idx])
+                    spatial_idx += 1
+            logical_pe_tile_id = tuple(logical_pe_coords)
+            if logical_pe_tile_id not in pe_to_tensor_tile:
+                raise ValueError(
+                    f"PE tile ID {pe_tile_id} with temporal coordinates "
+                    f"{temporal_tile_id} not found in {self.global_placement}"
+                )
+            # FIXME: this is incorrect! temporal replication should be valid (possible fix: temporal dim default to compressed)
+            if len(tensor_tile_ids) == 0 or pe_to_tensor_tile[logical_pe_tile_id] != tensor_tile_ids[0]:
+                tensor_tile_ids.append(pe_to_tensor_tile[logical_pe_tile_id])
+        return tensor_tile_ids
 
     def __str__(self):
         parts = [
