@@ -1,2 +1,5 @@
 .work/
-results/
+results/**/logs
+results/**/cases
+results/**/filtered_timings.csv
+results/**/raw_timings.csv
