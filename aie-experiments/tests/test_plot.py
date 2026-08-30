@@ -19,6 +19,10 @@ sys.modules[SPEC.name] = plot
 SPEC.loader.exec_module(plot)
 
 SUMMARY_FIELDS = [
+    "device",
+    "target",
+    "backend_target",
+    "npu2",
     "flow",
     "status",
     "validation",
@@ -33,9 +37,10 @@ SUMMARY_FIELDS = [
 ]
 
 
-def complete_rows():
-    """Return a minimal, valid default-sweep summary."""
+def complete_rows(device="xdna1"):
+    """Return a minimal, valid device sweep summary."""
     rows = []
+    config = plot.experiment.device_config(device)
     for flow, dtype, M, N, K in itertools.product(
         plot.FLOW_ORDER,
         plot.DTYPE_ORDER,
@@ -45,8 +50,15 @@ def complete_rows():
     ):
         filtered_gflops = 1000.0 + M + N + K
         mean_us = 2.0 * M * N * K / (filtered_gflops * 1000.0)
+        columns = plot.experiment.npu_columns_for(
+            N, plot.experiment.tiling_for(dtype)[1], device
+        )
         rows.append(
             {
+                "device": device,
+                "target": config.target,
+                "backend_target": config.backend_target(flow, columns),
+                "npu2": config.npu2,
                 "flow": flow,
                 "status": "success",
                 "validation": "passed",
@@ -210,3 +222,64 @@ def test_marked_allo_bf16_failures_are_plotted_normally(tmp_path):
         assert len(figure.axes[0].collections) == 2
     finally:
         plt.close(figure)
+
+
+def test_empty_failed_entries_are_skipped(tmp_path):
+    rows = complete_rows("xdna2")
+    for row in rows:
+        if row["flow"] == "mlir-aie" and row["dtype"] == "bf16":
+            row["status"] = "failed"
+            row["validation"] = "failed"
+            row["filtered_gflops"] = ""
+            row["filtered_min_us"] = ""
+            row["filtered_max_us"] = ""
+
+    summary_path = tmp_path / "summary.csv"
+    output_dir = tmp_path / "plots"
+    write_summary(summary_path, rows)
+    paths, skipped = plot.generate_plots(summary_path, output_dir, device="xdna2")
+
+    assert not skipped
+    assert [path.name for path in paths] == [
+        "gemm_int16.png",
+        "gemm_int8.png",
+        "gemm_bf16.png",
+    ]
+    points = plot.validate_summary(
+        plot.read_summary(summary_path), ["bf16"], device="xdna2"
+    )
+    assert len(points) == 64
+    assert {point.flow for point in points} == {"allo"}
+    figure = plot.create_figure(points, "bf16")
+    try:
+        assert [line.get_label() for line in figure.axes[0].lines] == [
+            plot.FLOW_LABELS["allo"]
+        ]
+        assert len(figure.axes[0].collections) == 1
+    finally:
+        plt.close(figure)
+
+
+def test_xdna2_summary_generates_isolated_plots_and_validates_provenance(tmp_path):
+    rows = complete_rows("xdna2")
+    summary_path = tmp_path / "summary.csv"
+    output_dir = tmp_path / "plots" / "xdna2"
+    write_summary(summary_path, rows)
+
+    paths, skipped = plot.generate_plots(summary_path, output_dir, device="xdna2")
+    assert not skipped
+    assert len(paths) == 3
+    assert plot.default_summary("xdna2").parent.name == "gemm-xdna2"
+    assert plot.default_output_dir("xdna2").name == "xdna2"
+    assert (
+        len(plot.validate_summary(plot.read_summary(summary_path), device="xdna2"))
+        == 384
+    )
+
+    target = next(row for row in rows if row["dtype"] == "bf16")
+    target["npu2"] = "0"
+    write_summary(summary_path, rows)
+    mismatch_dir = tmp_path / "mismatch"
+    paths, skipped = plot.generate_plots(summary_path, mismatch_dir, device="xdna2")
+    assert [path.name for path in paths] == ["gemm_int16.png", "gemm_int8.png"]
+    assert "npu2='0'" in skipped["bf16"]

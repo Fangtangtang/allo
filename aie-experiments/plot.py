@@ -24,6 +24,11 @@ import matplotlib.pyplot as plt  # pylint: disable=wrong-import-position
 
 
 EXPERIMENT_DIR = Path(__file__).resolve().parent
+if str(EXPERIMENT_DIR) not in sys.path:
+    sys.path.insert(0, str(EXPERIMENT_DIR))
+
+import gemm as experiment  # pylint: disable=wrong-import-position
+
 DEFAULT_SUMMARY = EXPERIMENT_DIR / "results" / "gemm" / "summary.csv"
 DEFAULT_OUTPUT_DIR = EXPERIMENT_DIR / "plots"
 DEFAULT_SIZES = (256, 512, 1024, 2048)
@@ -32,6 +37,21 @@ DTYPE_BYTES = {"int16": 2, "int8": 1, "bf16": 2}
 FLOW_ORDER = ("allo", "mlir-aie")
 FLOW_LABELS = {"allo": "Compiled", "mlir-aie": "Manual Template"}
 FLOW_COLORS = {"allo": "#ef476f", "mlir-aie": "#008cd8"}
+
+
+def default_summary(device: str = experiment.DEFAULT_DEVICE) -> Path:
+    """Return the device-specific default summary CSV."""
+    return experiment.default_output_dir(device) / "summary.csv"
+
+
+def default_output_dir(device: str = experiment.DEFAULT_DEVICE) -> Path:
+    """Return the device-specific plot directory."""
+    if device == "xdna2":
+        return DEFAULT_OUTPUT_DIR / "xdna2"
+    experiment.device_config(device)
+    return DEFAULT_OUTPUT_DIR
+
+
 SUMMARY_FIELDS = {
     "flow",
     "status",
@@ -140,10 +160,49 @@ def parse_timed_validation_failure(value: str | None) -> bool:
     raise ValueError(f"invalid boolean {value!r}")
 
 
+def is_empty_failure(row: dict[str, str]) -> bool:
+    """Return whether a failed row has no plottable timing metrics."""
+    metric_fields = ("filtered_gflops", "filtered_min_us", "filtered_max_us")
+    return (
+        row.get("status") == "failed"
+        and row.get("validation") == "failed"
+        and all(not str(row.get(field, "")).strip() for field in metric_fields)
+    )
+
+
+def provenance_issues(
+    row: dict[str, str],
+    flow: str,
+    dtype: str,
+    N: int,
+    device: str,
+) -> list[str]:
+    """Validate selected-device provenance, accepting legacy XDNA1 blanks."""
+    config = experiment.device_config(device)
+    columns = experiment.npu_columns_for(N, experiment.tiling_for(dtype)[1], device)
+    expected = {
+        "device": device,
+        "target": config.target,
+        "backend_target": config.backend_target(flow, columns),
+        "npu2": config.npu2,
+    }
+    issues = []
+    for field, expected_value in expected.items():
+        actual = str(row.get(field, "") or "").strip()
+        if not actual and device == experiment.DEFAULT_DEVICE:
+            continue
+        if actual != expected_value:
+            issues.append(f"{field}={row.get(field)!r}")
+    return issues
+
+
 def validate_summary(
-    rows: Sequence[dict[str, str]], dtypes: Sequence[str] = DTYPE_ORDER
+    rows: Sequence[dict[str, str]],
+    dtypes: Sequence[str] = DTYPE_ORDER,
+    device: str = experiment.DEFAULT_DEVICE,
 ) -> list[ResultPoint]:
     """Validate selected datatype sweeps and return parsed result points."""
+    experiment.device_config(device)
     unsupported = sorted(set(dtypes) - set(DTYPE_ORDER))
     if unsupported:
         raise ValueError(f"Unsupported datatype(s): {', '.join(unsupported)}")
@@ -172,8 +231,10 @@ def validate_summary(
         if key not in expected:
             issues.append(f"{name}: unexpected configuration")
             continue
+        if is_empty_failure(row):
+            continue
 
-        row_issues = []
+        row_issues = provenance_issues(row, key[0], key[1], key[3], device)
         try:
             timed_validation_failure = parse_timed_validation_failure(
                 row.get("timed_validation_failure")
@@ -255,8 +316,8 @@ def validate_summary(
             f"Summary CSV does not contain a complete, valid {len(expected)}-case "
             f"sweep for {dtype_text}:\n{details}"
         )
-    if len(parsed) != len(expected):
-        raise PlotError(f"Expected {len(expected)} valid results, parsed {len(parsed)}")
+    if not parsed:
+        raise PlotError(f"No usable results available for {', '.join(dtypes)}")
     return parsed
 
 
@@ -287,8 +348,12 @@ def performance_envelope(
 
 def create_figure(points: Sequence[ResultPoint], dtype: str):
     """Create one datatype performance-envelope figure."""
-    figure, axis = plt.subplots(figsize=(4.0, 3))
+    if not any(point.dtype == dtype for point in points):
+        raise PlotError(f"No points available for {dtype}")
+    figure, axis = plt.subplots(figsize=(4.0, 2.5))
     for flow in FLOW_ORDER:
+        if not any(point.flow == flow and point.dtype == dtype for point in points):
+            continue
         intensities, tops, lower_tops, upper_tops = performance_envelope(
             points, flow, dtype
         )
@@ -344,7 +409,9 @@ def atomic_write_bytes(path: Path, value: bytes) -> None:
 
 
 def generate_plots(
-    summary_path: Path, output_dir: Path
+    summary_path: Path,
+    output_dir: Path,
+    device: str = experiment.DEFAULT_DEVICE,
 ) -> tuple[list[Path], dict[str, str]]:
     """Write plots for complete datatype sweeps and report skipped datatypes."""
     rows = read_summary(summary_path)
@@ -352,7 +419,7 @@ def generate_plots(
     skipped = {}
     for dtype in DTYPE_ORDER:
         try:
-            points = validate_summary(rows, (dtype,))
+            points = validate_summary(rows, (dtype,), device)
         except PlotError as exc:
             skipped[dtype] = str(exc)
             continue
@@ -376,16 +443,33 @@ def build_parser() -> argparse.ArgumentParser:
         description="Plot GEMM performance envelopes by arithmetic intensity",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--summary", type=Path, default=DEFAULT_SUMMARY)
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument(
+        "--device",
+        choices=experiment.DEVICE_CHOICES,
+        default=experiment.DEFAULT_DEVICE,
+    )
+    parser.add_argument(
+        "--summary",
+        type=Path,
+        default=None,
+        help="summary CSV (device-specific when omitted)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="plot directory (device-specific when omitted)",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the plotting command-line interface."""
     args = build_parser().parse_args(argv)
+    summary = args.summary or default_summary(args.device)
+    output_dir = args.output_dir or default_output_dir(args.device)
     try:
-        paths, skipped = generate_plots(args.summary, args.output_dir)
+        paths, skipped = generate_plots(summary, output_dir, args.device)
     except PlotError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

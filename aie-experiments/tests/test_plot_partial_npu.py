@@ -24,6 +24,10 @@ sys.modules[SPEC.name] = plot
 SPEC.loader.exec_module(plot)
 
 SUMMARY_FIELDS = [
+    "device",
+    "target",
+    "backend_target",
+    "npu2",
     "variant",
     "plot_series",
     "flow",
@@ -44,25 +48,35 @@ SUMMARY_FIELDS = [
 ]
 
 
-def complete_rows():
-    """Return a minimal complete physical-sweep summary."""
+def complete_rows(device="xdna1"):
+    """Return a minimal complete physical device sweep summary."""
     rows = []
     sizes = plot.base_plot.DEFAULT_SIZES
-    for columns in plot.experiment.DEFAULT_COLUMNS:
+    matrix_ns = plot.experiment.default_matrix_ns(device)
+    config = plot.experiment.base.device_config(device)
+    for columns in plot.experiment.default_columns(device):
         variants = plot.experiment.physical_variants(
-            columns, plot.experiment.VARIANT_ORDER
+            columns, plot.experiment.VARIANT_ORDER, device
         )
-        for variant, M, N, K in itertools.product(variants, sizes, sizes, sizes):
+        for variant, M, N, K in itertools.product(variants, sizes, matrix_ns, sizes):
             mapping_rows, mapping_columns = plot.expected_mapping_shape(
                 variant, columns
             )
+            device_columns = plot.expected_device_columns(variant, columns, device)
+            flow = "mlir-aie" if variant == "manual" else "allo"
             filtered_gflops = 1000.0 + columns * 100.0 + M + N + K
             mean_us = 2.0 * M * N * K / (filtered_gflops * 1000.0)
             rows.append(
                 {
+                    "device": device,
+                    "target": config.target,
+                    "backend_target": config.backend_target(flow, device_columns),
+                    "npu2": config.npu2,
                     "variant": variant,
-                    "plot_series": ";".join(plot.expected_series(variant, columns)),
-                    "flow": "mlir-aie" if variant == "manual" else "allo",
+                    "plot_series": ";".join(
+                        plot.expected_series(variant, columns, device)
+                    ),
+                    "flow": flow,
                     "status": "success",
                     "validation": "passed",
                     "timed_validation_failure": False,
@@ -73,7 +87,7 @@ def complete_rows():
                     "compute_columns": columns,
                     "mapping_columns": mapping_columns,
                     "mapping_rows": mapping_rows,
-                    "device_columns": plot.expected_device_columns(variant, columns),
+                    "device_columns": device_columns,
                     "filtered_gflops": filtered_gflops,
                     "filtered_min_us": mean_us * 0.9,
                     "filtered_max_us": mean_us * 1.1,
@@ -208,3 +222,39 @@ def test_no_complete_column_writes_no_images(tmp_path):
     with pytest.raises(plot.PlotError, match="No compute-width"):
         plot.generate_plots(summary_path, output_dir)
     assert not output_dir.exists()
+
+
+def test_xdna2_summary_generates_four_plots_and_validates_provenance(tmp_path):
+    rows = complete_rows("xdna2")
+    summary_path = tmp_path / "summary.csv"
+    output_dir = tmp_path / "plots" / "xdna2"
+    write_summary(summary_path, rows)
+
+    paths, skipped = plot.generate_plots(summary_path, output_dir, device="xdna2")
+    assert not skipped
+    assert [path.name for path in paths] == [
+        "gemm_bf16_1x4.png",
+        "gemm_bf16_2x4.png",
+        "gemm_bf16_4x4.png",
+        "gemm_bf16_8x4.png",
+    ]
+    points = plot.validate_summary(plot.read_summary(summary_path), 8, "xdna2")
+    assert len(points) == 144
+    assert all(
+        sum(point.series == series for point in points) == 48
+        for series in plot.SERIES_ORDER
+    )
+    assert plot.default_summary("xdna2").parent.name == "gemm-partial-npu-xdna2"
+    assert plot.default_output_dir("xdna2").name == "xdna2"
+
+    target = next(row for row in rows if row["compute_columns"] == 8)
+    target["backend_target"] = "npu"
+    write_summary(summary_path, rows)
+    mismatch_dir = tmp_path / "mismatch"
+    paths, skipped = plot.generate_plots(summary_path, mismatch_dir, device="xdna2")
+    assert [path.name for path in paths] == [
+        "gemm_bf16_1x4.png",
+        "gemm_bf16_2x4.png",
+        "gemm_bf16_4x4.png",
+    ]
+    assert "backend_target='npu'" in skipped[8]

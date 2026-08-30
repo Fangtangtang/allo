@@ -4,8 +4,9 @@
 # NPU Experiments
 
 This directory contains reproducible experiment runners for comparing Allo and
-handwritten mlir-aie implementations on a Ryzen AI NPU. The first experiment is
-GEMM, driven by [`gemm.py`](gemm.py).
+handwritten mlir-aie implementations on Ryzen AI NPUs. Both runners and both
+plotters accept `--device {xdna1,xdna2}`; XDNA1 remains the default. The first
+experiment is GEMM, driven by [`gemm.py`](gemm.py).
 
 The default GEMM sweep covers every Cartesian product of
 `M,N,K = 256,512,1024,2048` and the three same-width input/output datatypes
@@ -37,7 +38,9 @@ python3 -m pip install -v -e . --no-build-isolation
 
 The runner checks for `/dev/accel/accel0`, the AIE environment variables, and
 the required mlir-aie build tools before starting a hardware run. `list` and
-`run --dry-run` do not require the NPU.
+`run --dry-run` do not require the NPU. The selected device is passed
+explicitly to every backend worker; the runner sets `NPU2=0` for XDNA1 and
+`NPU2=2` for XDNA2 instead of inferring a device from the ambient environment.
 
 ## Running GEMM experiments
 
@@ -47,10 +50,20 @@ Inspect the complete 384-case sweep without compiling anything:
 python3 aie-experiments/gemm.py list --flow both
 ```
 
-Run the complete sweep for both implementations:
+Run the complete XDNA1 sweep for both implementations:
 
 ```bash
 python3 aie-experiments/gemm.py run --flow both
+```
+
+Select XDNA2 explicitly. This still contains 384 cases:
+
+```bash
+python3 aie-experiments/gemm.py run \
+  --device xdna2 \
+  --flow both \
+  --mlir-aie-root /home/sf668/usr/mlir-aie \
+  --benchmark-on-validation-failure
 ```
 
 Run only the Allo int8 `256x256x256` smoke case with shorter timing settings:
@@ -114,11 +127,13 @@ python3 aie-experiments/gemm.py run \
   --dry-run
 ```
 
-Preserve generated Allo projects, MLIR, xclbins, and executables for completed
-cases:
+Preserve generated artifacts only for one selected diagnostic case:
 
 ```bash
-python3 aie-experiments/gemm.py run --flow both --keep-builds
+python3 aie-experiments/gemm.py run \
+  --flow allo --dtype int8 \
+  --M 256 --N 256 --K 256 \
+  --keep-builds --fail-fast
 ```
 
 Force configurations with existing completed records to run again:
@@ -141,12 +156,14 @@ arithmetic-intensity plot for each datatype:
 
 ```bash
 python3 aie-experiments/plot.py
+python3 aie-experiments/plot.py --device xdna2
 ```
 
-By default, the plotter reads `aie-experiments/results/gemm/summary.csv` and
-writes `gemm_int16.png`, `gemm_int8.png`, and `gemm_bf16.png` under the writable
-`aie-experiments/plots` directory. Override these locations with `--summary`
-and `--output-dir`.
+XDNA1 reads `results/gemm/summary.csv` and writes to `plots/`. XDNA2 reads
+`results/gemm-xdna2/summary.csv` and writes to `plots/xdna2/`. All paths are
+relative to `aie-experiments/`; override them with `--summary` and
+`--output-dir`. The plotter verifies the recorded device, backend target, and
+effective `NPU2` provenance before accepting a row.
 
 Each plot contains Allo and MLIR-AIE best-performance envelopes. Arithmetic
 intensity counts one read of each input and one output write:
@@ -179,6 +196,7 @@ python3 aie-experiments/gemm.py run --help
 
 | Flag | Commands | Meaning |
 | --- | --- | --- |
+| `--device {xdna1,xdna2}` | `run`, `list`, `process`, plotters | Select the NPU generation and device-specific default paths. Defaults to `xdna1`. |
 | `--flow {allo,mlir-aie,both}` | `run`, `list` | Required flow selection. `both` executes Allo cases first and mlir-aie cases second. |
 | `--dtype TYPE [TYPE ...]` | `run`, `list` | One or more of `int16`, `int8`, and `bf16`. Defaults to all three. The output type is the same as the input type. |
 | `--M SIZE [SIZE ...]` | `run`, `list` | One or more M dimensions. Defaults to `256 512 1024 2048`. |
@@ -187,10 +205,10 @@ python3 aie-experiments/gemm.py run --help
 | `--warmup COUNT` | `run` | Unrecorded warmup kernel launches per case. Defaults to `20`. |
 | `--iterations COUNT` | `run` | Recorded kernel launches per case. Defaults to `200`. |
 | `--benchmark-on-validation-failure` | `run` | For selected Allo bf16 cases only, continue timing after a comparison assertion, preserve failed status, and treat the complete timing record as expected. |
-| `--output-dir PATH` | `run`, `process` | Result directory. Defaults to `aie-experiments/results/gemm`. |
+| `--output-dir PATH` | `run`, `process` | Result directory. Defaults to `results/gemm` on XDNA1 or `results/gemm-xdna2` on XDNA2. |
 | `--mlir-aie-root PATH` | `run` | mlir-aie checkout inside the image. Defaults to `/ryzers/mlir-aie`. |
 | `--rerun` | `run` | Ignore matching completed records and execute those cases again. |
-| `--keep-builds` | `run` | Keep completed per-case build directories. Hard-failed build directories are always retained. |
+| `--keep-builds` | `run` | Keep the clean per-case work directory after any outcome for single-case diagnosis. |
 | `--fail-fast` | `run` | Stop after the first hard-failed configuration. Marked timed-validation failures still continue. |
 | `--dry-run` | `run` | Print resolved cases and principal commands without checking the environment, creating results, compiling, or running the NPU. |
 
@@ -207,11 +225,18 @@ Each configuration uses the following tile sizes:
 | `bf16` | 64 | 64 | 64 |
 | `int8` | 64 | 128 | 64 |
 
-Both flows target NPU1 and use four compute rows. The runner selects the largest
-valid NPU1 column count for a configuration. All cases use four columns except
-`int8` with `N=256`, which uses two columns because the mlir-aie whole-array
-design requires `N` to be divisible by `n * n_aie_cols`. The same active column
-count is passed to Allo for a comparable mapping.
+Both devices use four compute rows. Device behavior is centralized:
+
+| Device | Compute tiles | Width candidates | `NPU2` | mlir-aie | Allo |
+| --- | ---: | --- | ---: | --- | --- |
+| XDNA1 | 4x4 | `4,2,1` | `0` | `devicename=npu` | `npu1_<N>col` |
+| XDNA2 | 4x8 | `8,4,2,1` | `2` | `devicename=npu2` | `npu2_<N>col` for 1-7, `npu2` for 8 |
+
+The main runner selects the largest width for which `N` is divisible by
+`n * n_aie_cols`. Thus XDNA1 uses four columns except int8 at `N=256`,
+which uses two. On XDNA2, int16/bf16 use four columns at `N=256` and eight
+at larger N; int8 uses 2, 4, and 8 columns at `N=256`, `N=512`, and
+`N>=1024`, respectively. Both backends receive the same active width.
 
 For each case, the runner:
 
@@ -250,28 +275,42 @@ complete sample count match. The opt-in field appears in a signature only when
 enabled, preserving existing successful signatures. Use `--rerun` to replace
 either kind of completed result. Changing timing settings also reruns the case.
 
-By default, a failed case is recorded and the sweep continues. Its complete
-build/runtime output and Python traceback are kept in the case log, and its work
-directory is retained for debugging. `--fail-fast` stops after the first hard
-failure. An interrupted case is marked failed and runs again with the same
-command.
+Before every attempted case, the runner removes its stale work directory and
+creates a clean one. Unless `--keep-builds` is set, the whole directory is
+removed in a `finally` path after success, a timed validation failure, a hard
+failure, or interruption. The sweep-scoped instrumented mlir-aie host cache is
+also removed at the end even when the sweep fails. Logs and JSON records retain
+the error or interruption details; `--fail-fast` stops after the first hard
+failure.
 
-A marked timed-validation failure is expected completed work: it does not
-trigger `--fail-fast`, does not contribute to a nonzero exit status, and its
-build directory is deleted unless `--keep-builds` is set. Any other compile,
-runtime, device, sample-count, or timing failure remains hard and returns
-nonzero.
+Use `--keep-builds` only to diagnose one selected failing case, for example:
 
-Completed work directories are deleted to control disk usage. Use
-`--keep-builds` when generated MLIR, xclbins, executables, or Allo projects are
-needed for inspection.
+```bash
+python3 aie-experiments/gemm.py run \
+  --device xdna2 --flow allo --dtype int16 \
+  --M 256 --N 512 --K 256 \
+  --keep-builds --fail-fast --rerun
+```
+
+After diagnosis, rerun that case without `--keep-builds` (or remove its
+device-scoped case directory). Production sweeps intentionally retain only
+per-case JSON, logs, aggregate CSVs, and generated plots—not `.prj`, xclbin,
+MLIR, object, or executable artifacts.
 
 ## Results and filtering
 
-The default result layout is:
+Device-specific result and plot roots are:
+
+| Device | Main results | Partial results | Plots |
+| --- | --- | --- | --- |
+| XDNA1 | `results/gemm` | `results/gemm-partial-npu` | `plots` |
+| XDNA2 | `results/gemm-xdna2` | `results/gemm-partial-npu-xdna2` | `plots/xdna2` |
+
+All paths above are relative to `aie-experiments/`. Each result root has this
+layout:
 
 ```text
-aie-experiments/results/gemm/
+<result-root>/
 ├── cases/
 │   ├── allo/<dtype>/<case>.json
 │   └── mlir-aie/<dtype>/<case>.json
@@ -285,7 +324,9 @@ aie-experiments/results/gemm/
 
 The per-case JSON files are the resumable source of truth. They contain the
 configuration, status, validation result, exact commands, timestamps, all raw
-timings, error text, and log location.
+timings, error text, log location, selected `device`, backend `target`, exact
+`backend_target`, and effective `npu2` value. The aggregate CSVs carry the
+same provenance fields.
 
 `raw_timings.csv` contains one row per captured sample with the case metadata,
 sample index, `time_us`, calculated `gflops`, `is_outlier`, validation, and
@@ -313,81 +354,74 @@ summary tables from the JSON records.
 
 ## Partial-NPU bf16 GEMM experiment
 
-[`gemm_partial_npu.py`](gemm_partial_npu.py) runs the same 64-shape bf16
-Cartesian sweep with 1x4, 2x4, and 4x4 logical compute-tile configurations.
-The three logical variants are:
+[`gemm_partial_npu.py`](gemm_partial_npu.py) compares three logical variants.
+Plot names retain the columns-by-rows convention (`1x4` through `8x4`):
 
-| Variant | Mapping shape | Device width |
-| --- | ---: | ---: |
-| `manual` (Manual Template) | mlir-aie `n_aie_cols=1/2/4` | 1/2/4 columns |
-| `compiled` (Compiled) | Allo 2x2 / 4x2 / 4x4 | `npu1_1col` / `npu1_2col` / `npu1_4col` |
-| `compiled-full-io` (Compiled (Full I/O)) | Allo 4x1 / 4x2 / 4x4 | `npu1_4col` |
+| Variant | Mapping primitives | Physical device width |
+| --- | --- | --- |
+| `manual` (Manual Template) | mlir-aie `n_aie_cols=W` | `W` |
+| `compiled` (Compiled) | Allo `4xW`, except `W=1` uses `row_num=2,col_num=2` | `W`; the special 2x2 mapping still targets one column |
+| `compiled-full-io` (Compiled (Full I/O)) | Allo `row_num=4,col_num=W` | all 4 XDNA1 columns or all 8 XDNA2 columns |
 
-Inspect the default expansion without accessing hardware:
+XDNA1 defaults to widths `1,2,4` and all four M/N/K sizes. Its 64 matrix
+shapes produce 512 physical runs and 576 logical plot points. XDNA2 defaults to
+widths `1,2,4,8`, with `N=512,1024,2048` and all four M/K sizes. Its 48
+shapes produce 528 physical runs and 576 logical points. At the selected
+device's full width (4 or 8), Compiled and Compiled (Full I/O) have the same
+mapping and device, so one canonical `compiled` execution supplies both series.
+
+Unsupported and non-divisible selections are rejected before execution. For
+example, XDNA1 does not accept width 8, and XDNA2 width 8 does not accept
+`N=256` with `n=64`.
+
+Inspect either expansion without hardware:
 
 ```bash
 python3 aie-experiments/gemm_partial_npu.py list
+python3 aie-experiments/gemm_partial_npu.py list --device xdna2
 ```
 
-The default expansion contains 512 physical runs and 576 logical plot points.
-At 4x4, the two Allo configurations have the same mapping and device, so the
-runner executes one canonical `compiled` case and records that it supplies both
-Allo plot series.
-
-The 1x4 logical `compiled` configuration is intentionally generated with
-`row_num=2` and `col_num=2` in the Allo mapping primitives while retaining
-`device_type=npu1_1col`. The other configurations use four mapping rows.
-
-Run and process the complete experiment:
-
-```bash
-python3 aie-experiments/gemm_partial_npu.py run
-python3 aie-experiments/gemm_partial_npu.py process
-```
-
-Results default to `aie-experiments/results/gemm-partial-npu`. The runner
-supports `--variant`, `--columns`, `--M`, `--N`, and `--K` selections,
-plus `--warmup`, `--iterations`, `--output-dir`, `--mlir-aie-root`,
-`--rerun`, `--keep-builds`, `--fail-fast`, and `--dry-run`. For example,
-preview the two-column commands for one shape with:
+Run and process the complete XDNA2 experiment:
 
 ```bash
 python3 aie-experiments/gemm_partial_npu.py run \
-  --columns 2 \
-  --M 256 --N 256 --K 256 \
-  --dry-run
+  --device xdna2 \
+  --mlir-aie-root /home/sf668/usr/mlir-aie
+python3 aie-experiments/gemm_partial_npu.py process --device xdna2
 ```
 
-All Allo cases automatically continue through warmup and timing if the bf16
-output comparison fails. The JSON and CSV rows retain `status: "failed"`,
-`validation: "failed"`, the validation traceback in the case log, all timing
-samples, and `timed_validation_failure: true`. These marked cases are
-filterable, resumable with matching timing settings and sample counts, cleaned
-up unless `--keep-builds` is used, and do not cause a nonzero exit status.
-Compilation, runtime, device, or timing failures remain hard failures. The
-manual-template validation path remains strict.
+The runner also supports `--variant`, `--columns`, `--M`, `--N`, `--K`,
+`--warmup`, `--iterations`, `--output-dir`, `--rerun`, `--keep-builds`,
+`--fail-fast`, and `--dry-run`. Preview the special Compiled 1x4 mapping on
+XDNA2 with:
 
-The Full I/O variant restricts the Allo mapping to the requested logical
-compute width but targets `npu1_4col`, exposing all four memory and interface
-tiles. The existing placer may distribute the logical compute nodes across that
-physical four-column mesh.
+```bash
+python3 aie-experiments/gemm_partial_npu.py run \
+  --device xdna2 --variant compiled --columns 1 \
+  --M 256 --N 512 --K 256 --dry-run
+```
 
-After the selected complete sweep is processed, generate the three plots:
+The printed Allo worker command includes `--columns 2 --rows 2` and
+`--device-columns 1`. Manual remains `n_aie_cols=1`; Compiled Full I/O remains
+`row_num=4,col_num=1` and uses the selected device's full physical width.
+
+All Allo partial cases automatically continue timing after a bf16 output
+comparison failure. Their JSON/CSV rows retain failed validation status, the
+traceback, complete samples, and `timed_validation_failure: true`; they remain
+filterable and resumable without causing a nonzero sweep result. Build,
+runtime, device, and timing failures remain hard failures. Every work directory
+uses the same aggressive cleanup policy described above.
+
+Generate the device-specific plots with:
 
 ```bash
 python3 aie-experiments/plot_partial_npu.py
+python3 aie-experiments/plot_partial_npu.py --device xdna2
 ```
 
-The plotter reads
-`aie-experiments/results/gemm-partial-npu/summary.csv` by default and writes
-`gemm_bf16_1x4.png`, `gemm_bf16_2x4.png`, and `gemm_bf16_4x4.png` to
-`aie-experiments/plots`. Each plot contains the three logical series, uses
-OPs/byte and TOP/s units, and includes Tukey-filtered best-performance
-envelopes with min/max shaded ranges. At 4x4, the green dashed Full I/O curve
-and band reuse the canonical red Compiled data and therefore overlap it.
-
-Completeness is validated independently for each compute width. A width with a
-missing, duplicate, hard-failed, or invalid row is skipped without blocking
-complete widths; no PNGs are written when no width is complete. Marked timed
-Allo validation failures with complete filtered metrics are accepted as normal
-performance data.
+XDNA1 writes `gemm_bf16_1x4.png`, `gemm_bf16_2x4.png`, and
+`gemm_bf16_4x4.png` under `plots/`. XDNA2 adds `gemm_bf16_8x4.png` and
+writes all four under `plots/xdna2/`. Each plot contains all three logical
+series and Tukey-filtered min/max envelopes. Completeness and device provenance
+are validated independently per width; an incomplete or mismatched width is
+skipped without blocking the others.

@@ -18,9 +18,9 @@ sys.modules[SPEC.name] = gemm
 SPEC.loader.exec_module(gemm)
 
 
-def one_case(flow="allo", dtype="int16", M=256, N=256, K=256):
+def one_case(flow="allo", dtype="int16", M=256, N=256, K=256, device="xdna1"):
     """Return one case through the public configuration generator."""
-    return gemm.generate_cases(flow, [dtype], [M], [N], [K])[0]
+    return gemm.generate_cases(flow, [dtype], [M], [N], [K], device)[0]
 
 
 def test_full_sweep_counts_and_tilings():
@@ -149,6 +149,10 @@ def test_process_results_writes_raw_filtered_and_summary(tmp_path):
     assert summary_rows[0]["filtered_count"] == "4"
     assert summary_rows[0]["outlier_count"] == "1"
     assert float(summary_rows[0]["filtered_mean_us"]) == 10.0
+    assert summary_rows[0]["device"] == "xdna1"
+    assert summary_rows[0]["target"] == "npu1"
+    assert summary_rows[0]["backend_target"] == "npu1_4col"
+    assert summary_rows[0]["npu2"] == "0"
 
 
 def test_safe_remove_work_only_removes_descendants(tmp_path, monkeypatch):
@@ -278,8 +282,9 @@ def test_timed_validation_failure_is_completed_and_returns_zero(tmp_path, monkey
     monkeypatch.setattr(gemm, "DEFAULT_WORK_DIR", work_dir)
     monkeypatch.setattr(gemm, "check_environment", lambda *_args: None)
 
-    def fake_run_allo_case(*args):
+    def fake_run_allo_case(*args, **kwargs):
         assert args[-1] is True
+        assert kwargs["device"] == "xdna1"
         return [10.0, 10.0, 10.0], ["worker command"], "failed"
 
     monkeypatch.setattr(gemm, "run_allo_case", fake_run_allo_case)
@@ -325,7 +330,7 @@ def test_unexpected_failure_remains_hard_and_untimed(tmp_path, monkeypatch):
     monkeypatch.setattr(gemm, "DEFAULT_WORK_DIR", work_dir)
     monkeypatch.setattr(gemm, "check_environment", lambda *_args: None)
 
-    def fail_run(*_args):
+    def fail_run(*_args, **_kwargs):
         raise gemm.ExperimentError("compile failed")
 
     monkeypatch.setattr(gemm, "run_allo_case", fail_run)
@@ -357,7 +362,7 @@ def test_unexpected_failure_remains_hard_and_untimed(tmp_path, monkeypatch):
     assert record["status"] == "failed"
     assert record["timed_validation_failure"] is False
     assert record["timings_us"] == []
-    assert gemm.work_path(case).exists()
+    assert not gemm.work_path(case).exists()
 
 
 def test_timed_validation_failure_resume_requires_matching_opt_in_and_samples(
@@ -463,3 +468,210 @@ def test_allo_worker_device_column_override_is_optional(tmp_path):
     assert overridden_command[overridden_command.index("--device-columns") + 1] == "4"
     assert overridden_command[overridden_command.index("--rows") + 1] == "2"
     assert "--benchmark-on-validation-failure" in overridden_command
+
+
+def test_xdna2_widths_targets_and_provenance(tmp_path):
+    config = gemm.device_config("xdna2")
+    assert config.column_choices == (8, 4, 2, 1)
+    assert config.allo_device_type(1) == "npu2_1col"
+    assert config.allo_device_type(7) == "npu2_7col"
+    assert config.allo_device_type(8) == "npu2"
+    assert gemm.device_config("xdna1").column_choices == (4, 2, 1)
+    assert gemm.default_output_dir("xdna1") == gemm.DEFAULT_OUTPUT_DIR
+    assert gemm.default_output_dir("xdna2").name == "gemm-xdna2"
+
+    assert one_case(dtype="int16", N=256, device="xdna2").npu_columns == 4
+    assert one_case(dtype="int16", N=512, device="xdna2").npu_columns == 8
+    assert one_case(dtype="int8", N=256, device="xdna2").npu_columns == 2
+    assert one_case(dtype="int8", N=512, device="xdna2").npu_columns == 4
+    assert one_case(dtype="int8", N=1024, device="xdna2").npu_columns == 8
+
+    allo_case = one_case(dtype="int16", N=512, device="xdna2")
+    worker = gemm.allo_worker_command(
+        allo_case, 1, 2, tmp_path / "case.prj", device="xdna2"
+    )
+    assert worker[worker.index("--device") + 1] == "xdna2"
+    manual_case = one_case(flow="mlir-aie", dtype="int16", N=512, device="xdna2")
+    make = gemm.mlir_make_command(manual_case, Path("/opt/mlir-aie"), "xdna2")
+    assert "n_aie_cols=8" in make
+    assert "devicename=npu2" in make
+    bf16_case = one_case(flow="mlir-aie", dtype="bf16", N=512, device="xdna2")
+    bf16_make = gemm.mlir_make_command(bf16_case, Path("/opt/mlir-aie"), "xdna2")
+    override = next(item for item in bf16_make if item.startswith("--eval="))
+    assert override == (
+        "--eval=build/mm_b_row_maj_64x64x64.o: PEANOWRAP2P_FLAGS += "
+        "-DAIE_API_EMULATE_BFLOAT16_MMUL_WITH_BFP16"
+    )
+    xdna1_bf16 = one_case(flow="mlir-aie", dtype="bf16")
+    xdna1_make = gemm.mlir_make_command(xdna1_bf16, Path("/opt/mlir-aie"))
+    assert not any(item.startswith("--eval=") for item in xdna1_make)
+
+    record = gemm.new_record(allo_case, 1, 2, tmp_path / "results", device="xdna2")
+    assert record["device"] == "xdna2"
+    assert record["target"] == "npu2"
+    assert record["backend_target"] == "npu2"
+    assert record["npu2"] == "2"
+
+
+def test_xdna2_flags_drive_list_dry_run_and_process_defaults(capsys):
+    selection = [
+        "--device",
+        "xdna2",
+        "--flow",
+        "both",
+        "--dtype",
+        "int16",
+        "--M",
+        "256",
+        "--N",
+        "512",
+        "--K",
+        "256",
+    ]
+    assert gemm.main(["list", *selection]) == 0
+    output = capsys.readouterr().out
+    assert output.count("columns=8") == 2
+
+    assert gemm.main(["run", *selection, "--dry-run"]) == 0
+    output = capsys.readouterr().out
+    assert "--device xdna2" in output
+    assert "devicename=npu2" in output
+
+    args = gemm.build_parser().parse_args(["process", "--device", "xdna2"])
+    assert args.output_dir is None
+    assert gemm.default_output_dir(args.device).name == "gemm-xdna2"
+
+
+def test_default_cleanup_precleans_success_and_shared_host(tmp_path, monkeypatch):
+    output_dir = tmp_path / "results"
+    work_root = tmp_path / "work"
+    monkeypatch.setattr(gemm, "DEFAULT_WORK_DIR", work_root)
+    monkeypatch.setattr(gemm, "check_environment", lambda *_args: None)
+    case = one_case(dtype="int16", N=512, device="xdna2")
+    case_work = gemm.work_path(case, "xdna2")
+    case_work.mkdir(parents=True)
+    (case_work / "stale").write_text("old", encoding="utf-8")
+
+    def succeed(*args, **kwargs):
+        assert kwargs["device"] == "xdna2"
+        assert args[5]["NPU2"] == "2"
+        assert not (args[3] / "stale").exists()
+        (args[3] / "fresh").write_text("new", encoding="utf-8")
+        host = gemm.shared_host_path("xdna2")
+        host.mkdir(parents=True)
+        (host / "cached-host").write_text("host", encoding="utf-8")
+        return [10.0, 11.0], ["worker command"], "passed"
+
+    monkeypatch.setattr(gemm, "run_allo_case", succeed)
+    assert (
+        gemm.main(
+            [
+                "run",
+                "--device",
+                "xdna2",
+                "--flow",
+                "allo",
+                "--dtype",
+                "int16",
+                "--M",
+                "256",
+                "--N",
+                "512",
+                "--K",
+                "256",
+                "--iterations",
+                "2",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 0
+    )
+    assert not case_work.exists()
+    assert not gemm.shared_host_path("xdna2").exists()
+
+
+def test_keep_builds_keeps_fresh_failure_but_not_shared_host(tmp_path, monkeypatch):
+    output_dir = tmp_path / "results"
+    work_root = tmp_path / "work"
+    monkeypatch.setattr(gemm, "DEFAULT_WORK_DIR", work_root)
+    monkeypatch.setattr(gemm, "check_environment", lambda *_args: None)
+    case = one_case(dtype="int16")
+    case_work = gemm.work_path(case)
+    case_work.mkdir(parents=True)
+    (case_work / "stale").write_text("old", encoding="utf-8")
+
+    def fail(*args, **_kwargs):
+        assert not (args[3] / "stale").exists()
+        (args[3] / "fresh").write_text("new", encoding="utf-8")
+        host = gemm.shared_host_path()
+        host.mkdir(parents=True)
+        (host / "cached-host").write_text("host", encoding="utf-8")
+        raise gemm.ExperimentError("compile failed")
+
+    monkeypatch.setattr(gemm, "run_allo_case", fail)
+    assert (
+        gemm.main(
+            [
+                "run",
+                "--flow",
+                "allo",
+                "--dtype",
+                "int16",
+                "--M",
+                "256",
+                "--N",
+                "256",
+                "--K",
+                "256",
+                "--iterations",
+                "2",
+                "--output-dir",
+                str(output_dir),
+                "--keep-builds",
+            ]
+        )
+        == 1
+    )
+    assert (case_work / "fresh").is_file()
+    assert not (case_work / "stale").exists()
+    assert not gemm.shared_host_path().exists()
+
+
+def test_interrupted_case_is_recorded_and_cleaned(tmp_path, monkeypatch):
+    output_dir = tmp_path / "results"
+    work_root = tmp_path / "work"
+    monkeypatch.setattr(gemm, "DEFAULT_WORK_DIR", work_root)
+    monkeypatch.setattr(gemm, "check_environment", lambda *_args: None)
+
+    def interrupt(*args, **_kwargs):
+        (args[3] / "partial-build").write_text("data", encoding="utf-8")
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(gemm, "run_allo_case", interrupt)
+    assert (
+        gemm.main(
+            [
+                "run",
+                "--flow",
+                "allo",
+                "--dtype",
+                "int16",
+                "--M",
+                "256",
+                "--N",
+                "256",
+                "--K",
+                "256",
+                "--iterations",
+                "2",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 1
+    )
+    case = one_case(dtype="int16")
+    record = json.loads(gemm.record_path(output_dir, case).read_text(encoding="utf-8"))
+    assert record["validation"] == "interrupted"
+    assert not gemm.work_path(case).exists()

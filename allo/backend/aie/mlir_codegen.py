@@ -648,7 +648,7 @@ class CodeGenerator:
             if dim >= 3:
                 raise ValueError(f"Fail to partition {size}")
             size_part = size.copy()
-            partition_size = size.get_dim_size(dim) - 1
+            partition_size = size.get_dim_size(dim) - 2 # FIXME
             size_part.set_dim_size(dim, partition_size)
             return dim, size_part
 

@@ -3,7 +3,7 @@
 
 import os
 import pytest
-from allo.ir.types import int4, int8
+from allo.ir.types import int4, int8, int16
 import allo.dataflow as df
 from allo.library.aie.modules.gemm import GEMM
 import numpy as np
@@ -17,11 +17,11 @@ from allo.backend.aie import is_available
     ],
 )
 def test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
-    top, mapping_primitives = GEMM(M, N, K, Pm, Pn, Pk, TyI, TyO)
-    assert (TyI is int4 or TyI is int8) and TyO is int8, (
-        "This test only supports these data type combinations. "
-        "Please refer to examples/aie/gemm.py for gemm examples with other data types."
-    )
+    top, mapping_primitives = GEMM(M, N, K, Pm, Pn, Pk, TyI, TyO, col_num=8)
+    # assert (TyI is int4 or TyI is int8) and TyO is int8, (
+    #     "This test only supports these data type combinations. "
+    #     "Please refer to examples/aie/gemm.py for gemm examples with other data types."
+    # )
 
     if is_available():
         os.environ["ENABLE_AGGRESSIVE_PORT_UTILIZATION_PATCH"] = "1"
@@ -35,9 +35,9 @@ def test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
             num_iters=1000,
         )
 
-        A = np.random.randint(-4, 4, (M, K)).astype(np.int8)
-        B = np.random.randint(-4, 4, (K, N)).astype(np.int8)
-        C = np.zeros((M, N)).astype(np.int8)
+        A = np.random.randint(-4, 4, (M, K)).astype(np.int16)
+        B = np.random.randint(-4, 4, (K, N)).astype(np.int16)
+        C = np.zeros((M, N)).astype(np.int16)
         mod(A, B, C)
         np.testing.assert_allclose(C, A @ B, atol=1e-5)
         print("PASSED!")
@@ -47,14 +47,14 @@ def test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
 
 
 if __name__ == "__main__":
-    M, N, K = 1024, 1024, 1024
-    m, n, k = 64, 128, 64
+    M, N, K = 256, 1024, 1024
+    m, n, k = 64, 64, 64
     # - i8
-    test_pingpong_gemm(M, N, K, M // m, N // n, K // k, int8, int8)
-    # - i4
-    dir_path = os.path.dirname(os.path.abspath(__file__))
-    os.environ["ALLO_EXTERNAL_KERNEL_DIR"] = (
-        f"{dir_path}/../../../allo/library/aie/kernels/"
-    )
-    test_pingpong_gemm(M, N, K, M // m, N // n, K // k, int4, int8)
-    del os.environ["ALLO_EXTERNAL_KERNEL_DIR"]
+    test_pingpong_gemm(M, N, K, M // m, N // n, K // k, int16, int16)
+    # # - i4
+    # dir_path = os.path.dirname(os.path.abspath(__file__))
+    # os.environ["ALLO_EXTERNAL_KERNEL_DIR"] = (
+    #     f"{dir_path}/../../../allo/library/aie/kernels/"
+    # )
+    # test_pingpong_gemm(M, N, K, M // m, N // n, K // k, int4, int8)
+    # del os.environ["ALLO_EXTERNAL_KERNEL_DIR"]

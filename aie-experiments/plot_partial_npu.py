@@ -31,6 +31,18 @@ import plot as base_plot  # pylint: disable=wrong-import-position
 
 DEFAULT_SUMMARY = experiment.DEFAULT_OUTPUT_DIR / "summary.csv"
 DEFAULT_OUTPUT_DIR = EXPERIMENT_DIR / "plots"
+
+
+def default_summary(device: str = experiment.base.DEFAULT_DEVICE) -> Path:
+    """Return the device-specific partial-GEMM summary CSV."""
+    return experiment.default_output_dir(device) / "summary.csv"
+
+
+def default_output_dir(device: str = experiment.base.DEFAULT_DEVICE) -> Path:
+    """Return the shared device-specific plot directory."""
+    return base_plot.default_output_dir(device)
+
+
 SERIES_ORDER = experiment.VARIANT_ORDER
 SERIES_LABELS = experiment.VARIANT_LABELS
 SERIES_COLORS = {
@@ -92,29 +104,43 @@ class ResultPoint:
         return base_plot.arithmetic_intensity(self.M, self.N, self.K, experiment.DTYPE)
 
 
-def expected_actual_keys(columns: int) -> set[tuple[str, int, int, int, int]]:
+def expected_actual_keys(
+    columns: int,
+    device: str = experiment.base.DEFAULT_DEVICE,
+) -> set[tuple[str, int, int, int, int]]:
     """Return expected physical summary keys for one compute width."""
     return set(
         itertools.product(
-            experiment.physical_variants(columns, experiment.VARIANT_ORDER),
+            experiment.physical_variants(columns, experiment.VARIANT_ORDER, device),
             (columns,),
             base_plot.DEFAULT_SIZES,
-            base_plot.DEFAULT_SIZES,
+            experiment.default_matrix_ns(device),
             base_plot.DEFAULT_SIZES,
         )
     )
 
 
-def expected_series(variant: str, columns: int) -> tuple[str, ...]:
+def expected_series(
+    variant: str,
+    columns: int,
+    device: str = experiment.base.DEFAULT_DEVICE,
+) -> tuple[str, ...]:
     """Return logical series represented by one physical summary row."""
-    if variant == "compiled" and columns == 4:
+    if (
+        variant == "compiled"
+        and columns == experiment.base.device_config(device).max_columns
+    ):
         return "compiled", "compiled-full-io"
     return (variant,)
 
 
-def expected_device_columns(variant: str, columns: int) -> int:
+def expected_device_columns(
+    variant: str,
+    columns: int,
+    device: str = experiment.base.DEFAULT_DEVICE,
+) -> int:
     """Return the required device width for one physical plot row."""
-    return experiment.device_columns_for(variant, columns)
+    return experiment.device_columns_for(variant, columns, device)
 
 
 def expected_mapping_shape(variant: str, columns: int) -> tuple[int, int]:
@@ -165,11 +191,41 @@ def parse_positive_metric(row: dict[str, str], field: str, issues: list[str]) ->
         return math.nan
 
 
-def validate_summary(rows: Sequence[dict[str, str]], columns: int) -> list[ResultPoint]:
+def provenance_issues(
+    row: dict[str, str],
+    variant: str,
+    columns: int,
+    device: str,
+) -> list[str]:
+    """Validate device provenance, accepting legacy XDNA1 blanks."""
+    config = experiment.base.device_config(device)
+    flow = "mlir-aie" if variant == "manual" else "allo"
+    physical_columns = expected_device_columns(variant, columns, device)
+    expected = {
+        "device": device,
+        "target": config.target,
+        "backend_target": config.backend_target(flow, physical_columns),
+        "npu2": config.npu2,
+    }
+    issues = []
+    for field, expected_value in expected.items():
+        actual = str(row.get(field, "") or "").strip()
+        if not actual and device == experiment.base.DEFAULT_DEVICE:
+            continue
+        if actual != expected_value:
+            issues.append(f"{field}={row.get(field)!r}")
+    return issues
+
+
+def validate_summary(
+    rows: Sequence[dict[str, str]],
+    columns: int,
+    device: str = experiment.base.DEFAULT_DEVICE,
+) -> list[ResultPoint]:
     """Validate a complete compute-width sweep and expand logical series."""
-    if columns not in experiment.DEFAULT_COLUMNS:
-        raise ValueError(f"Unsupported compute columns: {columns}")
-    expected = expected_actual_keys(columns)
+    if columns not in experiment.default_columns(device):
+        raise ValueError(f"Unsupported compute columns for {device}: {columns}")
+    expected = expected_actual_keys(columns, device)
     seen: dict[tuple[str, int, int, int, int], list[int]] = {}
     parsed = []
     issues = []
@@ -200,7 +256,7 @@ def validate_summary(rows: Sequence[dict[str, str]], columns: int) -> list[Resul
             issues.append(f"{name}: unexpected configuration")
             continue
 
-        row_issues = []
+        row_issues = provenance_issues(row, key[0], columns, device)
         if row.get("dtype") != experiment.DTYPE:
             row_issues.append(f"dtype={row.get('dtype')!r}")
         variant = key[0]
@@ -212,7 +268,7 @@ def validate_summary(rows: Sequence[dict[str, str]], columns: int) -> list[Resul
         except (KeyError, TypeError, ValueError):
             device_columns = -1
             row_issues.append(f"device_columns={row.get('device_columns')!r}")
-        if device_columns != expected_device_columns(variant, columns):
+        if device_columns != expected_device_columns(variant, columns, device):
             row_issues.append(f"device_columns={device_columns!r}")
         expected_rows, expected_columns = expected_mapping_shape(variant, columns)
         for field, expected_value in (
@@ -228,7 +284,7 @@ def validate_summary(rows: Sequence[dict[str, str]], columns: int) -> list[Resul
                 row_issues.append(f"{field}={actual_value!r}")
 
         plot_series = parse_plot_series(row.get("plot_series"))
-        if plot_series != expected_series(variant, columns):
+        if plot_series != expected_series(variant, columns, device):
             row_issues.append(f"plot_series={row.get('plot_series')!r}")
 
         try:
@@ -287,7 +343,12 @@ def validate_summary(rows: Sequence[dict[str, str]], columns: int) -> list[Resul
     for key in sorted(expected - seen.keys()):
         issues.append(f"{format_key(key)}: missing")
 
-    expected_logical = len(SERIES_ORDER) * len(base_plot.DEFAULT_SIZES) ** 3
+    expected_logical = (
+        len(SERIES_ORDER)
+        * len(base_plot.DEFAULT_SIZES)
+        * len(experiment.default_matrix_ns(device))
+        * len(base_plot.DEFAULT_SIZES)
+    )
     if issues:
         details = "\n".join(f"  - {issue}" for issue in sorted(issues))
         raise PlotError(
@@ -375,16 +436,18 @@ def render_png(points: Sequence[ResultPoint], columns: int) -> bytes:
 def generate_plots(
     summary_path: Path,
     output_dir: Path,
-    columns: Sequence[int] = experiment.DEFAULT_COLUMNS,
+    columns: Sequence[int] | None = None,
+    device: str = experiment.base.DEFAULT_DEVICE,
 ) -> tuple[list[Path], dict[int, str]]:
     """Write plots for complete compute widths and report skipped widths."""
     rows = read_summary(summary_path)
+    selected_columns = columns or experiment.default_columns(device)
     rendered = {}
     skipped = {}
-    for compute_columns in dict.fromkeys(columns):
+    for compute_columns in dict.fromkeys(selected_columns):
         try:
-            points = validate_summary(rows, int(compute_columns))
-        except PlotError as exc:
+            points = validate_summary(rows, int(compute_columns), device)
+        except (PlotError, ValueError) as exc:
             skipped[int(compute_columns)] = str(exc)
             continue
         rendered[int(compute_columns)] = render_png(points, int(compute_columns))
@@ -410,14 +473,30 @@ def build_parser() -> argparse.ArgumentParser:
         description="Plot partial-NPU bf16 GEMM performance envelopes",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--summary", type=Path, default=DEFAULT_SUMMARY)
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument(
+        "--device",
+        choices=experiment.base.DEVICE_CHOICES,
+        default=experiment.base.DEFAULT_DEVICE,
+    )
+    parser.add_argument(
+        "--summary",
+        type=Path,
+        default=None,
+        help="summary CSV (device-specific when omitted)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="plot directory (device-specific when omitted)",
+    )
     parser.add_argument(
         "--columns",
         type=int,
-        choices=experiment.DEFAULT_COLUMNS,
+        choices=experiment.ALL_COLUMNS,
         nargs="+",
-        default=list(experiment.DEFAULT_COLUMNS),
+        default=None,
+        help="compute widths (device-specific when omitted)",
     )
     return parser
 
@@ -425,8 +504,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the partial-NPU plotting command-line interface."""
     args = build_parser().parse_args(argv)
+    summary = args.summary or default_summary(args.device)
+    output_dir = args.output_dir or default_output_dir(args.device)
     try:
-        paths, skipped = generate_plots(args.summary, args.output_dir, args.columns)
+        paths, skipped = generate_plots(summary, output_dir, args.columns, args.device)
     except PlotError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

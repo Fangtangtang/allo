@@ -886,7 +886,22 @@ class AIE_MLIRModule:
                     encoding="utf-8",
                 ) as f:
                     f.write(kernel_code)
-                cmd = f"cd {self.project_dir} && $PEANO_INSTALL_DIR/bin/clang++ -O2 -v -std=c++20 --target=aie2{"p" if self.device == "npu2" else ""}-none-unknown-elf -Wno-parentheses -Wno-attributes -Wno-macro-redefined -DNDEBUG -I $MLIR_AIE_INSTALL_DIR/include -I $MLIR_AIE_EXTERNAL_KERNEL_DIR/ -I. -c external{idx}.cc -o external{idx}.o"
+                target = "aie2p" if self.device == "npu2" else "aie2"
+                bf16_emulation_flag = (
+                    " -DAIE_API_EMULATE_BFLOAT16_MMUL_WITH_BFP16"
+                    if self.device == "npu2"
+                    else ""
+                )
+                cmd = (
+                    f"cd {self.project_dir} && "
+                    "$PEANO_INSTALL_DIR/bin/clang++ -O2 -v -std=c++20 "
+                    f"--target={target}-none-unknown-elf "
+                    "-Wno-parentheses -Wno-attributes -Wno-macro-redefined "
+                    f"-DNDEBUG{bf16_emulation_flag} "
+                    "-I $MLIR_AIE_INSTALL_DIR/include "
+                    "-I $MLIR_AIE_EXTERNAL_KERNEL_DIR/ -I. "
+                    f"-c external{idx}.cc -o external{idx}.o"
+                )
                 with subprocess.Popen(cmd, shell=True) as process:
                     process.wait()
                 if process.returncode != 0:

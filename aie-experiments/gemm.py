@@ -31,7 +31,6 @@ import numpy as np
 EXPERIMENT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = EXPERIMENT_DIR.parent
 DEFAULT_OUTPUT_DIR = EXPERIMENT_DIR / "results" / "gemm"
-DEFAULT_WORK_DIR = EXPERIMENT_DIR / ".work" / "gemm"
 DEFAULT_MLIR_AIE_ROOT = Path("/ryzers/mlir-aie")
 DEFAULT_SIZES = (256, 512, 1024, 2048)
 DEFAULT_DTYPES = ("int16", "int8", "bf16")
@@ -40,10 +39,69 @@ SCHEMA_VERSION = 1
 TIMING_PREFIX = "NPU_SAMPLE_US="
 ALLO_VALIDATION_PASSED = "ALLO_VALIDATION=PASSED"
 ALLO_VALIDATION_FAILED = "ALLO_VALIDATION=FAILED"
+DEFAULT_DEVICE = "xdna1"
+DEVICE_CHOICES = ("xdna1", "xdna2")
+DEFAULT_WORK_DIR = EXPERIMENT_DIR / ".work" / "gemm"
 
 
 class ExperimentError(RuntimeError):
     """An expected experiment setup or execution failure."""
+
+
+@dataclass(frozen=True)
+class DeviceConfig:
+    """All backend settings associated with one physical NPU generation."""
+
+    name: str
+    max_columns: int
+    npu2: str
+    target: str
+    mlir_devicename: str
+
+    @property
+    def column_choices(self) -> tuple[int, ...]:
+        """Return supported compute widths from widest to narrowest."""
+        return tuple(value for value in (8, 4, 2, 1) if value <= self.max_columns)
+
+    def allo_device_type(self, columns: int) -> str:
+        """Return the explicit Allo target for a physical column count."""
+        if not 1 <= columns <= self.max_columns:
+            raise ValueError(
+                f"{self.name} does not support a {columns}-column device target"
+            )
+        if self.name == "xdna2" and columns == self.max_columns:
+            return "npu2"
+        return f"{self.target}_{columns}col"
+
+    def backend_target(self, flow: str, columns: int) -> str:
+        """Return the exact target spelling passed to the selected backend."""
+        if flow == "allo":
+            return self.allo_device_type(columns)
+        if flow == "mlir-aie":
+            return self.mlir_devicename
+        raise ValueError(f"Unsupported flow: {flow}")
+
+
+DEVICE_CONFIGS = {
+    "xdna1": DeviceConfig("xdna1", 4, "0", "npu1", "npu"),
+    "xdna2": DeviceConfig("xdna2", 8, "2", "npu2", "npu2"),
+}
+
+
+def device_config(device: str = DEFAULT_DEVICE) -> DeviceConfig:
+    """Return the centralized configuration for a public device name."""
+    try:
+        return DEVICE_CONFIGS[device]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported device: {device}") from exc
+
+
+def default_output_dir(device: str = DEFAULT_DEVICE) -> Path:
+    """Return the isolated default result directory for a device."""
+    if device == "xdna2":
+        return EXPERIMENT_DIR / "results" / "gemm-xdna2"
+    device_config(device)
+    return DEFAULT_OUTPUT_DIR
 
 
 @dataclass(frozen=True)
@@ -83,12 +141,13 @@ def tiling_for(dtype: str) -> tuple[int, int, int]:
     raise ValueError(f"Unsupported datatype: {dtype}")
 
 
-def npu_columns_for(N: int, n: int) -> int:
-    """Select the largest valid NPU1 column count for the N tiling."""
-    for columns in (4, 2, 1):
+def npu_columns_for(N: int, n: int, device: str = DEFAULT_DEVICE) -> int:
+    """Select the largest valid column count for the requested device."""
+    config = device_config(device)
+    for columns in config.column_choices:
         if N % (n * columns) == 0:
             return columns
-    raise ValueError(f"N={N} cannot be distributed with tile n={n} on NPU1")
+    raise ValueError(f"N={N} cannot be distributed with tile n={n} on {device.upper()}")
 
 
 def expand_flows(flow: str) -> tuple[str, ...]:
@@ -111,6 +170,7 @@ def generate_cases(
     matrix_ms: Sequence[int],
     matrix_ns: Sequence[int],
     matrix_ks: Sequence[int],
+    device: str = DEFAULT_DEVICE,
 ) -> list[GemmCase]:
     """Generate the requested Cartesian product in deterministic order."""
     cases = []
@@ -130,7 +190,7 @@ def generate_cases(
                         m,
                         n,
                         k,
-                        npu_columns_for(int(N), n),
+                        npu_columns_for(int(N), n, device),
                     )
                 )
     return cases
@@ -141,14 +201,19 @@ def case_signature(
     warmup: int,
     iterations: int,
     benchmark_on_validation_failure: bool = False,
+    device: str = DEFAULT_DEVICE,
 ) -> dict:
     """Return the fields that determine whether a result is resumable."""
+    config = device_config(device)
     signature = {
         "schema_version": SCHEMA_VERSION,
         **asdict(case),
+        "device": device,
         "warmup": warmup,
         "iterations": iterations,
-        "target": "npu1",
+        "target": config.target,
+        "backend_target": config.backend_target(case.flow, case.npu_columns),
+        "npu2": config.npu2,
         "output_dtype": case.dtype,
     }
 
@@ -325,6 +390,10 @@ def process_results(output_dir: Path) -> tuple[Path, Path, Path]:
     records = load_records(output_dir)
     timing_fields = [
         "case_id",
+        "device",
+        "target",
+        "backend_target",
+        "npu2",
         "flow",
         "status",
         "validation",
@@ -344,6 +413,10 @@ def process_results(output_dir: Path) -> tuple[Path, Path, Path]:
     ]
     summary_fields = [
         "case_id",
+        "device",
+        "target",
+        "backend_target",
+        "npu2",
         "flow",
         "status",
         "validation",
@@ -505,9 +578,16 @@ def log_path(output_dir: Path, case: GemmCase) -> Path:
     return output_dir / "logs" / case.flow / case.dtype / f"{case.case_id}.log"
 
 
-def work_path(case: GemmCase) -> Path:
-    """Return the isolated work directory for a case."""
-    return DEFAULT_WORK_DIR / case.flow / case.case_id
+def work_path(case: GemmCase, device: str = DEFAULT_DEVICE) -> Path:
+    """Return the device-isolated work directory for a case."""
+    device_config(device)
+    return DEFAULT_WORK_DIR / device / case.flow / case.case_id
+
+
+def shared_host_path(device: str = DEFAULT_DEVICE) -> Path:
+    """Return the sweep-scoped instrumented mlir-aie host cache."""
+    device_config(device)
+    return DEFAULT_WORK_DIR / device / "mlir-aie-host"
 
 
 def safe_remove_work(path: Path) -> None:
@@ -544,12 +624,15 @@ def allo_worker_command(
     benchmark_on_validation_failure: bool = False,
     device_columns: int | None = None,
     mapping_rows: int | None = None,
+    device: str = DEFAULT_DEVICE,
 ) -> list[str]:
     """Build the internal Allo worker command."""
     command = [
         sys.executable,
         str(Path(__file__).resolve()),
         "_allo-worker",
+        "--device",
+        device,
         "--dtype",
         case.dtype,
         "--M",
@@ -590,15 +673,20 @@ def mlir_target_suffix(case: GemmCase) -> str:
     )
 
 
-def mlir_make_command(case: GemmCase, mlir_aie_root: Path) -> list[str]:
+def mlir_make_command(
+    case: GemmCase,
+    mlir_aie_root: Path,
+    device: str = DEFAULT_DEVICE,
+) -> list[str]:
     """Build the exact upstream xclbin target for a case."""
+    config = device_config(device)
     makefile = (
         mlir_aie_root
         / "programming_examples/basic/matrix_multiplication/whole_array/Makefile"
     )
     target = f"build/final_{mlir_target_suffix(case)}.xclbin"
     dtype = {"int16": "i16", "int8": "i8", "bf16": "bf16"}[case.dtype]
-    return [
+    command = [
         "make",
         "-f",
         str(makefile),
@@ -612,9 +700,17 @@ def mlir_make_command(case: GemmCase, mlir_aie_root: Path) -> list[str]:
         f"dtype_in={dtype}",
         f"dtype_out={dtype}",
         "b_col_maj=0",
-        "devicename=npu",
-        target,
+        f"devicename={config.mlir_devicename}",
     ]
+    if device == "xdna2" and case.dtype == "bf16":
+        kernel_target = f"build/mm_b_row_maj_{case.m}x{case.k}x{case.n}.o"
+        command.append(
+            "--eval="
+            f"{kernel_target}: PEANOWRAP2P_FLAGS += "
+            "-DAIE_API_EMULATE_BFLOAT16_MMUL_WITH_BFP16"
+        )
+    command.append(target)
+    return command
 
 
 def mlir_host_types(dtype: str) -> tuple[str, str]:
@@ -633,6 +729,7 @@ def ensure_mlir_host(
     log_file: Path,
     commands: list[str],
     env: dict[str, str],
+    device: str = DEFAULT_DEVICE,
 ) -> Path:
     """Build a datatype-specific instrumented copy of the upstream host."""
     matrix_root = (
@@ -642,7 +739,7 @@ def ensure_mlir_host(
     runtime_test_lib = (mlir_aie_root / "runtime_lib/test_lib").resolve()
     source_text = instrument_timing_source(upstream_source.read_text(encoding="utf-8"))
     source_hash = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
-    host_root = DEFAULT_WORK_DIR / "mlir-aie-host" / case.dtype
+    host_root = shared_host_path(device) / case.dtype
     host_source = host_root / "test.cpp"
     executable = host_root / "whole_array_raw_timing"
     manifest_path = host_root / "manifest.json"
@@ -744,6 +841,7 @@ def run_allo_case(
     benchmark_on_validation_failure: bool = False,
     device_columns: int | None = None,
     mapping_rows: int | None = None,
+    device: str = DEFAULT_DEVICE,
 ) -> tuple[list[float], list[str], str]:
     """Run one Allo build, validation, and benchmark in a child process."""
     project = case_work / "allo.prj"
@@ -755,6 +853,7 @@ def run_allo_case(
         benchmark_on_validation_failure,
         device_columns,
         mapping_rows,
+        device,
     )
     commands = [render_command(command)]
     return_code, output = run_command(command, REPO_ROOT, log_file, env)
@@ -787,11 +886,12 @@ def run_mlir_aie_case(
     log_file: Path,
     env: dict[str, str],
     mlir_aie_root: Path,
+    device: str = DEFAULT_DEVICE,
 ) -> tuple[list[float], list[str]]:
     """Run one upstream mlir-aie build, validation, and benchmark."""
     commands: list[str] = []
-    executable = ensure_mlir_host(case, mlir_aie_root, log_file, commands, env)
-    make_command = mlir_make_command(case, mlir_aie_root)
+    executable = ensure_mlir_host(case, mlir_aie_root, log_file, commands, env, device)
+    make_command = mlir_make_command(case, mlir_aie_root, device)
     commands.append(render_command(make_command))
     return_code, _ = run_command(make_command, case_work, log_file, env)
     if return_code != 0:
@@ -853,8 +953,10 @@ def new_record(
     iterations: int,
     output_dir: Path,
     benchmark_on_validation_failure: bool = False,
+    device: str = DEFAULT_DEVICE,
 ) -> dict:
     """Create a running per-case result record."""
+    config = device_config(device)
     case_log = log_path(output_dir, case)
     try:
         stored_log_path = str(case_log.relative_to(output_dir))
@@ -864,12 +966,15 @@ def new_record(
         "schema_version": SCHEMA_VERSION,
         **asdict(case),
         "case_id": case.case_id,
-        "target": "npu1",
+        "device": device,
+        "target": config.target,
+        "backend_target": config.backend_target(case.flow, case.npu_columns),
+        "npu2": config.npu2,
         "output_dtype": case.dtype,
         "warmup": warmup,
         "iterations": iterations,
         "signature": case_signature(
-            case, warmup, iterations, benchmark_on_validation_failure
+            case, warmup, iterations, benchmark_on_validation_failure, device
         ),
         "status": "running",
         "validation": "not_run",
@@ -892,7 +997,7 @@ def benchmark_on_validation_failure_for_case(case: GemmCase, enabled: bool) -> b
 
 def preview_case(case: GemmCase, args: argparse.Namespace) -> None:
     """Print the principal command that a dry run would execute."""
-    case_work = work_path(case)
+    case_work = work_path(case, args.device)
     print(
         f"{case.case_id}: {case.flow} {case.dtype} "
         f"M={case.M} N={case.N} K={case.K} "
@@ -908,15 +1013,19 @@ def preview_case(case: GemmCase, args: argparse.Namespace) -> None:
             args.iterations,
             case_work / "allo.prj",
             benchmark_on_failure,
+            device=args.device,
         )
     else:
-        command = mlir_make_command(case, args.mlir_aie_root)
+        command = mlir_make_command(case, args.mlir_aie_root, args.device)
     print(f"  {render_command(command)}")
 
 
 def run_experiments(args: argparse.Namespace) -> int:
     """Execute selected cases and regenerate result tables."""
-    cases = generate_cases(args.flow, args.dtypes, args.Ms, args.Ns, args.Ks)
+    config = device_config(args.device)
+    cases = generate_cases(
+        args.flow, args.dtypes, args.Ms, args.Ns, args.Ks, args.device
+    )
     if args.dry_run:
         for case in cases:
             preview_case(case, args)
@@ -925,146 +1034,165 @@ def run_experiments(args: argparse.Namespace) -> int:
 
     flows = expand_flows(args.flow)
     check_environment(flows, args.mlir_aie_root)
-    output_dir = args.output_dir.resolve()
+    output_dir = (args.output_dir or default_output_dir(args.device)).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     environment = os.environ.copy()
-    environment["NPU2"] = "0"
+    environment["NPU2"] = config.npu2
     failures = 0
     interrupted = False
-    for index, case in enumerate(cases, start=1):
-        result_file = record_path(output_dir, case)
-        benchmark_on_failure = benchmark_on_validation_failure_for_case(
-            case, args.benchmark_on_validation_failure
-        )
-        signature = case_signature(
-            case, args.warmup, args.iterations, benchmark_on_failure
-        )
-        if not args.rerun and is_resumable(result_file, signature):
-            print(f"[{index}/{len(cases)}] SKIP {case.case_id} (completed)")
-            continue
-
-        print(f"[{index}/{len(cases)}] RUN  {case.case_id}")
-        case_work = work_path(case)
-        case_work.mkdir(parents=True, exist_ok=True)
-        case_log = log_path(output_dir, case)
-        case_log.parent.mkdir(parents=True, exist_ok=True)
-        case_log.write_text("", encoding="utf-8")
-        record = new_record(
-            case, args.warmup, args.iterations, output_dir, benchmark_on_failure
-        )
-        if case.flow == "allo":
-            planned_command = allo_worker_command(
+    try:
+        for index, case in enumerate(cases, start=1):
+            result_file = record_path(output_dir, case)
+            benchmark_on_failure = benchmark_on_validation_failure_for_case(
+                case, args.benchmark_on_validation_failure
+            )
+            signature = case_signature(
                 case,
                 args.warmup,
                 args.iterations,
-                case_work / "allo.prj",
                 benchmark_on_failure,
+                args.device,
             )
-        else:
-            planned_command = mlir_make_command(case, args.mlir_aie_root)
-        record["commands"] = [render_command(planned_command)]
-        atomic_write_json(result_file, record)
-        started = time.monotonic()
-        try:
+            case_work = work_path(case, args.device)
+            if not args.rerun and is_resumable(result_file, signature):
+                if not args.keep_builds:
+                    safe_remove_work(case_work)
+                print(f"[{index}/{len(cases)}] SKIP {case.case_id} (completed)")
+                continue
+
+            print(f"[{index}/{len(cases)}] RUN  {case.case_id}")
+            safe_remove_work(case_work)
+            case_work.mkdir(parents=True, exist_ok=True)
+            case_log = log_path(output_dir, case)
+            case_log.parent.mkdir(parents=True, exist_ok=True)
+            case_log.write_text("", encoding="utf-8")
+            record = new_record(
+                case,
+                args.warmup,
+                args.iterations,
+                output_dir,
+                benchmark_on_failure,
+                args.device,
+            )
             if case.flow == "allo":
-                timings, commands, validation = run_allo_case(
+                planned_command = allo_worker_command(
                     case,
                     args.warmup,
                     args.iterations,
-                    case_work,
-                    case_log,
-                    environment,
+                    case_work / "allo.prj",
                     benchmark_on_failure,
+                    device=args.device,
                 )
             else:
-                timings, commands = run_mlir_aie_case(
-                    case,
-                    args.warmup,
-                    args.iterations,
-                    case_work,
-                    case_log,
-                    environment,
-                    args.mlir_aie_root,
+                planned_command = mlir_make_command(
+                    case, args.mlir_aie_root, args.device
                 )
-                validation = "passed"
-            if validation == "failed":
+            record["commands"] = [render_command(planned_command)]
+            atomic_write_json(result_file, record)
+            started = time.monotonic()
+            try:
+                if case.flow == "allo":
+                    timings, commands, validation = run_allo_case(
+                        case,
+                        args.warmup,
+                        args.iterations,
+                        case_work,
+                        case_log,
+                        environment,
+                        benchmark_on_failure,
+                        device=args.device,
+                    )
+                else:
+                    timings, commands = run_mlir_aie_case(
+                        case,
+                        args.warmup,
+                        args.iterations,
+                        case_work,
+                        case_log,
+                        environment,
+                        args.mlir_aie_root,
+                        args.device,
+                    )
+                    validation = "passed"
+                if validation == "failed":
+                    record.update(
+                        {
+                            "status": "failed",
+                            "validation": "failed",
+                            "timed_validation_failure": True,
+                            "timings_us": timings,
+                            "commands": commands,
+                            "error": (
+                                "Output validation failed; timings were recorded "
+                                "because --benchmark-on-validation-failure was enabled"
+                            ),
+                        }
+                    )
+                    print(f"TIMED VALIDATION FAILURE {case.case_id}", file=sys.stderr)
+                else:
+                    record.update(
+                        {
+                            "status": "success",
+                            "validation": "passed",
+                            "timings_us": timings,
+                            "commands": commands,
+                        }
+                    )
+            except KeyboardInterrupt:
+                interrupted = True
+                record.update(
+                    {
+                        "status": "failed",
+                        "validation": "interrupted",
+                        "error": "Interrupted by user",
+                    }
+                )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                failures += 1
+                details = traceback.format_exc()
+                with case_log.open("a", encoding="utf-8") as log:
+                    log.write(f"\n{details}")
                 record.update(
                     {
                         "status": "failed",
                         "validation": "failed",
-                        "timed_validation_failure": True,
-                        "timings_us": timings,
-                        "commands": commands,
-                        "error": (
-                            "Output validation failed; timings were recorded because "
-                            "--benchmark-on-validation-failure was enabled"
-                        ),
+                        "error": str(exc),
                     }
                 )
-                print(f"TIMED VALIDATION FAILURE {case.case_id}", file=sys.stderr)
-            else:
-                record.update(
-                    {
-                        "status": "success",
-                        "validation": "passed",
-                        "timings_us": timings,
-                        "commands": commands,
-                    }
-                )
-        except KeyboardInterrupt:
-            interrupted = True
-            record.update(
-                {
-                    "status": "failed",
-                    "validation": "interrupted",
-                    "error": "Interrupted by user",
-                }
-            )
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            failures += 1
-            details = traceback.format_exc()
-            with case_log.open("a", encoding="utf-8") as log:
-                log.write(f"\n{details}")
-            record.update(
-                {
-                    "status": "failed",
-                    "validation": "failed",
-                    "error": str(exc),
-                }
-            )
-            print(f"FAILED {case.case_id}: {exc}", file=sys.stderr)
-        finally:
-            record["elapsed_seconds"] = time.monotonic() - started
-            record["finished_at"] = utc_now()
-            atomic_write_json(result_file, record)
+                print(f"FAILED {case.case_id}: {exc}", file=sys.stderr)
+            finally:
+                record["elapsed_seconds"] = time.monotonic() - started
+                record["finished_at"] = utc_now()
+                atomic_write_json(result_file, record)
+                if not args.keep_builds:
+                    safe_remove_work(case_work)
 
-        completed = record["status"] == "success" or is_timed_validation_failure(record)
-        if completed and not args.keep_builds:
-            safe_remove_work(case_work)
-        if interrupted:
-            failures += 1
-            break
-        if (
-            record["status"] == "failed"
-            and not is_timed_validation_failure(record)
-            and args.fail_fast
-        ):
-            break
+            if interrupted:
+                failures += 1
+                break
+            if (
+                record["status"] == "failed"
+                and not is_timed_validation_failure(record)
+                and args.fail_fast
+            ):
+                break
 
-    paths = process_results(output_dir)
-    print("Generated result tables:")
-    for path in paths:
-        print(f"  {path}")
-    if not args.keep_builds and failures == 0:
-        shared_host_root = DEFAULT_WORK_DIR / "mlir-aie-host"
+        paths = process_results(output_dir)
+        print("Generated result tables:")
+        for path in paths:
+            print(f"  {path}")
+        return 1 if failures else 0
+    finally:
+        shared_host_root = shared_host_path(args.device)
         if shared_host_root.exists():
             safe_remove_work(shared_host_root)
-    return 1 if failures else 0
 
 
 def print_case_list(args: argparse.Namespace) -> int:
     """Print resolved configurations without touching the NPU."""
-    cases = generate_cases(args.flow, args.dtypes, args.Ms, args.Ns, args.Ks)
+    cases = generate_cases(
+        args.flow, args.dtypes, args.Ms, args.Ns, args.Ks, args.device
+    )
     for case in cases:
         print(
             f"{case.case_id}: flow={case.flow} dtype={case.dtype} "
@@ -1077,6 +1205,7 @@ def print_case_list(args: argparse.Namespace) -> int:
 
 def add_selection_arguments(parser: argparse.ArgumentParser) -> None:
     """Add flow and Cartesian-product selection flags."""
+    parser.add_argument("--device", choices=DEVICE_CHOICES, default=DEFAULT_DEVICE)
     parser.add_argument("--flow", choices=(*FLOW_ORDER, "both"), required=True)
     parser.add_argument(
         "--dtype",
@@ -1131,7 +1260,12 @@ def build_parser() -> argparse.ArgumentParser:
     add_selection_arguments(run_parser)
     run_parser.add_argument("--warmup", type=int, default=20)
     run_parser.add_argument("--iterations", type=int, default=200)
-    run_parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    run_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="result directory (device-specific when omitted)",
+    )
     run_parser.add_argument(
         "--benchmark-on-validation-failure",
         action="store_true",
@@ -1171,10 +1305,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="regenerate CSV files from per-case JSON records",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    process_parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    process_parser.add_argument(
+        "--device", choices=DEVICE_CHOICES, default=DEFAULT_DEVICE
+    )
+    process_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="result directory (device-specific when omitted)",
+    )
 
     def process_handler(args: argparse.Namespace) -> int:
-        paths = process_results(args.output_dir)
+        output_dir = args.output_dir or default_output_dir(args.device)
+        paths = process_results(output_dir)
         for path in paths:
             print(path)
         return 0
@@ -1203,11 +1346,12 @@ def validate_cli_arguments(args: argparse.Namespace) -> None:
 def build_allo_worker_parser() -> argparse.ArgumentParser:
     """Build the internal parser used to isolate Allo subprocess output."""
     parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--device", choices=DEVICE_CHOICES, required=True)
     parser.add_argument("--dtype", choices=DEFAULT_DTYPES, required=True)
     for name in ("M", "N", "K", "m", "n", "k"):
         parser.add_argument(f"--{name}", type=int, required=True)
-    parser.add_argument("--columns", type=int, choices=(1, 2, 4), required=True)
-    parser.add_argument("--device-columns", type=int, choices=(1, 2, 4))
+    parser.add_argument("--columns", type=int, choices=(1, 2, 4, 8), required=True)
+    parser.add_argument("--device-columns", type=int, choices=(1, 2, 4, 8))
     parser.add_argument("--rows", type=int, choices=(1, 2, 4), default=4)
     parser.add_argument("--warmup", type=int, required=True)
     parser.add_argument("--iterations", type=int, required=True)
@@ -1219,6 +1363,7 @@ def build_allo_worker_parser() -> argparse.ArgumentParser:
 def allo_worker_main(argv: Sequence[str]) -> int:
     """Build, validate, and benchmark one Allo GEMM configuration."""
     args = build_allo_worker_parser().parse_args(argv)
+    config = device_config(args.device)
     import allo.dataflow as df
 
     if args.benchmark_on_validation_failure and args.dtype != "bf16":
@@ -1247,6 +1392,7 @@ def allo_worker_main(argv: Sequence[str]) -> int:
         row_num=args.rows,
     )
     os.environ["ENABLE_AGGRESSIVE_PORT_UTILIZATION_PATCH"] = "1"
+    os.environ["NPU2"] = config.npu2
     module = df.build(
         top,
         project=str(args.project),
@@ -1255,7 +1401,7 @@ def allo_worker_main(argv: Sequence[str]) -> int:
         profile=True,
         warmup=args.warmup,
         num_iters=args.iterations,
-        device_type=f"npu1_{args.device_columns or args.columns}col",
+        device_type=config.allo_device_type(args.device_columns or args.columns),
     )
 
     host_source = args.project / "test.cpp"

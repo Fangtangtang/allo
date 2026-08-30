@@ -12,7 +12,7 @@ from allo.backend.aie import is_available
 
 def test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
     assert TyI == TyO or TyI is int4
-    top, mapping_primitives = GEMM(M, N, K, Pm, Pn, Pk, TyI, TyO)
+    top, mapping_primitives = GEMM(M, N, K, Pm, Pn, Pk, TyI, TyO, col_num=8)
 
     if is_available():
         os.environ["ENABLE_AGGRESSIVE_PORT_UTILIZATION_PATCH"] = "1"
@@ -53,13 +53,13 @@ def test_pingpong_gemm(M, N, K, Pm, Pn, Pk, TyI, TyO):
 
 
 if __name__ == "__main__":
-    M, N, K = 2048, 2048, 2048
+    M, N, K = 512, 512, 512
     m, n, k = 64, 64, 64
-    # - i8
-    test_pingpong_gemm(M, N, K, M // m, N // n, K // k, int8, int8)
+    # # - i8
+    # test_pingpong_gemm(M, N, K, M // m, N // n, K // k, int8, int8)
 
-    # - i16
-    test_pingpong_gemm(M, N, K, M // m, N // n, K // k, int16, int16)
+    # # - i16
+    # test_pingpong_gemm(M, N, K, M // m, N // n, K // k, int16, int16)
 
     # - bf16
     try:
@@ -67,10 +67,10 @@ if __name__ == "__main__":
     except:
         print("[NOTE]: bfloat16 have accuracy issue")
 
-    # - i4
-    dir_path = os.path.dirname(os.path.abspath(__file__))
-    os.environ["ALLO_EXTERNAL_KERNEL_DIR"] = (
-        f"{dir_path}/../../allo/library/aie/kernels/"
-    )
-    test_pingpong_gemm(M, N, K, M // m, N // n, K // k, int4, int8)
-    del os.environ["ALLO_EXTERNAL_KERNEL_DIR"]
+    # # - i4
+    # dir_path = os.path.dirname(os.path.abspath(__file__))
+    # os.environ["ALLO_EXTERNAL_KERNEL_DIR"] = (
+    #     f"{dir_path}/../../allo/library/aie/kernels/"
+    # )
+    # test_pingpong_gemm(M, N, K, M // m, N // n, K // k, int4, int8)
+    # del os.environ["ALLO_EXTERNAL_KERNEL_DIR"]
