@@ -805,7 +805,6 @@ def simplify_matmul_accumulate(function: allo_func_d.FuncOp):
                     if acc_op.operands[0] != output
                     else acc_op.operands[1]
                 )
-                print(acc_op.operands[-1])
                 if (
                     getattr(acc_op.operands[-1].owner, "name", None) == "memref.alloc"
                 ):

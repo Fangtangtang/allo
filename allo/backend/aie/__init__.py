@@ -58,6 +58,180 @@ def is_available():
     return "MLIR_AIE_INSTALL_DIR" in os.environ
 
 
+def _as_operation(op):
+    """Return the generic MLIR operation for an operation or operation view."""
+    return getattr(op, "operation", op)
+
+
+def _is_nested_in_operation(op, ancestor):
+    """Return whether ``op`` is ``ancestor`` or is nested under it."""
+    op = _as_operation(op)
+    ancestor = _as_operation(ancestor)
+    while op is not None:
+        if op == ancestor:
+            return True
+        op = getattr(op, "parent", None)
+    return False
+
+
+def _get_direct_child(op, ancestor):
+    """Return the direct child of ``ancestor`` that contains ``op``."""
+    op = _as_operation(op)
+    ancestor = _as_operation(ancestor)
+    while op is not None:
+        parent = getattr(op, "parent", None)
+        if parent == ancestor:
+            return op
+        op = parent
+    return None
+
+
+def _promote_loop_carried_layout_transformations(function):
+    """Promote inverse layout-transform round trips out of affine loops."""
+
+    def get_value_owner(value):
+        owner = value.owner
+        # Operation results are owned by operations; block arguments are owned
+        # by blocks, whose owner is the enclosing operation.
+        if getattr(owner, "name", None) is None:
+            owner = owner.owner
+        return _as_operation(owner)
+
+    def match_tail_pairs(loop):
+        if len(loop.regions) != 1 or len(loop.regions[0].blocks) != 1:
+            return [], []
+        operations = [_as_operation(op) for op in loop.regions[0].blocks[0]]
+        if operations and operations[-1].name == "affine.yield":
+            operations.pop()
+
+        # Vectorization can leave trivially dead operations after the
+        # accumulator copy. Canonicalization removes them later, so ignore
+        # only these exact no-op forms when identifying the effective tail.
+        trailing_noops = []
+        while operations:
+            trailing_op = operations[-1]
+            is_noop_copy = (
+                trailing_op.name == "memref.copy"
+                and trailing_op.operands[0] == trailing_op.operands[1]
+            )
+            is_dead_alloc = trailing_op.name == "memref.alloc" and all(
+                not list(result.uses) for result in trailing_op.results
+            )
+            if not (is_noop_copy or is_dead_alloc):
+                break
+            trailing_noops.append(operations.pop())
+        operation_indices = {op: idx for idx, op in enumerate(operations)}
+        pairs = []
+        tail_idx = len(operations) - 1
+
+        while tail_idx >= 1:
+            copy_op = operations[tail_idx]
+            from_op = operations[tail_idx - 1]
+            if (
+                copy_op.name != "memref.copy"
+                or from_op.name != "allo.transform_layout"
+                or copy_op.operands[0] != from_op.result
+            ):
+                break
+
+            source = copy_op.operands[1]
+            to_candidates = [
+                op
+                for op in operations[: tail_idx - 1]
+                if op.name == "allo.transform_layout"
+                and op.operands[0] == source
+                and op.result == from_op.operands[0]
+                and is_inverse_transform_layout(from_op, op)
+            ]
+            if len(to_candidates) != 1:
+                break
+            to_op = to_candidates[0]
+
+            if _is_nested_in_operation(get_value_owner(source), loop):
+                break
+
+            source_uses_are_safe = True
+            for use in source.uses:
+                use_owner = _as_operation(use.owner)
+                if not _is_nested_in_operation(use_owner, loop):
+                    continue
+                if (
+                    use_owner.name == "memref.copy"
+                    and use_owner.operands[0] == use_owner.operands[1]
+                ):
+                    continue
+                if not (
+                    (use_owner == to_op and use.operand_number == 0)
+                    or (use_owner == copy_op and use.operand_number == 1)
+                ):
+                    source_uses_are_safe = False
+                    break
+            if not source_uses_are_safe:
+                break
+
+            from_uses = list(from_op.result.uses)
+            if not (
+                len(from_uses) == 1
+                and _as_operation(from_uses[0].owner) == copy_op
+                and from_uses[0].operand_number == 0
+            ):
+                break
+
+            to_result_uses_are_safe = True
+            for use in to_op.result.uses:
+                use_owner = _as_operation(use.owner)
+                direct_child = _get_direct_child(use_owner, loop)
+                if (
+                    direct_child is None
+                    or direct_child not in operation_indices
+                    or operation_indices[direct_child] > operation_indices[from_op]
+                ):
+                    to_result_uses_are_safe = False
+                    break
+            if not to_result_uses_are_safe:
+                break
+
+            pairs.append((to_op, from_op, copy_op))
+            tail_idx -= 2
+
+        return list(reversed(pairs)), trailing_noops
+
+    def promote_from_loop(loop):
+        pairs, trailing_noops = match_tail_pairs(loop)
+        if not pairs:
+            return
+
+        for noop in trailing_noops:
+            noop.erase()
+
+        loop = _as_operation(loop)
+        for to_op, _, _ in pairs:
+            to_op.move_before(loop)
+
+        insert_after = loop
+        for _, from_op, copy_op in pairs:
+            from_op.move_after(insert_after)
+            copy_op.move_after(from_op)
+            result_use = allo_d.get_last_use_in_function(copy_op.operands[1], function)
+            if getattr(result_use, "name", None) == "allo.stream_put":
+                result_use.operands[1] = from_op.result
+                insert_after = from_op
+                copy_op.erase()
+            else:
+                insert_after = copy_op
+
+    def visit(op):
+        op = _as_operation(op)
+        for region in op.regions:
+            for block in region.blocks:
+                for inner_op in list(block.operations):
+                    visit(inner_op)
+        if op.name == "affine.for":
+            promote_from_loop(op)
+
+    visit(function)
+
+
 class AIE_MLIRModule:
     # ############################################################
     # Construction
@@ -478,6 +652,7 @@ class AIE_MLIRModule:
             Optimize layout transformation operations
                 - some can be 'push out of the function' and done at transfer time (e.g. with dma)
                 - some contiguous inverse transformation can be safely removed.
+                - loop-carried inverse transformations can be promoted out of affine loops.
             """
             node = self.virtual_computation_graph.nodes[
                 func.attributes["sym_name"].value
@@ -620,13 +795,9 @@ class AIE_MLIRModule:
                     else:
                         op = allo_d.get_last_use_in_function(arg, function)
                         is_dtensor = sample_stream is None
-                        operand_idx = 0 if is_dtensor else 1
+                        operand_idx = 1
                         if (
-                            (
-                                getattr(op, "name", None) == "memref.copy"
-                                if is_dtensor
-                                else getattr(op, "name", None) == "allo.stream_put"
-                            )
+                            getattr(op, "name", None) == "allo.stream_put"
                             and op.operands[operand_idx] not in func.arguments
                             and getattr(op.operands[operand_idx].owner, "name", None)
                             == "allo.transform_layout"
@@ -679,6 +850,7 @@ class AIE_MLIRModule:
                                 )
                                 transform_layout_op.erase()
 
+            _promote_loop_carried_layout_transformations(function)
             optimize_layout_transformation_recursive(function)
             for op in dead_ops:
                 op.erase()
