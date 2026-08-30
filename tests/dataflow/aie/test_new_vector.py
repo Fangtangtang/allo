@@ -133,7 +133,7 @@ def test_vector_vector_bf16_add():
         print("PASSED!")
     else:
         print("MLIR_AIE_INSTALL_DIR unset. Skipping AIE backend test.")
-    
+
 
 def test_vector_vector_mul():
     # https://github.com/Xilinx/mlir-aie/tree/main/programming_examples/basic/vector_vector_mul

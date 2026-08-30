@@ -71,7 +71,9 @@ def test_gemm_2D_v2():
 
     @df.region()
     def top(A: TyI[M, K], B: TyI[K, N], C: TyO[M, N]):
-        @df.kernel(mapping=[Axis.Spatial(P0, "x"), Axis.Spatial(P1, "y")], args=[A, B, C])
+        @df.kernel(
+            mapping=[Axis.Spatial(P0, "x"), Axis.Spatial(P1, "y")], args=[A, B, C]
+        )
         def gemm(
             local_A: TyI[M, K] @ LyA, local_B: TyI[K, N] @ LyB, local_C: TyO[M, N] @ LyC
         ):
@@ -122,11 +124,13 @@ def test_pingpong_gemm_2x2x2():
                 C_in[:, :] = pipe[pk - 1, pm, pn].get()
             with allo.meta_else():
                 C_in[:, :] = 0
-            C_out: Ty[Mt, Nt] = allo.add(allo.matmul(local_A.get(), local_B.get()), C_in)
+            C_out: Ty[Mt, Nt] = allo.add(
+                allo.matmul(local_A.get(), local_B.get()), C_in
+            )
             with allo.meta_if(pk < Pk - 1):
                 pipe[pk, pm, pn].put(C_out)
             with allo.meta_elif(pk == Pk - 1):
-                local_C.put(C_out) 
+                local_C.put(C_out)
 
     if is_available():
         mod = df.build(
@@ -196,7 +200,9 @@ def test_pingpong_gemm_2x2x2_partial_chain():
                 C_in[:, :] = pipe[pk - 1, pm, pn].get()
             with allo.meta_else():
                 C_in[:, :] = 0
-            C_out: Ty[Mt, Nt] = allo.add(allo.matmul(local_A.get(), local_B.get()), C_in)
+            C_out: Ty[Mt, Nt] = allo.add(
+                allo.matmul(local_A.get(), local_B.get()), C_in
+            )
             with allo.meta_if(pk < Pk - 1):
                 pipe[pk, pm, pn].put(C_out)
             with allo.meta_elif(pk == Pk - 1):
@@ -246,7 +252,9 @@ def test_pingpong_gemm_1x1x4():
                 C_in[:, :] = pipe[pk - 1, pm, pn].get()
             with allo.meta_else():
                 C_in[:, :] = 0
-            C_out: Ty[Mt, Nt] = allo.add(allo.matmul(local_A.get(), local_B.get()), C_in)
+            C_out: Ty[Mt, Nt] = allo.add(
+                allo.matmul(local_A.get(), local_B.get()), C_in
+            )
             with allo.meta_if(pk < Pk - 1):
                 pipe[pk, pm, pn].put(C_out)
             with allo.meta_elif(pk == Pk - 1):
@@ -310,7 +318,9 @@ def test_pingpong_gemm_2x2x4():
                 C_in[:, :] = pipe[pk - 1, pm, pn].get()
             with allo.meta_else():
                 C_in[:, :] = 0
-            C_out: Ty[Mt, Nt] = allo.add(allo.matmul(local_A.get(), local_B.get()), C_in)
+            C_out: Ty[Mt, Nt] = allo.add(
+                allo.matmul(local_A.get(), local_B.get()), C_in
+            )
             with allo.meta_if(pk < Pk - 1):
                 pipe[pk, pm, pn].put(C_out)
             with allo.meta_elif(pk == Pk - 1):
@@ -397,7 +407,9 @@ def test_pingpong_gemm_4x4x4():
                 C_in[:, :] = pipe[pk - 1, pm, pn].get()
             with allo.meta_else():
                 C_in[:, :] = 0
-            C_out: Ty[Mt, Nt] = allo.add(allo.matmul(local_A.get(), local_B.get()), C_in)
+            C_out: Ty[Mt, Nt] = allo.add(
+                allo.matmul(local_A.get(), local_B.get()), C_in
+            )
             with allo.meta_if(pk < Pk - 1):
                 pipe[pk, pm, pn].put(C_out)
             with allo.meta_elif(pk == Pk - 1):

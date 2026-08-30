@@ -128,7 +128,9 @@ def test_gemm_2D():
         def gemm(
             local_A: TyI[M, K] @ LyA, local_B: TyI[K, N] @ LyB, local_C: TyO[M, N] @ LyC
         ):
-            local_C_part: TyO[M // P0, N // P1] = allo.matmul(local_A.get(), local_B.get())
+            local_C_part: TyO[M // P0, N // P1] = allo.matmul(
+                local_A.get(), local_B.get()
+            )
             local_C.put(local_C_part)
 
     if is_available():
@@ -159,7 +161,9 @@ def test_gemm_2D_mixed():
         def gemm(
             local_A: TyI[M, K] @ LyA, local_B: TyI[K, N] @ LyB, local_C: TyO[M, N] @ LyC
         ):
-            local_C_part: TyO[M // P0, N // P1] = allo.matmul(local_A.get(), local_B.get())
+            local_C_part: TyO[M // P0, N // P1] = allo.matmul(
+                local_A.get(), local_B.get()
+            )
             local_C.put(local_C_part)
 
     if is_available():
@@ -225,7 +229,7 @@ if __name__ == "__main__":
     test_matrix_matrix_add()
     test_gemm_1D_mixed()
     test_gemm_2D_mixed()
-    
+
     test_gemm_1D()
     test_gemm_2D()
 

@@ -26,7 +26,7 @@ def test_gemm():
 
     LyA = [S(0), S(2)]
     LyB = [S(2), S(1)]
-    LyC = [S(0), S(1)]
+    LyC = [S(0), S(1)] # not shard on temporal dim -> only access once
 
     @df.region()
     def top(A: TyI[M, K], B: TyI[K, N], C: TyO[M, N]):
