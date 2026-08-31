@@ -60,7 +60,7 @@ def test_gemm():
 
 def test_mapping_gemm():
     TyI, TyO = int16, int16
-    M, N, K = 1024, 128, 1024
+    M, N, K = 1024, 1024, 1024
     Pm, Pn, Pk = M // 64, N // 64, K // 64
 
     Sm = Axis.Spatial(Pm, name="m")
@@ -90,7 +90,7 @@ def test_mapping_gemm():
             C_port.put(acc)
 
     if is_available():
-        row_num, col_num = 4, 1
+        row_num, col_num = 4, 4
         mapping_primitives = []
         for i in range(row_num):
             for j in range(col_num):
