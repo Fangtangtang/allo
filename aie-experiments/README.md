@@ -352,6 +352,192 @@ the quartiles are retained and different values fall outside the zero-width
 fence. Run the `process` command at any time to reproduce the filtered and
 summary tables from the JSON records.
 
+## End-to-end attention experiment
+
+[`attention.py`](attention.py) compares the four-module unfused bf16 attention
+baseline with the fused implementation from
+[`examples/aie/attention.py`](../examples/aie/attention.py). Both use one head,
+`HEAD_DIM=64`, and sequence lengths `64,128,256,512,1024,2048`. FlashAttention
+uses 32x32 query/KV chunks. XDNA1 uses its 4x4 compute array and XDNA2 uses its
+whole 4x8 compute array. The unfused baseline at sequence length 2048 is marked
+infeasible and is not built or executed on either device.
+
+### Docker setup
+
+Run the experiment in the documented AIE image. From the repository root:
+
+```bash
+docker pull shihanfang/allo-ci:aie-v1.0
+docker run --rm -it \
+  --device /dev/accel/accel0:/dev/accel/accel0 \
+  --ulimit memlock=-1 \
+  -v "$(pwd):/ryzers/allo" \
+  -w /ryzers/allo \
+  shihanfang/allo-ci:aie-v1.0 bash
+```
+
+Inside the container, activate and build Allo:
+
+```bash
+conda activate allo
+rm -rf mlir/build
+python3 -m pip install -v -e . --no-build-isolation
+```
+
+Only `run` needs the mounted NPU. Listing cases, dry runs, result processing,
+and plotting existing data do not access hardware.
+
+### Commands and usage
+
+List all twelve default cases for either device:
+
+```bash
+python3 aie-experiments/attention.py list
+python3 aie-experiments/attention.py list --device xdna2
+```
+
+Preview commands without compiling or creating files, then run a short XDNA2
+smoke benchmark:
+
+```bash
+python3 aie-experiments/attention.py run --device xdna2 --dry-run
+python3 aie-experiments/attention.py run \
+  --device xdna2 --implementation both --seq-len 64 \
+  --warmup 1 --iterations 5
+```
+
+Run the complete XDNA1 or XDNA2 sweep:
+
+```bash
+python3 aie-experiments/attention.py run
+python3 aie-experiments/attention.py run --device xdna2
+```
+
+Select an implementation and one or more sequence lengths:
+
+```bash
+python3 aie-experiments/attention.py run \
+  --implementation baseline --seq-len 64 128 256
+python3 aie-experiments/attention.py run \
+  --device xdna2 --implementation flash --seq-len 512 1024 2048
+```
+
+Matching current-version successful records, timed baseline validation failures,
+and the infeasible baseline/2048 record resume automatically. Runnable legacy
+records without paired NPU samples are not resumable and must be measured again;
+use `--rerun` to force replacement of selected records. Retain generated projects
+and their `test.cpp` files with `--keep-builds`:
+
+```bash
+python3 aie-experiments/attention.py run \
+  --device xdna2 --seq-len 1024 --rerun
+python3 aie-experiments/attention.py run \
+  --implementation both --seq-len 64 --keep-builds --rerun
+```
+
+Regenerate aggregate CSV files and create the device-specific bar plot:
+
+```bash
+python3 aie-experiments/attention.py process
+python3 aie-experiments/attention.py process --device xdna2
+python3 aie-experiments/plot_attention.py
+python3 aie-experiments/plot_attention.py --device xdna2
+```
+
+Override both result and plot locations explicitly:
+
+```bash
+python3 aie-experiments/attention.py run \
+  --seq-len 64 --output-dir /tmp/attention-results
+python3 aie-experiments/attention.py process \
+  --output-dir /tmp/attention-results
+python3 aie-experiments/plot_attention.py \
+  --summary /tmp/attention-results/summary.csv \
+  --output-dir /tmp/attention-plots
+```
+
+XDNA1 results default to `results/attention`, while XDNA2 results default to
+`results/attention-xdna2`. Each root contains resumable `cases/`, `logs/`,
+`raw_timings.csv`, `filtered_timings.csv`, and `summary.csv`. Per-case JSON keeps
+E2E samples in `timings_us`, generated-host NPU samples in `npu_timings_us`, and
+the timing-version, NPU scope, and aggregation provenance. Raw and filtered CSV
+rows retain `time_us` as E2E and add `npu_time_us` and the derived
+`extra_time_us`. `summary.csv` reports raw and filtered mean, median, minimum,
+maximum, and population standard deviation for E2E, NPU, and extra time.
+
+The plotter writes `attention_e2e.png` under `plots/` or `plots/xdna2/`.
+Override result roots with `--output-dir`; the plotter additionally accepts
+`--summary` and its own `--output-dir`.
+
+The plot is one grouped, stacked bar chart on a linear millisecond axis. Each
+sequence length has an unfused baseline bar and a fused FlashAttention bar. The
+dark lower segment is filtered mean NPU time, while the light upper segment is
+filtered mean extra time. Both segments use shades of the implementation's
+color, and the stack top is filtered mean E2E time. The legend contains only
+`Unfused` and `Fused`; the infeasible marker is intentionally omitted. The
+plotter requires both implementations at all six lengths, validates device,
+mapping, and timing provenance, and rejects rows without paired component
+means. Baseline/2048 has no timing, so a red cross replaces that bar.
+
+### Timing and validation
+
+Each runnable case performs one check against a stable float32 reference using
+the exact bf16 inputs and `atol=5e-2`. A baseline comparison failure is recorded
+with `status: "failed"`, `validation: "failed"`, and
+`timed_validation_failure: true`, then still runs all requested warmups and
+timed samples. Those complete samples participate in filtering and plots.
+FlashAttention validation failures remain hard failures and are not benchmarked.
+Baseline/2048 is recorded as `status: "infeasible"` with no validation or
+timing. Defaults are 20 unrecorded warmups and 100 recorded complete calls.
+
+E2E timing uses Python `time.perf_counter_ns()`. Compilation, input generation,
+output allocation, and reference computation are outside this timer. For the
+baseline it starts immediately before score GEMM and ends after value GEMM
+returns; for FlashAttention it surrounds the complete fused module call. Thus
+E2E includes module host-process launch, file and buffer transfers, xclbin
+loading, XRT device/context and buffer creation, NPU execution and waits, output
+synchronization, and copying results back to NumPy. The baseline intentionally
+pays these costs for all four module calls.
+
+NPU timing is parsed without backend changes from each generated `test.cpp` line
+`NPU execution time: <value>us`. In that host program, the interval starts at
+`auto start = ...` immediately before `kernel(...)` and ends at `auto end = ...`
+immediately after `run.wait()`. It therefore excludes setup and host-to-device
+synchronization before the launch and device-to-host synchronization after the
+wait. A fused attention uses its one kernel interval. An unfused attention sums
+the four ordered score, scale, softmax, and value-GEMM intervals.
+
+The runner requires exactly
+`(1 validation + warmups + iterations) * kernel_count` generated-host values,
+discards the validation and warmup values, and pairs the remaining values with
+the Python E2E samples. Every NPU value must be positive and no greater than its
+paired E2E value; missing, malformed, excess, or inconsistent output fails the
+case. `extra_time_us` is derived per sample as `E2E - NPU`, so it contains all
+non-NPU work inside the E2E boundary.
+
+The inclusive 1.5-IQR Tukey mask is calculated only from E2E samples and applied
+to the paired E2E, NPU, and extra components together. Consequently, filtered
+means preserve `E2E = NPU + extra`. Legacy JSON and CSV data remain readable by
+the processor with empty component fields, but the timing-version signature
+prevents resume and the plotter rejects legacy summaries until the complete
+sweep has been regenerated.
+
+### Attention flags
+
+| Flag | Commands | Meaning |
+| --- | --- | --- |
+| `--device {xdna1,xdna2}` | `run`, `list`, `process`, plotter | Select the device and its default paths; defaults to `xdna1`. |
+| `--implementation {baseline,flash,both}` | `run`, `list` | Select the four-module baseline, fused FlashAttention, or both; defaults to `both`. |
+| `--seq-len SIZE [SIZE ...]` | `run`, `list` | Select from `64 128 256 512 1024 2048`; defaults to all six. Baseline/2048 produces an infeasible record without execution. |
+| `--warmup COUNT` | `run` | Complete unrecorded calls per case; defaults to `20`. |
+| `--iterations COUNT` | `run` | Complete recorded calls per case; defaults to `100`. |
+| `--output-dir PATH` | `run`, `process`, plotter | Override the result or plot directory. |
+| `--rerun` | `run` | Replace matching completed records. |
+| `--keep-builds` | `run` | Retain per-case Allo projects and artifacts. |
+| `--fail-fast` | `run` | Stop after the first hard failure. Timed baseline validation failures continue. |
+| `--dry-run` | `run` | Print commands without checks, compilation, hardware access, or writes. |
+| `--summary PATH` | plotter | Override the device-specific summary CSV. |
+
 ## Partial-NPU bf16 GEMM experiment
 
 [`gemm_partial_npu.py`](gemm_partial_npu.py) compares three logical variants.
