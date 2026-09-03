@@ -1139,6 +1139,8 @@ def codegen_host(global_tensors: dict[int, DTensor], runtime_args: list[RuntimeA
             code += format_str("}")
             code += format_str("float total_npu_time = 0;")
             code += format_str("float npu_time_min = 9999999;")
+            code += format_str("std::vector<float> npu_times;")
+            code += format_str("npu_times.reserve(n_test_iterations);")
             code += format_str("for (size_t i = 0; i < n_test_iterations; i++) {")
             with format_code(indent=8):
                 code += format_str(
@@ -1156,9 +1158,16 @@ def codegen_host(global_tensors: dict[int, DTensor], runtime_args: list[RuntimeA
                 code += format_str(
                     "float npu_time = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();"
                 )
+                code += format_str("npu_times.push_back(npu_time);")
                 code += format_str("total_npu_time += npu_time;")
                 code += format_str(
                     "npu_time_min = (npu_time < npu_time_min) ? npu_time : npu_time_min;"
+                )
+            code += format_str("}")
+            code += format_str("for (float npu_time : npu_times) {")
+            with format_code(indent=8):
+                code += format_str(
+                    'std::cout << "NPU profile execution time: " << npu_time << "us\\n";'
                 )
             code += format_str("}")
             code += format_str(

@@ -223,10 +223,7 @@ def validate_summary(
                 "timed_validation_failure=" f"{row.get('timed_validation_failure')!r}"
             )
 
-        infeasible = key == (
-            "baseline",
-            experiment.INFEASIBLE_BASELINE_SEQ_LEN,
-        )
+        infeasible = experiment.AttentionCase(key[0], key[1], device).infeasible
         metric_fields = (
             "filtered_mean_us",
             "filtered_min_us",
@@ -393,6 +390,7 @@ def create_figure(points: Sequence[ResultPoint]):
     axis.set_xticks(positions, labels)
     axis.set_xlabel("Sequence Length")
     axis.set_ylabel("Latency (ms)")
+    # axis.set_yscale("log")
     axis.set_title("Attention End-to-End Latency Breakdown")
     axis.set_axisbelow(True)
     axis.grid(True, axis="y", color="lightgray", linestyle="--", alpha=0.7)

@@ -84,7 +84,7 @@ class DeviceConfig:
 
 DEVICE_CONFIGS = {
     "xdna1": DeviceConfig("xdna1", 4, "0", "npu1", "npu"),
-    "xdna2": DeviceConfig("xdna2", 8, "2", "npu2", "npu2"),
+    "xdna2": DeviceConfig("xdna2", 8, "1", "npu2", "npu2"),
 }
 
 

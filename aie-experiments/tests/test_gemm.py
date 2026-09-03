@@ -510,7 +510,7 @@ def test_xdna2_widths_targets_and_provenance(tmp_path):
     assert record["device"] == "xdna2"
     assert record["target"] == "npu2"
     assert record["backend_target"] == "npu2"
-    assert record["npu2"] == "2"
+    assert record["npu2"] == "1"
 
 
 def test_xdna2_flags_drive_list_dry_run_and_process_defaults(capsys):
@@ -554,7 +554,7 @@ def test_default_cleanup_precleans_success_and_shared_host(tmp_path, monkeypatch
 
     def succeed(*args, **kwargs):
         assert kwargs["device"] == "xdna2"
-        assert args[5]["NPU2"] == "2"
+        assert args[5]["NPU2"] == "1"
         assert not (args[3] / "stale").exists()
         (args[3] / "fresh").write_text("new", encoding="utf-8")
         host = gemm.shared_host_path("xdna2")

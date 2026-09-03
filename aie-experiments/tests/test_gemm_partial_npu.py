@@ -353,7 +353,7 @@ def test_xdna2_commands_aliasing_and_provenance(tmp_path):
     assert record["device"] == "xdna2"
     assert record["target"] == "npu2"
     assert record["backend_target"] == "npu2"
-    assert record["npu2"] == "2"
+    assert record["npu2"] == "1"
 
 
 def test_xdna2_list_and_dry_run_use_device_defaults(capsys):
@@ -397,7 +397,7 @@ def test_partial_keep_builds_precleans_and_retains_only_fresh_case(
 
     def fail(run_case, _args, run_work, _log, environment):
         assert run_case.device == "xdna2"
-        assert environment["NPU2"] == "2"
+        assert environment["NPU2"] == "1"
         assert not (run_work / "stale").exists()
         (run_work / "fresh").write_text("new", encoding="utf-8")
         host = partial.base.shared_host_path("xdna2")

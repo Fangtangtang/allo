@@ -40,7 +40,7 @@ The runner checks for `/dev/accel/accel0`, the AIE environment variables, and
 the required mlir-aie build tools before starting a hardware run. `list` and
 `run --dry-run` do not require the NPU. The selected device is passed
 explicitly to every backend worker; the runner sets `NPU2=0` for XDNA1 and
-`NPU2=2` for XDNA2 instead of inferring a device from the ambient environment.
+`NPU2=1` for XDNA2 instead of inferring a device from the ambient environment.
 
 ## Running GEMM experiments
 
@@ -230,7 +230,7 @@ Both devices use four compute rows. Device behavior is centralized:
 | Device | Compute tiles | Width candidates | `NPU2` | mlir-aie | Allo |
 | --- | ---: | --- | ---: | --- | --- |
 | XDNA1 | 4x4 | `4,2,1` | `0` | `devicename=npu` | `npu1_<N>col` |
-| XDNA2 | 4x8 | `8,4,2,1` | `2` | `devicename=npu2` | `npu2_<N>col` for 1-7, `npu2` for 8 |
+| XDNA2 | 4x8 | `8,4,2,1` | `1` | `devicename=npu2` | `npu2_<N>col` for 1-7, `npu2` for 8 |
 
 The main runner selects the largest width for which `N` is divisible by
 `n * n_aie_cols`. Thus XDNA1 uses four columns except int8 at `N=256`,
@@ -360,7 +360,8 @@ baseline with the fused implementation from
 `HEAD_DIM=64`, and sequence lengths `64,128,256,512,1024,2048`. FlashAttention
 uses 32x32 query/KV chunks. XDNA1 uses its 4x4 compute array and XDNA2 uses its
 whole 4x8 compute array. The unfused baseline at sequence length 2048 is marked
-infeasible and is not built or executed on either device.
+infeasible on both devices. Baseline/1024 is also marked infeasible on XDNA2
+(`NPU2=1`); these cases are not built or executed.
 
 ### Docker setup
 
@@ -423,7 +424,7 @@ python3 aie-experiments/attention.py run \
 ```
 
 Matching current-version successful records, timed baseline validation failures,
-and the infeasible baseline/2048 record resume automatically. Runnable legacy
+and infeasible baseline records resume automatically. Runnable legacy
 records without paired NPU samples are not resumable and must be measured again;
 use `--rerun` to force replacement of selected records. Retain generated projects
 and their `test.cpp` files with `--keep-builds`:
@@ -477,7 +478,7 @@ color, and the stack top is filtered mean E2E time. The legend contains only
 `Unfused` and `Fused`; the infeasible marker is intentionally omitted. The
 plotter requires both implementations at all six lengths, validates device,
 mapping, and timing provenance, and rejects rows without paired component
-means. Baseline/2048 has no timing, so a red cross replaces that bar.
+means. Infeasible baselines have no timing, so a red cross replaces their bars.
 
 ### Timing and validation
 
@@ -487,8 +488,9 @@ with `status: "failed"`, `validation: "failed"`, and
 `timed_validation_failure: true`, then still runs all requested warmups and
 timed samples. Those complete samples participate in filtering and plots.
 FlashAttention validation failures remain hard failures and are not benchmarked.
-Baseline/2048 is recorded as `status: "infeasible"` with no validation or
-timing. Defaults are 20 unrecorded warmups and 100 recorded complete calls.
+Baseline/2048 on both devices and baseline/1024 on XDNA2 are recorded as
+`status: "infeasible"` with no validation or timing. Defaults are 20
+unrecorded warmups and 100 recorded complete calls.
 
 E2E timing uses Python `time.perf_counter_ns()`. Compilation, input generation,
 output allocation, and reference computation are outside this timer. For the
@@ -499,21 +501,24 @@ loading, XRT device/context and buffer creation, NPU execution and waits, output
 synchronization, and copying results back to NumPy. The baseline intentionally
 pays these costs for all four module calls.
 
-NPU timing is parsed without backend changes from each generated `test.cpp` line
-`NPU execution time: <value>us`. In that host program, the interval starts at
-`auto start = ...` immediately before `kernel(...)` and ends at `auto end = ...`
-immediately after `run.wait()`. It therefore excludes setup and host-to-device
-synchronization before the launch and device-to-host synchronization after the
-wait. A fused attention uses its one kernel interval. An unfused attention sums
-the four ordered score, scale, softmax, and value-GEMM intervals.
+NPU timing uses the same generated-host profiling path as a direct
+`df.build(..., profile=True, warmup=..., num_iters=...)` run. After the E2E
+samples, each generated `test.cpp` stays alive for its warmup and measurement
+loops. It buffers every post-warmup timing during the measurement loop, then
+emits the
+`NPU profile execution time: <value>us` samples and its existing
+`Avg NPU execution time` after the loop. The runner verifies that the
+sample mean matches that reported average. This avoids treating the first
+launch from a fresh host process as steady-state NPU execution time.
 
-The runner requires exactly
-`(1 validation + warmups + iterations) * kernel_count` generated-host values,
-discards the validation and warmup values, and pairs the remaining values with
-the Python E2E samples. Every NPU value must be positive and no greater than its
-paired E2E value; missing, malformed, excess, or inconsistent output fails the
-case. `extra_time_us` is derived per sample as `E2E - NPU`, so it contains all
-non-NPU work inside the E2E boundary.
+The timed interval still starts immediately before `kernel(...)` and ends
+immediately after `run.wait()`, excluding setup and buffer synchronization. A
+fused attention uses one profiled kernel. An unfused attention profiles score,
+scale, softmax, and value GEMM separately, then sums samples at each index. The
+runner requires exactly `iterations * kernel_count` profile samples and one
+reported average per kernel; missing, malformed, excess, or inconsistent output
+fails the case. `extra_time_us` remains `E2E - NPU` at each sample index and
+therefore estimates non-NPU work inside the E2E boundary.
 
 The inclusive 1.5-IQR Tukey mask is calculated only from E2E samples and applied
 to the paired E2E, NPU, and extra components together. Consequently, filtered
@@ -528,7 +533,7 @@ sweep has been regenerated.
 | --- | --- | --- |
 | `--device {xdna1,xdna2}` | `run`, `list`, `process`, plotter | Select the device and its default paths; defaults to `xdna1`. |
 | `--implementation {baseline,flash,both}` | `run`, `list` | Select the four-module baseline, fused FlashAttention, or both; defaults to `both`. |
-| `--seq-len SIZE [SIZE ...]` | `run`, `list` | Select from `64 128 256 512 1024 2048`; defaults to all six. Baseline/2048 produces an infeasible record without execution. |
+| `--seq-len SIZE [SIZE ...]` | `run`, `list` | Select from `64 128 256 512 1024 2048`; defaults to all six. Baseline/2048 on both devices and baseline/1024 on XDNA2 produce infeasible records without execution. |
 | `--warmup COUNT` | `run` | Complete unrecorded calls per case; defaults to `20`. |
 | `--iterations COUNT` | `run` | Complete recorded calls per case; defaults to `100`. |
 | `--output-dir PATH` | `run`, `process`, plotter | Override the result or plot directory. |

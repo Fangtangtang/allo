@@ -45,8 +45,8 @@ Q_CHUNK_SIZE = 32
 KV_CHUNK_SIZE = 32
 DTYPE = "bf16"
 TIMING_SCOPE = "end-to-end"
-ATTENTION_TIMING_VERSION = 2
-NPU_TIMING_SCOPE = "test.cpp kernel launch through run.wait()"
+ATTENTION_TIMING_VERSION = 3
+NPU_TIMING_SCOPE = "post-warmup in-process test.cpp kernel launch through run.wait()"
 
 BF16_TYPE = bfloat16
 GEMM_LAYOUT_A = [Layout.Shard(1), Layout.Shard(0)]
@@ -55,12 +55,17 @@ GEMM_LAYOUT_C = [Layout.Shard(1), Layout.Shard(2)]
 SCALE_LAYOUT = [Layout.Shard(0), Layout.Shard(1)]
 SOFTMAX_LAYOUT = [Layout.Shard(0), Layout.Replicate]
 TIMING_PREFIX = "ATTENTION_E2E_SAMPLE_US="
-NPU_TIMING_PREFIX = "NPU execution time: "
+NPU_PROFILE_TIMING_PREFIX = "NPU profile execution time: "
+NPU_AVG_TIMING_PREFIX = "Avg NPU execution time: "
 VALIDATION_PASSED = "ATTENTION_VALIDATION=PASSED"
 VALIDATION_FAILED = "ATTENTION_VALIDATION=FAILED"
 INFEASIBLE_BASELINE_SEQ_LEN = 2048
+INFEASIBLE_XDNA2_BASELINE_SEQ_LEN = 1024
 INFEASIBLE_BASELINE_REASON = (
     "The unfused baseline at sequence length 2048 is intentionally not executed"
+)
+INFEASIBLE_XDNA2_BASELINE_REASON = (
+    "The unfused baseline at sequence length 1024 is infeasible on XDNA2 (NPU2=1)"
 )
 
 
@@ -74,6 +79,21 @@ def default_output_dir(device: str = base.DEFAULT_DEVICE) -> Path:
         return EXPERIMENT_DIR / "results" / "attention-xdna2"
     base.device_config(device)
     return DEFAULT_OUTPUT_DIR
+
+
+def configure_attention_environment(device: str) -> dict[str, str]:
+    """Apply the architecture and tuning environment used by the AIE example."""
+    config = base.device_config(device)
+    kernel_dir = REPO_ROOT / "allo" / "library" / "aie" / "kernels"
+    values = {
+        "ALLO_EXTERNAL_KERNEL_DIR": str(kernel_dir.resolve()) + os.sep,
+        "ENABLE_AGGRESSIVE_PORT_UTILIZATION_PATCH": "1",
+        "COALESCE_MORE": "1",
+        "FORCE_UNROLL_INDEX": "0",
+        "NPU2": config.npu2,
+    }
+    os.environ.update(values)
+    return values
 
 
 @dataclass(frozen=True)
@@ -114,10 +134,19 @@ class AttentionCase:
     @property
     def infeasible(self) -> bool:
         """Return whether the baseline case is intentionally not executed."""
-        return (
-            self.implementation == "baseline"
-            and self.seq_len == INFEASIBLE_BASELINE_SEQ_LEN
-        )
+        return self.infeasible_reason is not None
+
+    @property
+    def infeasible_reason(self) -> str | None:
+        """Return why the case is not executed, if it is infeasible."""
+        if self.implementation != "baseline":
+            return None
+        if self.seq_len == INFEASIBLE_BASELINE_SEQ_LEN:
+            return INFEASIBLE_BASELINE_REASON
+        config = base.device_config(self.device)
+        if config.npu2 == "1" and self.seq_len == INFEASIBLE_XDNA2_BASELINE_SEQ_LEN:
+            return INFEASIBLE_XDNA2_BASELINE_REASON
+        return None
 
     @property
     def case_id(self) -> str:
@@ -161,7 +190,7 @@ def generate_cases(
 def case_signature(case: AttentionCase, warmup: int, iterations: int) -> dict:
     """Return the fields determining whether a result is resumable."""
     config = base.device_config(case.device)
-    return {
+    signature = {
         "schema_version": base.SCHEMA_VERSION,
         "experiment": EXPERIMENT_NAME,
         **asdict(case),
@@ -184,6 +213,9 @@ def case_signature(case: AttentionCase, warmup: int, iterations: int) -> dict:
         "warmup": warmup,
         "iterations": iterations,
     }
+    if case.infeasible:
+        signature["infeasible_reason"] = case.infeasible_reason
+    return signature
 
 
 def record_path(output_dir: Path, case: AttentionCase) -> Path:
@@ -272,7 +304,13 @@ def is_infeasible_record(record: dict) -> bool:
     """Return whether a record is the intentionally skipped baseline case."""
     return (
         record.get("implementation") == "baseline"
-        and record.get("seq_len") == INFEASIBLE_BASELINE_SEQ_LEN
+        and (
+            record.get("seq_len") == INFEASIBLE_BASELINE_SEQ_LEN
+            or (
+                record.get("seq_len") == INFEASIBLE_XDNA2_BASELINE_SEQ_LEN
+                and record.get("npu2") == "1"
+            )
+        )
         and record.get("status") == "infeasible"
         and record.get("validation") == "not_run"
         and not record.get("timings_us")
@@ -355,16 +393,21 @@ def parse_sample_timings(output: str, expected_count: int) -> list[float]:
 def parse_npu_timings(
     output: str,
     case: AttentionCase,
-    warmup: int,
     iterations: int,
 ) -> list[float]:
-    """Parse and aggregate generated test.cpp kernel timings."""
+    """Parse and aggregate post-warmup generated-host profile timings."""
     kernel_timings = []
+    kernel_averages = []
     for line in output.splitlines():
         stripped = line.strip()
-        if not stripped.startswith(NPU_TIMING_PREFIX):
+        if stripped.startswith(NPU_PROFILE_TIMING_PREFIX):
+            payload = stripped[len(NPU_PROFILE_TIMING_PREFIX) :]
+            destination = kernel_timings
+        elif stripped.startswith(NPU_AVG_TIMING_PREFIX):
+            payload = stripped[len(NPU_AVG_TIMING_PREFIX) :]
+            destination = kernel_averages
+        else:
             continue
-        payload = stripped[len(NPU_TIMING_PREFIX) :]
         if not payload.endswith("us"):
             raise ExperimentError(f"Malformed NPU timing line: {stripped}")
         value_text = payload[:-2]
@@ -374,19 +417,48 @@ def parse_npu_timings(
             raise ExperimentError(f"Malformed NPU timing line: {stripped}") from exc
         if not math.isfinite(value) or value <= 0:
             raise ExperimentError(f"Invalid NPU timing: {value_text}")
-        kernel_timings.append(value)
+        destination.append(value)
 
-    expected_count = (1 + warmup + iterations) * case.kernel_count
+    expected_count = iterations * case.kernel_count
     if len(kernel_timings) != expected_count:
         raise ExperimentError(
-            f"Expected {expected_count} test.cpp NPU timings, "
+            f"Expected {expected_count} test.cpp NPU profile timings, "
             f"captured {len(kernel_timings)}"
         )
-    recorded = kernel_timings[(1 + warmup) * case.kernel_count :]
-    return [
-        sum(recorded[offset : offset + case.kernel_count])
-        for offset in range(0, len(recorded), case.kernel_count)
+    if len(kernel_averages) != case.kernel_count:
+        raise ExperimentError(
+            f"Expected {case.kernel_count} test.cpp average NPU timings, "
+            f"captured {len(kernel_averages)}"
+        )
+
+    per_kernel = [
+        kernel_timings[offset : offset + iterations]
+        for offset in range(0, expected_count, iterations)
     ]
+    for index, (timings, reported_average) in enumerate(
+        zip(per_kernel, kernel_averages)
+    ):
+        measured_average = statistics.fmean(timings)
+        if not math.isclose(
+            measured_average, reported_average, rel_tol=1e-5, abs_tol=1e-3
+        ):
+            raise ExperimentError(
+                f"NPU profile samples for kernel {index} average to "
+                f"{measured_average}, but test.cpp reported {reported_average}"
+            )
+    return [
+        sum(timings[index] for timings in per_kernel) for index in range(iterations)
+    ]
+
+
+def run_profiled(module: Callable, *args) -> None:
+    """Run one module's generated-host warmup/profile loop."""
+    previous = module.profile
+    module.profile = True
+    try:
+        module(*args)
+    finally:
+        module.profile = previous
 
 
 def derive_extra_timings(
@@ -779,18 +851,11 @@ def worker_main(argv: Sequence[str]) -> int:
     parser.add_argument("--project-root", type=Path, required=True)
     args = parser.parse_args(argv)
     case = AttentionCase(args.implementation, args.seq_len, args.device)
-    config = base.device_config(case.device)
 
     # pylint: disable=import-outside-toplevel
     from ml_dtypes import bfloat16 as np_bfloat16
 
-    kernel_dir = REPO_ROOT / "allo" / "library" / "aie" / "kernels"
-    os.environ["ALLO_EXTERNAL_KERNEL_DIR"] = str(kernel_dir.resolve()) + os.sep
-    os.environ["ENABLE_AGGRESSIVE_PORT_UTILIZATION_PATCH"] = "1"
-    os.environ["COALESCE_MORE"] = "1"
-    os.environ["FORCE_UNROLL_INDEX"] = "0"
-    os.environ["NPU2"] = config.npu2
-
+    configure_attention_environment(case.device)
     rng = np.random.default_rng(42 + case.seq_len)
     Q = rng.standard_normal((case.seq_len, HEAD_DIM)).astype(np_bfloat16)
     K = rng.standard_normal((case.seq_len, HEAD_DIM)).astype(np_bfloat16)
@@ -815,11 +880,20 @@ def worker_main(argv: Sequence[str]) -> int:
                 )
             )
 
+        profile_runs = (
+            (score_module, (Q, K.T, scores)),
+            (scale_module, (scores, scores)),
+            (softmax_module, (scores, weights)),
+            (output_module, (weights, V, output)),
+        )
+
     else:
         flash_module = _build_flash_module(case, args.project_root)
 
         def run_once():
             flash_module(Q, K.T, V, output)
+
+        profile_runs = ((flash_module, (Q, K.T, V, output)),)
 
     run_once()
     try:
@@ -834,6 +908,10 @@ def worker_main(argv: Sequence[str]) -> int:
     else:
         print(VALIDATION_PASSED, flush=True)
     samples = measure_complete_attention(run_once, args.warmup, args.iterations)
+    for module, module_args in profile_runs:
+        module.warmup = args.warmup
+        module.num_iters = args.iterations
+        run_profiled(module, *module_args)
     for sample in samples:
         print(f"{TIMING_PREFIX}{sample:.6f}", flush=True)
     return 0
@@ -1030,7 +1108,7 @@ def preview_case(case: AttentionCase, args: argparse.Namespace) -> None:
         f"{case.mapping_rows}x{case.mapping_columns} kernels={case.kernel_count}"
     )
     if case.infeasible:
-        print(f"  infeasible: {INFEASIBLE_BASELINE_REASON}")
+        print(f"  infeasible: {case.infeasible_reason}")
         return
     command = worker_command(
         case, args.warmup, args.iterations, work_path(case) / "projects"
@@ -1074,13 +1152,14 @@ def run_experiments(args: argparse.Namespace) -> int:
             safe_remove_work(case_work)
             case_log = log_path(output_dir, case)
             case_log.parent.mkdir(parents=True, exist_ok=True)
-            case_log.write_text(INFEASIBLE_BASELINE_REASON + "\n", encoding="utf-8")
+            reason = case.infeasible_reason
+            case_log.write_text(reason + "\n", encoding="utf-8")
             record = new_record(case, args.warmup, args.iterations, output_dir)
             record.update(
                 {
                     "status": "infeasible",
                     "validation": "not_run",
-                    "error": INFEASIBLE_BASELINE_REASON,
+                    "error": reason,
                     "elapsed_seconds": 0.0,
                     "finished_at": base.utc_now(),
                 }
@@ -1123,7 +1202,7 @@ def run_experiments(args: argparse.Namespace) -> int:
                     "Only the unfused baseline may time a validation failure"
                 )
             timings = parse_sample_timings(output, args.iterations)
-            npu_timings = parse_npu_timings(output, case, args.warmup, args.iterations)
+            npu_timings = parse_npu_timings(output, case, args.iterations)
             derive_extra_timings(timings, npu_timings)
             if validation == "failed":
                 record.update(

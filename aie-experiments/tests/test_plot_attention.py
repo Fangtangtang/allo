@@ -96,6 +96,7 @@ def test_complete_summary_creates_grouped_stacked_layout(tmp_path):
     assert first.e2e_mean_us == 640.0
     assert first.npu_mean_us == 160.0
     assert first.extra_mean_us == 480.0
+    assert points[4].infeasible
     assert points[5].infeasible
 
     figure = plot.create_figure(points)
@@ -105,12 +106,12 @@ def test_complete_summary_creates_grouped_stacked_layout(tmp_path):
         assert axis.get_yscale() == "linear"
         assert axis.get_ylabel() == "Latency (ms)"
         assert axis.get_title() == "Attention End-to-End Latency Breakdown"
-        assert len(axis.patches) == 22
+        assert len(axis.patches) == 20
 
-        baseline_npu = axis.patches[:5]
-        baseline_extra = axis.patches[5:10]
-        flash_npu = axis.patches[10:16]
-        flash_extra = axis.patches[16:22]
+        baseline_npu = axis.patches[:4]
+        baseline_extra = axis.patches[4:8]
+        flash_npu = axis.patches[8:14]
+        flash_extra = axis.patches[14:20]
         assert baseline_npu[0].get_height() == pytest.approx(0.16)
         assert baseline_extra[0].get_y() == pytest.approx(0.16)
         assert baseline_npu[0].get_height() + baseline_extra[
@@ -139,7 +140,7 @@ def test_complete_summary_creates_grouped_stacked_layout(tmp_path):
         cross = next(
             item for item in axis.collections if item.get_label() == "_nolegend_"
         )
-        assert cross.get_offsets().shape == (1, 2)
+        assert cross.get_offsets().shape == (2, 2)
         expected_color = plot.matplotlib.colors.to_rgba(plot.INFEASIBLE_COLOR)
         assert cross.get_edgecolors()[0] == pytest.approx(expected_color)
         assert [text.get_text() for text in axis.get_xticklabels()] == [

@@ -35,7 +35,12 @@ def test_default_case_expansion_and_device_mappings():
     assert [case.npu_aggregation for case in xdna2[:6]] == ["sum-of-4-kernels"] * 6
     assert [case.npu_aggregation for case in xdna2[6:]] == ["single-kernel"] * 6
     assert [case.seq_len for case in xdna1 if case.infeasible] == [2048]
-    assert [case.seq_len for case in xdna2 if case.infeasible] == [2048]
+    assert [case.seq_len for case in xdna2 if case.infeasible] == [1024, 2048]
+    assert not attention.AttentionCase("baseline", 1024, "xdna1").infeasible
+    assert (
+        attention.AttentionCase("baseline", 1024, "xdna2").infeasible_reason
+        == attention.INFEASIBLE_XDNA2_BASELINE_REASON
+    )
 
 
 def test_mapping_helpers_use_full_device_capacity():
@@ -93,11 +98,34 @@ def test_baseline_regions_resolve_module_global_annotations(tmp_path, monkeypatc
     ]
 
 
+def test_worker_environment_matches_example_on_xdna2(monkeypatch):
+    names = (
+        "ALLO_EXTERNAL_KERNEL_DIR",
+        "ENABLE_AGGRESSIVE_PORT_UTILIZATION_PATCH",
+        "COALESCE_MORE",
+        "FORCE_UNROLL_INDEX",
+        "NPU2",
+    )
+    for name in names:
+        monkeypatch.delenv(name, raising=False)
+
+    values = attention.configure_attention_environment("xdna2")
+    expected_kernel_dir = attention.REPO_ROOT / "allo" / "library" / "aie" / "kernels"
+    assert values == {
+        "ALLO_EXTERNAL_KERNEL_DIR": str(expected_kernel_dir.resolve()) + os.sep,
+        "ENABLE_AGGRESSIVE_PORT_UTILIZATION_PATCH": "1",
+        "COALESCE_MORE": "1",
+        "FORCE_UNROLL_INDEX": "0",
+        "NPU2": "1",
+    }
+    assert {name: os.environ[name] for name in names} == values
+
+
 def test_flash_selector_restores_environment(monkeypatch):
-    monkeypatch.setenv("NPU2", "2")
+    monkeypatch.setenv("NPU2", "unexpected")
     with attention.flash_architecture_selector("xdna2"):
         assert os.environ["NPU2"] == "1"
-    assert os.environ["NPU2"] == "2"
+    assert os.environ["NPU2"] == "unexpected"
 
 
 def test_complete_attention_timing_and_baseline_order():
@@ -127,38 +155,59 @@ def test_timing_parser_validates_count_and_values():
         attention.parse_sample_timings(f"{attention.TIMING_PREFIX}0", 1)
 
 
-def npu_output(values):
-    """Return generated-host timing output for the supplied microseconds."""
-    return "\n".join(f"{attention.NPU_TIMING_PREFIX}{value}us" for value in values)
+def npu_output(*per_kernel_values):
+    """Return generated-host profile samples and their reported averages."""
+    lines = []
+    for values in per_kernel_values:
+        lines.extend(
+            f"{attention.NPU_PROFILE_TIMING_PREFIX}{value}us" for value in values
+        )
+        lines.append(f"{attention.NPU_AVG_TIMING_PREFIX}{sum(values) / len(values)}us")
+    return "\n".join(lines)
 
 
-def test_npu_timing_parser_aggregates_and_discards_setup_runs():
+def test_npu_timing_parser_matches_profile_averages_and_aggregates_kernels():
     baseline = attention.AttentionCase("baseline", 64)
     flash = attention.AttentionCase("flash", 64)
 
     assert attention.parse_npu_timings(
-        npu_output(range(1, 17)), baseline, warmup=1, iterations=2
-    ) == [42.0, 58.0]
+        npu_output([1, 2], [10, 20], [100, 200], [1000, 2000]),
+        baseline,
+        iterations=2,
+    ) == [1111.0, 2222.0]
     assert attention.parse_npu_timings(
-        npu_output([10, 20, 30, 40]), flash, warmup=1, iterations=2
-    ) == [30.0, 40.0]
+        "NPU execution time: 999us\n" + npu_output([10, 20]),
+        flash,
+        iterations=2,
+    ) == [10.0, 20.0]
 
 
 def test_npu_timing_parser_rejects_malformed_or_incorrect_output():
     flash = attention.AttentionCase("flash", 64)
     with pytest.raises(attention.ExperimentError, match="Malformed"):
         attention.parse_npu_timings(
-            f"{attention.NPU_TIMING_PREFIX}12", flash, warmup=0, iterations=0
+            f"{attention.NPU_PROFILE_TIMING_PREFIX}12\n"
+            f"{attention.NPU_AVG_TIMING_PREFIX}12us",
+            flash,
+            iterations=1,
         )
     with pytest.raises(attention.ExperimentError, match="Malformed"):
-        attention.parse_npu_timings(npu_output(["bad"]), flash, warmup=0, iterations=0)
-    with pytest.raises(attention.ExperimentError, match="Invalid"):
-        attention.parse_npu_timings(npu_output([0]), flash, warmup=0, iterations=0)
-    with pytest.raises(attention.ExperimentError, match="Expected 2"):
-        attention.parse_npu_timings(npu_output([1]), flash, warmup=0, iterations=1)
-    with pytest.raises(attention.ExperimentError, match="Expected 2"):
         attention.parse_npu_timings(
-            npu_output([1, 2, 3]), flash, warmup=0, iterations=1
+            f"{attention.NPU_PROFILE_TIMING_PREFIX}badus\n"
+            f"{attention.NPU_AVG_TIMING_PREFIX}1us",
+            flash,
+            iterations=1,
+        )
+    with pytest.raises(attention.ExperimentError, match="Invalid"):
+        attention.parse_npu_timings(npu_output([0]), flash, iterations=1)
+    with pytest.raises(attention.ExperimentError, match="Expected 2"):
+        attention.parse_npu_timings(npu_output([1]), flash, iterations=2)
+    with pytest.raises(attention.ExperimentError, match="average to"):
+        attention.parse_npu_timings(
+            f"{attention.NPU_PROFILE_TIMING_PREFIX}1us\n"
+            f"{attention.NPU_AVG_TIMING_PREFIX}2us",
+            flash,
+            iterations=1,
         )
 
 
@@ -301,6 +350,15 @@ def test_baseline_worker_times_validation_failure(tmp_path, monkeypatch, capsys)
     monkeypatch.setattr(attention.np.testing, "assert_allclose", fail_validation)
     monkeypatch.setattr(attention, "measure_complete_attention", fake_measure)
 
+    profile_calls = []
+
+    def fake_profile(module_, *_args):
+        assert module_.warmup == 1
+        assert module_.num_iters == 2
+        profile_calls.append(module_)
+
+    monkeypatch.setattr(attention, "run_profiled", fake_profile)
+
     result = attention.worker_main(
         [
             "--device",
@@ -323,6 +381,7 @@ def test_baseline_worker_times_validation_failure(tmp_path, monkeypatch, capsys)
     assert output.count(attention.VALIDATION_FAILED) == 1
     assert output.count(attention.TIMING_PREFIX) == 2
     assert len(calls) == 8
+    assert len(profile_calls) == 4
 
 
 def test_timed_baseline_validation_failure_is_completed(tmp_path, monkeypatch):
@@ -335,7 +394,7 @@ def test_timed_baseline_validation_failure_is_completed(tmp_path, monkeypatch):
             attention.VALIDATION_FAILED,
             f"{attention.TIMING_PREFIX}10",
             f"{attention.TIMING_PREFIX}11",
-            npu_output([0.25] * 16),
+            npu_output(*([[0.25, 0.25]] * 4)),
         ]
     )
     monkeypatch.setattr(
@@ -381,7 +440,16 @@ def test_timed_baseline_validation_failure_is_completed(tmp_path, monkeypatch):
     assert [float(row["extra_time_us"]) for row in rows] == [9.0, 10.0]
 
 
-def test_infeasible_baseline_is_recorded_without_hardware(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("device", "seq_len", "reason"),
+    [
+        ("xdna1", 2048, attention.INFEASIBLE_BASELINE_REASON),
+        ("xdna2", 1024, attention.INFEASIBLE_XDNA2_BASELINE_REASON),
+    ],
+)
+def test_infeasible_baseline_is_recorded_without_hardware(
+    tmp_path, monkeypatch, device, seq_len, reason
+):
     output_dir = tmp_path / "results"
     work_dir = tmp_path / "work"
     monkeypatch.setattr(attention, "DEFAULT_WORK_DIR", work_dir)
@@ -395,10 +463,12 @@ def test_infeasible_baseline_is_recorded_without_hardware(tmp_path, monkeypatch)
     result = attention.main(
         [
             "run",
+            "--device",
+            device,
             "--implementation",
             "baseline",
             "--seq-len",
-            "2048",
+            str(seq_len),
             "--warmup",
             "1",
             "--iterations",
@@ -408,7 +478,7 @@ def test_infeasible_baseline_is_recorded_without_hardware(tmp_path, monkeypatch)
         ]
     )
 
-    case = attention.AttentionCase("baseline", 2048)
+    case = attention.AttentionCase("baseline", seq_len, device)
     record = json.loads(
         attention.record_path(output_dir, case).read_text(encoding="utf-8")
     )
@@ -423,6 +493,4 @@ def test_infeasible_baseline_is_recorded_without_hardware(tmp_path, monkeypatch)
         attention.case_signature(case, 1, 2),
     )
     assert not attention.work_path(case).exists()
-    assert attention.INFEASIBLE_BASELINE_REASON in attention.log_path(
-        output_dir, case
-    ).read_text(encoding="utf-8")
+    assert reason in attention.log_path(output_dir, case).read_text(encoding="utf-8")
