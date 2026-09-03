@@ -441,6 +441,7 @@ Regenerate aggregate CSV files and create the device-specific bar plot:
 ```bash
 python3 aie-experiments/attention.py process
 python3 aie-experiments/attention.py process --device xdna2
+python3 aie-experiments/plot_attention_comparison.py
 python3 aie-experiments/plot_attention.py
 python3 aie-experiments/plot_attention.py --device xdna2
 ```
@@ -454,6 +455,10 @@ python3 aie-experiments/attention.py process \
   --output-dir /tmp/attention-results
 python3 aie-experiments/plot_attention.py \
   --summary /tmp/attention-results/summary.csv \
+  --output-dir /tmp/attention-plots
+python3 aie-experiments/plot_attention_comparison.py \
+  --xdna1-summary /tmp/xdna1-attention/summary.csv \
+  --xdna2-summary /tmp/xdna2-attention/summary.csv \
   --output-dir /tmp/attention-plots
 ```
 
@@ -469,6 +474,10 @@ maximum, and population standard deviation for E2E, NPU, and extra time.
 The plotter writes `attention_e2e.png` under `plots/` or `plots/xdna2/`.
 Override result roots with `--output-dir`; the plotter additionally accepts
 `--summary` and its own `--output-dir`.
+
+The comparison plotter writes `attention_e2e_comparison.png` under `plots/`.
+It places XDNA1 and XDNA2 in side-by-side panels with independent linear latency
+axes and accepts `--xdna1-summary`, `--xdna2-summary`, and `--output-dir`.
 
 The plot is one grouped, stacked bar chart on a linear millisecond axis. Each
 sequence length has an unfused baseline bar and a fused FlashAttention bar. The

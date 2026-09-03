@@ -324,12 +324,17 @@ def point_map(points: Sequence[ResultPoint]) -> dict[tuple[str, int], ResultPoin
     return {(point.implementation, point.seq_len): point for point in points}
 
 
-def create_figure(points: Sequence[ResultPoint]):
-    """Create the grouped stacked E2E timing-breakdown figure."""
+def draw_attention_axis(
+    axis,
+    points: Sequence[ResultPoint],
+    *,
+    title: str,
+    show_legend: bool = True,
+):
+    """Draw one grouped stacked E2E timing breakdown on an existing axis."""
     indexed = point_map(points)
     positions = np.arange(len(experiment.DEFAULT_SEQ_LENS), dtype=np.float64)
     width = 0.36
-    figure, axis = plt.subplots(figsize=(8.0, 4.0))
     infeasible_positions = []
 
     for index, implementation in enumerate(experiment.IMPLEMENTATION_ORDER):
@@ -391,17 +396,29 @@ def create_figure(points: Sequence[ResultPoint]):
     axis.set_xlabel("Sequence Length")
     axis.set_ylabel("Latency (ms)")
     # axis.set_yscale("log")
-    axis.set_title("Attention End-to-End Latency Breakdown")
+    axis.set_title(title)
     axis.set_axisbelow(True)
     axis.grid(True, axis="y", color="lightgray", linestyle="--", alpha=0.7)
-    legend_order = ["Unfused", "Fused"]
-    handles, handle_labels = axis.get_legend_handles_labels()
-    handle_by_label = dict(zip(handle_labels, handles))
-    axis.legend(
-        [handle_by_label[label] for label in legend_order],
-        legend_order,
-        loc="upper left",
-        ncol=2,
+    if show_legend:
+        legend_order = ["Unfused", "Fused"]
+        handles, handle_labels = axis.get_legend_handles_labels()
+        handle_by_label = dict(zip(handle_labels, handles))
+        axis.legend(
+            [handle_by_label[label] for label in legend_order],
+            legend_order,
+            loc="upper left",
+            ncol=2,
+        )
+    return axis
+
+
+def create_figure(points: Sequence[ResultPoint]):
+    """Create the grouped stacked E2E timing-breakdown figure."""
+    figure, axis = plt.subplots(figsize=(8.0, 4.0))
+    draw_attention_axis(
+        axis,
+        points,
+        title="Attention End-to-End Latency Breakdown",
     )
     figure.tight_layout()
     return figure
