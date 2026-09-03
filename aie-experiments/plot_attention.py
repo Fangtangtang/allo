@@ -390,7 +390,7 @@ def create_figure(points: Sequence[ResultPoint]):
         )
 
     labels = [str(value) for value in experiment.DEFAULT_SEQ_LENS]
-    axis.set_xticks(positions, labels, rotation=30)
+    axis.set_xticks(positions, labels)
     axis.set_xlabel("Sequence Length")
     axis.set_ylabel("Latency (ms)")
     axis.set_title("Attention End-to-End Latency Breakdown")
