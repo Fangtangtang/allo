@@ -548,9 +548,9 @@ class ASTTransformer(ASTBuilder):
         cast_map = {
             # Index <-> UInt/Int
             (Int, Index): arith_d.IndexCastOp,
-            (UInt, Index): arith_d.IndexCastOp,
+            (UInt, Index): arith_d.IndexCastUIOp,
             (Index, Int): arith_d.IndexCastOp,
-            (Index, UInt): arith_d.IndexCastOp,
+            (Index, UInt): arith_d.IndexCastUIOp,
             # UInt/Int <-> Float
             (Int, Float): arith_d.SIToFPOp,
             (UInt, Float): arith_d.UIToFPOp,
@@ -586,7 +586,7 @@ class ASTTransformer(ASTBuilder):
                 IntegerType.get_signless(32), op_result, ip=ctx.get_ip()
             )
             op_result = op.result
-            opcls = arith_d.IndexCastOp  # proceed to build cast to index
+            opcls = arith_d.IndexCastUIOp  # proceed to build cast to index
         elif isinstance(src_type, Index) and isinstance(res_type, Float):
             op = arith_d.IndexCastOp(
                 IntegerType.get_signless(32), op_result, ip=ctx.get_ip()
@@ -900,7 +900,7 @@ class ASTTransformer(ASTBuilder):
                 UFixed: RuntimeError,
             },
         }.get(type(node.op))
-        ty_cls = Int if isinstance(node.dtype, Index) else type(node.dtype)
+        ty_cls = UInt if isinstance(node.dtype, Index) else type(node.dtype)
         if isinstance(node.op, (ast.LShift, ast.RShift)) and isinstance(
             node.dtype, (Fixed, UFixed)
         ):
@@ -2285,10 +2285,10 @@ class ASTTransformer(ASTBuilder):
             Index: {
                 ast.Eq: 0,
                 ast.NotEq: 1,
-                ast.Lt: 2,
-                ast.LtE: 3,
-                ast.Gt: 4,
-                ast.GtE: 5,
+                ast.Lt: 6,
+                ast.LtE: 7,
+                ast.Gt: 8,
+                ast.GtE: 9,
             },
             UInt: {
                 ast.Eq: 0,
@@ -2367,7 +2367,10 @@ class ASTTransformer(ASTBuilder):
             rhs_res, lhs_res = ASTTransformer.get_mlir_op_result(
                 ctx, rhs
             ), ASTTransformer.get_mlir_op_result(ctx, lhs)
-            predicate = IntegerAttr.get(IntegerType.get_signless(64), ATTR_MAP[type(operand_type)][type(node.ops[0])])
+            predicate = IntegerAttr.get(
+                IntegerType.get_signless(64),
+                ATTR_MAP[type(operand_type)][type(node.ops[0])],
+            )
             if isinstance(operand_type, (Int, UInt, Index)):
                 return arith_d.CmpIOp(predicate, lhs_res, rhs_res, ip=ctx.get_ip())
             if isinstance(operand_type, (Fixed, UFixed)):

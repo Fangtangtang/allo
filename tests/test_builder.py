@@ -1466,6 +1466,7 @@ def test_constant_tensor_slice_2d():
     result = mod()
     np.testing.assert_allclose(result, np_A[1], rtol=1e-5)
 
+
 def test_cmp():
     def kernel1(A: uint8[2], B: uint8[2]) -> uint8[2]:
         C: uint8[2] = 0
@@ -1475,25 +1476,26 @@ def test_cmp():
 
     s = allo.customize(kernel1)
     mlir_code = str(s.module)
-    print(mlir_code) 
+    print(mlir_code)
     assert "arith.cmpi" in mlir_code and "ugt" in mlir_code
     mod = s.build()
     result = mod(np.array([200, 100], np.uint8), np.array([100, 200], np.uint8))
     assert np.array_equal(result, np.array([1, 0], np.uint8))
-    
+
     def kernel2(A: uint8[2]) -> uint8[2]:
         B: uint8[2] = 0
         for i in range(2):
-            B[i] = 1 if A[i] > i else 0 # cast index to unsigned for comparison
+            B[i] = 1 if A[i] > i else 0  # cast index to unsigned for comparison
         return B
 
     s = allo.customize(kernel2)
     mlir_code = str(s.module)
-    print(mlir_code) 
+    print(mlir_code)
     assert "arith.cmpi" in mlir_code and "ugt" in mlir_code
     mod = s.build()
     result = mod(np.array([200, 0], np.uint8))
     assert np.array_equal(result, np.array([1, 0], np.uint8))
-    
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
