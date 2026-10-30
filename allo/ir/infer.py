@@ -45,6 +45,14 @@ from .utils import parse_ast, get_func_id_from_param_types, resolve_generic_type
 
 # pylint: disable=too-many-public-methods
 class TypeInferer(ASTVisitor):
+    # Track template instantiation context for name generation
+    inst_naming_stack: list[str] = []
+    counter: int = 0
+
+    def gen_instance_name(name) -> str:
+        TypeInferer.counter += 1
+        return "_".join(TypeInferer.inst_naming_stack) + f"_{name}_{TypeInferer.counter}" 
+
     def print_verbose(self, ctx: ASTContext, node: ast.AST):
         if isinstance(node, ast.Name):
             print("Name:", node.id, node.dtype, node.shape)
@@ -881,9 +889,7 @@ class TypeInferer(ASTVisitor):
                 )
                 ctx.put_symbol(name=arg.arg, val=arg)
 
-            func_name = (
-                node.name if ctx.func_id is None else f"{node.name}_{ctx.func_id}"
-            )
+            func_name = node.name
             # Return type
             if not (
                 (isinstance(node.returns, ast.Constant) and node.returns.value is None)
@@ -915,7 +921,9 @@ class TypeInferer(ASTVisitor):
             # set context
             ctx.top_func = node
             ctx.top_func_tree = node
+            TypeInferer.inst_naming_stack.append(func_name)
             visit_stmts(ctx, node.body)
+            TypeInferer.inst_naming_stack.pop()
             # Note that the result type may be different from the return type
             if node.returns is None or (
                 isinstance(node.returns, ast.Constant) and node.returns.value is None
@@ -1007,7 +1015,7 @@ class TypeInferer(ASTVisitor):
         elif isinstance(node.func, ast.Subscript):
             obj = ASTResolver.resolve(node.func.value, ctx.global_vars)
             assert obj is not None, "Unsupported function call"
-            obj_name = obj.__name__
+            obj_name = TypeInferer.gen_instance_name(obj.__name__)
             ctx.global_vars[obj_name] = obj
             ctx.inst = ASTResolver.resolve_param_types(node.func.slice, ctx.global_vars)
             if ctx.func_id is None:
@@ -1256,12 +1264,16 @@ class TypeInferer(ASTVisitor):
         else:
             # Visit arguments in the top-level
             visit_stmts(ctx, node.args)
+            print(obj_name)
             tree = parse_ast(func, verbose=ctx.verbose)
+            assert len(tree.body)==1 and isinstance(tree.body[0], ast.FunctionDef), "unexpected callee"
+            callee = tree.body[0]
+            callee.name = obj_name
             # Create a new context to avoid name collision
             func_ctx = ctx.copy()
             stmts = visit_stmts(func_ctx, tree.body)
             # Attach type-inferenced tree to the top-level AST
-            node.tree = tree
+            node.callee = callee
         visit_stmts(ctx, node.args)
         if not isinstance(stmts[-1], ast.FunctionDef):
             node.dtype = None

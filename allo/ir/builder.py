@@ -1998,7 +1998,7 @@ class ASTTransformer(ASTBuilder):
 
     @staticmethod
     def build_FunctionDef(ctx: ASTContext, node: ast.FunctionDef):
-        func_name = node.name if ctx.func_id is None else f"{node.name}_{ctx.func_id}"
+        func_name = node.name
         # pylint: disable=too-many-nested-blocks
         if ctx.top_func is not None:
             # Nested function def
@@ -2545,10 +2545,8 @@ class ASTTransformer(ASTBuilder):
         elif isinstance(node.func, ast.Subscript):
             obj = ASTResolver.resolve(node.func.value, ctx.global_vars)
             assert obj is not None, "Unsupported function call"
-            obj_name = (
-                node.func.value.id if isinstance(obj, func_d.FuncOp) else obj.__name__
-            )
-            ctx.global_vars[obj_name] = obj
+            obj_name = node.callee.name
+            ctx.global_vars[obj_name] = node.callee
             ctx.inst = ASTResolver.resolve_param_types(node.func.slice, ctx.global_vars)
             if ctx.func_id is None:
                 func_id = get_func_id_from_param_types(ctx.inst)
@@ -3223,7 +3221,7 @@ class ASTTransformer(ASTBuilder):
             ASTTransformer.get_mlir_op_result(ctx, stmt)
             for stmt in build_stmts(ctx, node.args)
         ]
-        func_name = obj_name if ctx.func_id is None else f"{obj_name}_{ctx.func_id}"
+        func_name = obj_name 
         if func_name not in ctx.global_vars or not isinstance(
             ctx.global_vars[func_name], func_d.FuncOp
         ):  # function not built yet
@@ -3231,7 +3229,7 @@ class ASTTransformer(ASTBuilder):
             func_ctx = ctx.copy()
             func_ctx.call_args = new_args
             func_ctx.set_ip(ctx.top_func)
-            stmts = build_stmts(func_ctx, node.tree.body)
+            stmts = build_stmts(func_ctx, [node.callee])
             func_ctx.pop_ip()
             func_ctx.call_args = []
             for key, value in func_ctx.global_vars.items():
