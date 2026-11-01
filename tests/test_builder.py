@@ -1497,5 +1497,24 @@ def test_cmp():
     assert np.array_equal(result, np.array([1, 0], np.uint8))
 
 
+def test_nested_instance():
+    def inc[T, N](x: "T[N]") -> "T[N]":
+        y: T[N]
+        for i in range(N):
+            y[i] = x[i] + 1
+        return y
+
+    def wrap[T, N](x: "T[N]") -> "T[N]":
+        return inc[T, N](x)
+
+    def top(a: int32[4], b: int32[8], c: int32[2]) -> int32[2]:
+        d = wrap[int32, 4](a)
+        e = wrap[int32, 8](b)
+        return inc[int32, 2](c)
+
+    s = allo.customize(top)
+    s.build()
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

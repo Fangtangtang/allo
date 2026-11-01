@@ -51,7 +51,9 @@ class TypeInferer(ASTVisitor):
 
     def gen_instance_name(name) -> str:
         TypeInferer.counter += 1
-        return "_".join(TypeInferer.inst_naming_stack) + f"_{name}_{TypeInferer.counter}" 
+        return (
+            "_".join(TypeInferer.inst_naming_stack) + f"_{name}_{TypeInferer.counter}"
+        )
 
     def print_verbose(self, ctx: ASTContext, node: ast.AST):
         if isinstance(node, ast.Name):
@@ -1005,7 +1007,6 @@ class TypeInferer(ASTVisitor):
     # pylint: disable=too-many-branches
     @staticmethod
     def visit_Call(ctx: ASTContext, node: ast.Call):
-        original_func_id = ctx.func_id
         if isinstance(node.func, ast.Name):
             obj = ASTResolver.resolve(node.func, ctx.global_vars)
             obj_name = node.func.id
@@ -1015,25 +1016,14 @@ class TypeInferer(ASTVisitor):
         elif isinstance(node.func, ast.Subscript):
             obj = ASTResolver.resolve(node.func.value, ctx.global_vars)
             assert obj is not None, "Unsupported function call"
-            obj_name = TypeInferer.gen_instance_name(obj.__name__)
-            ctx.global_vars[obj_name] = obj
             ctx.inst = ASTResolver.resolve_param_types(node.func.slice, ctx.global_vars)
-            if ctx.func_id is None:
-                func_id = get_func_id_from_param_types(ctx.inst)
-                if func_id is None:
-                    func_dict = ctx.func_name2id.setdefault(obj_name, {})
-                    for key, value in func_dict.items():
-                        if value == tuple(ctx.inst):
-                            func_id = key
-                            break
-                    else:
-                        func_id = len(func_dict) if len(func_dict) > 0 else None
-                        func_dict[func_id] = tuple(ctx.inst)
-                else:
-                    ctx.inst.remove(func_id)
-                    func_dict = ctx.func_name2id.setdefault(obj_name, {})
-                    func_dict[func_id] = tuple(ctx.inst)
-                ctx.func_id = func_id
+            func_id = get_func_id_from_param_types(ctx.inst)
+            if func_id:
+                obj_name = func_id
+                ctx.inst.remove(func_id)
+            else:
+                obj_name = TypeInferer.gen_instance_name(obj.__name__)
+            ctx.global_vars[obj_name] = obj
         else:
             raise RuntimeError("Unsupported function call")
 
@@ -1264,9 +1254,10 @@ class TypeInferer(ASTVisitor):
         else:
             # Visit arguments in the top-level
             visit_stmts(ctx, node.args)
-            print(obj_name)
             tree = parse_ast(func, verbose=ctx.verbose)
-            assert len(tree.body)==1 and isinstance(tree.body[0], ast.FunctionDef), "unexpected callee"
+            assert len(tree.body) == 1 and isinstance(
+                tree.body[0], ast.FunctionDef
+            ), "unexpected callee"
             callee = tree.body[0]
             callee.name = obj_name
             # Create a new context to avoid name collision
@@ -1281,7 +1272,6 @@ class TypeInferer(ASTVisitor):
         else:
             node.dtype = stmts[-1].dtype
             node.shape = stmts[-1].shape
-        ctx.func_id = original_func_id
         return node
 
     @staticmethod

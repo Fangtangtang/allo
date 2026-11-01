@@ -51,8 +51,8 @@ def kernel_mvt[
     x1_out: "T[N]",
     x2_out: "T[N]",
 ):
-    stageA[T, N](x1, x1_out, A, y1)
-    stageB[T, N](x2, x2_out, A_copy, y2)
+    stageA[T, N, "stageA"](x1, x1_out, A, y1)
+    stageB[T, N, "stageB"](x2, x2_out, A_copy, y2)
 
 
 def mvt(concrete_type, N):

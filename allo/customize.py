@@ -1146,18 +1146,12 @@ class Schedule:
             if isinstance(arg, (LoopWrapper, MockBuffer)):
                 arg = copy.copy(arg)
                 orig_func_name = arg.func if arg.func is not None else sch.top_func_name
-                func_name = (
-                    orig_func_name if id is None else orig_func_name + "_" + str(id)
-                )
-                if self._find_function(func_name, error=False) is None:
-                    func_name = orig_func_name + "_0"
+                func_name = orig_func_name if id is None else str(id)
                 arg.func = func_name
                 return arg
             orig_func_name = arg.split(":")[0] if ":" in arg else sch.top_func_name
             arg = arg.split(":")[1] if ":" in arg else arg
-            func_name = orig_func_name if id is None else orig_func_name + "_" + str(id)
-            if self._find_function(func_name, error=False) is None:
-                func_name = orig_func_name + "_0"
+            func_name = orig_func_name if id is None else str(id)
             return f"{func_name}:{arg}"
 
         if not isinstance(schs, list):

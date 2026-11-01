@@ -32,8 +32,8 @@ def S1[T: (float32, int32), M, N](B: "T[M, N]"):
 
 
 def kernel_trmm[T: (float32, int32), M, N](A: "T[M, M]", B: "T[M, N]"):
-    S0[T, M, N](A, B)
-    S1[T, M, N](B)
+    S0[T, M, N, "S0"](A, B)
+    S1[T, M, N, "S1"](B)
 
 
 def top_trmm(concrete_type, m, n, alpha=1.5):

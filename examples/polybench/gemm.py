@@ -35,8 +35,8 @@ def kernel_gemm[
     T: (float32, int32), P: int32, Q: int32, R: int32
 ](A: "T[P, Q]", B: "T[Q, R]", C: "T[P, R]", output: "T[P, R]"):
     out_AB: T[P, R] = 0
-    mm1[T, P, Q, R](A, B, out_AB)
-    ele_add[T, P, R](out_AB, C, output)
+    mm1[T, P, Q, R, "mm1"](A, B, out_AB)
+    ele_add[T, P, R, "ele_add"](out_AB, C, output)
 
 
 def gemm(concrete_type, p, r, q, beta=0.1):
@@ -50,8 +50,8 @@ def gemm(concrete_type, p, r, q, beta=0.1):
     sch1.pipeline("j2")
 
     sch = allo.customize(kernel_gemm, instantiate=[concrete_type, p, q, r])
-    sch.compose(sch0)
-    sch.compose(sch1)
+    sch.compose(sch0)  # default: id="mm1"
+    sch.compose(sch1)  # default: id="ele_add"
 
     return sch
 

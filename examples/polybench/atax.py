@@ -36,8 +36,8 @@ def kernel_atax[
     T: (float32, int32), M: int32, N: int32
 ](A: "T[M, N]", x: "T[N]", y: "T[N]"):
     out_Ax: T[M] = 0
-    stage_M[T, M, N](A, x, out_Ax)
-    stage_N[T, M, N](A, out_Ax, y)
+    stage_M[T, M, N, "stage_M"](A, x, out_Ax)
+    stage_N[T, M, N, "stage_N"](A, out_Ax, y)
 
 
 def atax(concrete_type, m, n):
@@ -52,8 +52,8 @@ def atax(concrete_type, m, n):
     # unroll factor 41
 
     sch = allo.customize(kernel_atax, instantiate=[concrete_type, m, n])
-    sch.compose(sch0)
-    sch.compose(sch1)
+    sch.compose(sch0, id="stage_M")
+    sch.compose(sch1, id="stage_N")
 
     return sch
 

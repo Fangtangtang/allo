@@ -49,9 +49,9 @@ def kernel_3mm[
     out_AB: DType[P, R] = 0
     out_CD: DType[R, T] = 0
     output: DType[P, T] = 0
-    mm1[DType, P, Q, R](A, B, out_AB)
-    mm2[DType, R, S, T](C, D, out_CD)
-    mm3[DType, P, R, T](out_AB, out_CD, output)
+    mm1[DType, P, Q, R, "mm1"](A, B, out_AB)
+    mm2[DType, R, S, T, "mm2"](C, D, out_CD)
+    mm3[DType, P, R, T, "mm3"](out_AB, out_CD, output)
     return output
 
 

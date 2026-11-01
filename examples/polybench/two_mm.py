@@ -46,9 +46,9 @@ def kernel_2mm[
     out_AB: T[P, R] = 0
     out_ABC: T[P, S] = 0
     output: T[P, S]
-    mm1[T, P, Q, R](A, B, out_AB)
-    mm2[T, P, R, S](out_AB, C, out_ABC)
-    ele_add[T, P, S](out_ABC, D, output)
+    mm1[T, P, Q, R, "mm1"](A, B, out_AB)
+    mm2[T, P, R, S, "mm2"](out_AB, C, out_ABC)
+    ele_add[T, P, S, "ele_add"](out_ABC, D, output)
     return output
 
 

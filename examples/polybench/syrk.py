@@ -45,8 +45,8 @@ def kernel_syr2k[
     T: (float32, int32), N: int32, M: int32
 ](A: "T[N, M]", A_copy: "T[N, M]", Cin: "T[N, N]", Cout: "T[N, N]"):
     C: T[N, N] = 0
-    update_C[T, N](Cin, C)
-    compute_sum[T, N, M](A, A_copy, C, Cout)
+    update_C[T, N, "update_C"](Cin, C)
+    compute_sum[T, N, M, "compute_sum"](A, A_copy, C, Cout)
 
 
 def syrk(concrete_type, M, N, alpha=1.5, beta=1.2):
