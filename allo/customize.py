@@ -1171,7 +1171,7 @@ class Schedule:
                 stateful_seen = getattr(self, "_stateful_seen", {})
                 self._stateful_seen = stateful_seen
 
-                func_name = f"{sch.top_func_name}_{id}" if id else sch.top_func_name
+                func_name = str(id) if id else sch.top_func_name
                 func = self._find_function(func_name)
 
                 for _, (global_name, _) in sch.stateful_var_map.items():

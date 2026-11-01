@@ -117,7 +117,10 @@ class ASTBuilder(ASTVisitor):
 # pylint: disable=too-many-public-methods
 class ASTTransformer(ASTBuilder):
     # to resolve global variable naming conflict
-    global_var_cnt: dict[str, int] = {}
+    global_var_cnt: dict[str, int] = {"@": 0} # "@" as a keyword
+    
+    def reset():
+        ASTTransformer.global_var_cnt = {"@": 0}
 
     @staticmethod
     def get_mlir_op_result(ctx, op, dtype=None):
@@ -1880,13 +1883,8 @@ class ASTTransformer(ASTBuilder):
                 ) from e
         if hasattr(dtype, "stateful") and dtype.stateful:
             # Generate unique global name
-            if not hasattr(ctx, "stateful_counter"):
-                ctx.stateful_counter = 0
-            ctx.stateful_counter += 1
-            func_name = ctx.top_func_tree.name if ctx.top_func_tree else "kernel"
-            global_name = (
-                f"__stateful_{func_name}_{node.target.id}_{ctx.stateful_counter}"
-            )
+            global_name = f"__stateful_{node.target.id}_{ASTTransformer.global_var_cnt["@"]}"
+            ASTTransformer.global_var_cnt["@"] += 1
 
             # Check if already in stateful_var_map (avoid redeclaration)
             if global_name not in getattr(ctx, "stateful_var_map", {}):
@@ -2493,7 +2491,7 @@ class ASTTransformer(ASTBuilder):
 
     @staticmethod
     def build_Module(ctx: ASTContext, node: ast.Module):
-        ASTTransformer.global_var_cnt.clear()
+        ASTTransformer.reset()
         with ctx.mlir_ctx:
             module = Module.create()
         ctx.set_ip(module.body)
